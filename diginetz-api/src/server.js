@@ -1,4 +1,5 @@
 import express from "express";
+import { runTSLAutomotive } from "./engines/tslAutomotive.js";
 
 const app = express();
 
@@ -18,6 +19,11 @@ app.get("/api/status", (req, res) => {
     service: "DigiNetz API",
     time: Date.now()
   });
+});
+
+app.post("/api/engines/tsl-automotive", (req, res) => {
+  const result = runTSLAutomotive(req.body);
+  res.json(result);
 });
 
 const PORT = 3000;
