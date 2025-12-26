@@ -1,5 +1,6 @@
 import express from "express";
 import { runTSLAutomotive } from "./engines/tslAutomotive.js";
+import { runTSLPlugins } from "./engines/tslPlugins.js";
 
 const app = express();
 
@@ -26,7 +27,12 @@ app.post("/api/engines/tsl-automotive", (req, res) => {
   res.json(result);
 });
 
-const PORT = 3000;
+app.post("/api/engines/tsl-plugins", (req, res) => {
+  const result = runTSLPlugins(req.body);
+  res.json(result);
+});
+
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("DigiNetz API running on port " + PORT);
 });
