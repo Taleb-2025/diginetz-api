@@ -1,6 +1,5 @@
 import express from "express";
-import { runTSLAutomotive } from "./engines/tslAutomotive.js";
-import { runTSLPlugins } from "./engines/tslPlugins.js";
+import { engines } from "./engines/index.js";
 
 const app = express();
 
@@ -18,22 +17,23 @@ app.get("/api/status", (req, res) => {
   res.json({
     ok: true,
     service: "DigiNetz API",
+    engines: Object.keys(engines),
     time: Date.now()
   });
 });
 
-app.post("/api/engines/tsl-automotive", (req, res) => {
-  const result = runTSLAutomotive(req.body);
-  res.json(result);
-});
+app.post("/api/engines/:engine", (req, res) => {
+  const { engine } = req.params;
 
-app.post("/api/engines/tsl-plugins", (req, res) => {
-  const result = runTSLPlugins(req.body);
+  if (!engines[engine]) {
+    return res.status(404).json({ error: "Engine not found" });
+  }
+
+  const result = engines[engine](req.body);
   res.json(result);
 });
 
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, "0.0.0.0", () => {
   console.log("DigiNetz API running on port " + PORT);
 });
