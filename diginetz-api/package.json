@@ -1,8 +1,8 @@
 {
   "name": "diginetz-api",
   "version": "1.0.0",
-  "type": "module",
   "main": "src/index.js",
+  "type": "module",
   "scripts": {
     "start": "node src/index.js"
   },
