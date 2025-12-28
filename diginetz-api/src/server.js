@@ -1,5 +1,6 @@
 import express from "express";
 import { engines } from "./engines/index.js";
+import { createAbsentExclusion } from "./absent/AbsentExecution.js";
 
 const app = express();
 
@@ -29,7 +30,13 @@ app.post("/api/engines/:engine", (req, res) => {
     return res.status(404).json({ error: "Engine not found" });
   }
 
-  const result = engines[engine](req.body);
+  const runtime = createAbsentExclusion({ ttlMs: 25 });
+
+  let result;
+  runtime.execute(() => {
+    result = engines[engine](req.body);
+  });
+
   res.json(result);
 });
 
