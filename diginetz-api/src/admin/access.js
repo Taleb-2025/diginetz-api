@@ -1,24 +1,22 @@
-// ==========================================================
-// diginetz-api :: Internal Admin Access Endpoint
-// STEP 1 — Endpoint only (no security logic yet)
-// ==========================================================
-
 import express from "express";
+
+import { TSL_NDR_D } from "../tsl/TSL_NDR_D.js";
+import { TSL_STS }   from "../tsl/TSL_STS.js";
+import { TSLAE }     from "../tsl/TSL_AE.js";
+import { TSL_SAL }   from "../tsl/TSL_SAL.js";
 
 const router = express.Router();
 
-// ----------------------------------------------------------
-// POST /admin/access
-// ----------------------------------------------------------
+const ndrd = new TSL_NDR_D();
+const sts  = new TSL_STS({
+  expected: { density: 0, drift: 0 }
+});
+const ae   = new TSLAE();
+const sal  = new TSL_SAL();
+
 router.post("/access", (req, res) => {
 
   const { secret } = req.body;
-
-  // Step 1 purpose:
-  // - Endpoint exists
-  // - Accepts input
-  // - Does NOT validate meaning
-  // - Does NOT decide access yet
 
   if (!secret) {
     return res.status(400).json({
@@ -27,10 +25,35 @@ router.post("/access", (req, res) => {
     });
   }
 
-  return res.status(200).json({
-    ok: true,
-    message: "ADMIN_ACCESS_ENDPOINT_REACHED",
-    received: true
+  const comparison = ndrd.compare(secret, secret);
+
+  const bits = ndrd.encode(secret);
+  const trace = sts.observe(bits);
+
+  const aeResult = ae.guard(
+    () => true,
+    {
+      name: "ADMIN_ACCESS",
+      expectEffect: () => comparison !== null
+    }
+  );
+
+  const decision = sal.decide({
+    structure: comparison,
+    trace,
+    execution: aeResult.report
+  });
+
+  if (decision === "ALLOW") {
+    return res.status(200).json({
+      ok: true,
+      access: "GRANTED"
+    });
+  }
+
+  return res.status(403).json({
+    ok: false,
+    access: "DENIED"
   });
 });
 
