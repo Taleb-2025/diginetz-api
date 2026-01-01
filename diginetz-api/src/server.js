@@ -1,9 +1,11 @@
 import express from "express";
 import { engines } from "./engines/index.js";
-import { createAbsentExclusion } from "./absent/AbsentExecution.js";
 
 const app = express();
 
+// ==========================================================
+// CORS
+// ==========================================================
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
@@ -14,15 +16,20 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
+// ==========================================================
+// Public Status
+// ==========================================================
 app.get("/api/status", (req, res) => {
   res.json({
     ok: true,
     service: "DigiNetz API",
-    engines: Object.keys(engines),
     time: Date.now()
   });
 });
 
+// ==========================================================
+// Existing Engine Dispatcher
+// ==========================================================
 app.post("/api/engines/:engine", (req, res) => {
   const { engine } = req.params;
 
@@ -30,16 +37,30 @@ app.post("/api/engines/:engine", (req, res) => {
     return res.status(404).json({ error: "Engine not found" });
   }
 
-  const runtime = createAbsentExclusion({ ttlMs: 25 });
-
-  let result;
-  runtime.execute(() => {
-    result = engines[engine](req.body);
-  });
-
+  const result = engines[engine](req.body);
   res.json(result);
 });
 
+// ==========================================================
+// STEP 1 — Internal Admin Access Endpoint
+// (No security logic yet, no TSL, no AbsentExecution)
+// ==========================================================
+app.post("/api/admin/access", (req, res) => {
+
+  // مجرد استقبال الطلب
+  // لا تحليل
+  // لا تحقق
+  // لا تخزين
+
+  res.json({
+    ok: true,
+    message: "Admin access endpoint reachable",
+    received: true,
+    timestamp: Date.now()
+  });
+});
+
+// ==========================================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("DigiNetz API running on port " + PORT);
