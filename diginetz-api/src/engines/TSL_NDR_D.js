@@ -25,16 +25,13 @@ export class TSL_NDR_D {
     const bits = this.encode(input);
 
     const appearance = [];
-    for (let i = 0; i < bits.length; i++) {
+    for (let i = 0; i < bits.length; i++)
       if (bits[i] === 1) appearance.push(i);
-    }
 
     const relations = [];
-    for (let i = 0; i < appearance.length; i++) {
-      for (let j = i + 1; j < appearance.length; j++) {
+    for (let i = 0; i < appearance.length; i++)
+      for (let j = i + 1; j < appearance.length; j++)
         relations.push(appearance[j] - appearance[i]);
-      }
-    }
 
     const invariants = {
       length: bits.length,
@@ -43,18 +40,16 @@ export class TSL_NDR_D {
     };
 
     const localOrder = [];
-    for (let i = 1; i < appearance.length; i++) {
+    for (let i = 1; i < appearance.length; i++)
       localOrder.push(appearance[i] - appearance[i - 1]);
-    }
 
     const multiScale = {};
     for (const size of this.scales) {
       const windows = [];
       for (let i = 0; i < bits.length; i += size) {
         let count = 0;
-        for (let j = i; j < i + size && j < bits.length; j++) {
+        for (let j = i; j < i + size && j < bits.length; j++)
           if (bits[j] === 1) count++;
-        }
         windows.push(count);
       }
       multiScale[size] = windows;
@@ -73,15 +68,14 @@ export class TSL_NDR_D {
     return {
       invariants: S.invariants,
       localVector: S.localOrder.slice(),
-      scaleVector: this.flatten(S.multiScale)
+      scaleVector: this.flattenScales(S.multiScale)
     };
   }
 
-  flatten(scales) {
+  flattenScales(scales) {
     const out = [];
-    for (const k of Object.keys(scales)) {
+    for (const k of Object.keys(scales))
       out.push(...scales[k]);
-    }
     return out;
   }
 
@@ -90,12 +84,12 @@ export class TSL_NDR_D {
       densityDelta: B.invariants.density - A.invariants.density,
       appearanceDelta:
         B.invariants.appearanceCount - A.invariants.appearanceCount,
-      localShift: this.distance(A.localVector, B.localVector),
-      scaleShift: this.distance(A.scaleVector, B.scaleVector)
+      localShift: this.vectorDistance(A.localVector, B.localVector),
+      scaleShift: this.vectorDistance(A.scaleVector, B.scaleVector)
     };
   }
 
-  distance(a, b) {
+  vectorDistance(a, b) {
     const n = Math.max(a.length, b.length);
     let s = 0;
     for (let i = 0; i < n; i++) {
@@ -127,8 +121,8 @@ export class TSL_NDR_D {
     return {
       contained: this.validate(delta),
       delta,
-      A: SA,
-      B: SB
+      structureA: SA,
+      structureB: SB
     };
   }
 }
