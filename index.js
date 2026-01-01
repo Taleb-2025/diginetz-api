@@ -1,25 +1,25 @@
-const express = require("express");
+import express from "express";
+
 const app = express();
 
 app.use(express.json());
-
-const PORT = process.env.PORT || 3000;
 
 app.get("/", (req, res) => {
   res.json({
     status: "OK",
     service: "DigiNetz API",
-    message: "API is running successfully"
+    message: "API is running"
   });
 });
 
-app.get("/health", (req, res) => {
+app.get("/api/status", (req, res) => {
   res.json({
-    status: "healthy",
-    uptime: process.uptime()
+    ok: true,
+    time: Date.now()
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, "0.0.0.0", () => {
+  console.log("Server running on port " + PORT);
 });
