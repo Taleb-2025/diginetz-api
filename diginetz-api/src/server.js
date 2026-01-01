@@ -3,9 +3,6 @@ import { engines } from "./engines/index.js";
 
 const app = express();
 
-// ==========================================================
-// CORS
-// ==========================================================
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
@@ -16,9 +13,6 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-// ==========================================================
-// Public Status
-// ==========================================================
 app.get("/api/status", (req, res) => {
   res.json({
     ok: true,
@@ -27,9 +21,6 @@ app.get("/api/status", (req, res) => {
   });
 });
 
-// ==========================================================
-// Existing Engine Dispatcher
-// ==========================================================
 app.post("/api/engines/:engine", (req, res) => {
   const { engine } = req.params;
 
@@ -41,17 +32,7 @@ app.post("/api/engines/:engine", (req, res) => {
   res.json(result);
 });
 
-// ==========================================================
-// STEP 1 — Internal Admin Access Endpoint
-// (No security logic yet, no TSL, no AbsentExecution)
-// ==========================================================
 app.post("/api/admin/access", (req, res) => {
-
-  // مجرد استقبال الطلب
-  // لا تحليل
-  // لا تحقق
-  // لا تخزين
-
   res.json({
     ok: true,
     message: "Admin access endpoint reachable",
@@ -60,7 +41,6 @@ app.post("/api/admin/access", (req, res) => {
   });
 });
 
-// ==========================================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("DigiNetz API running on port " + PORT);
