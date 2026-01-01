@@ -1,7 +1,8 @@
-import { runTSLAutomotive } from "./tslAutomotive.js";
-import { runTSLPlugins } from "./tslPlugins.js";
+import { TSL_NDR_D } from "./TSL_NDR_D.js";
 
 export const engines = {
-  "tsl-automotive": runTSLAutomotive,
-  "tsl-plugins": runTSLPlugins
+  "tsl-ndr-d": (input) => {
+    const engine = new TSL_NDR_D();
+    return engine.extract(input);
+  }
 };
