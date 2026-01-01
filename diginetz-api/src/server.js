@@ -13,6 +13,9 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
+
+app.get("/", (req, res) => res.send("API_OK"));
+
 app.get("/api/status", (req, res) => {
   res.json({
     ok: true,
