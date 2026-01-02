@@ -1,5 +1,5 @@
 import express from "express";
-import ndrd from "../TSL_AE.js";
+import ndrd from "./TSL_AE.js";
 
 const router = express.Router();
 
@@ -22,10 +22,12 @@ router.post("/init", (req, res) => {
     });
   }
 
-  ADMIN_STRUCTURE = ndrd.extract(secret);
+  const structure = ndrd.extract(secret);
+
+  ADMIN_STRUCTURE = structure;
   ADMIN_BOUND = true;
 
-  res.json({
+  return res.json({
     ok: true,
     message: "ADMIN_BOUND_SUCCESSFULLY"
   });
@@ -48,16 +50,22 @@ router.post("/access", (req, res) => {
   }
 
   const probe = ndrd.extract(secret);
-  const allowed = ndrd.verify(ADMIN_STRUCTURE, probe);
+
+  const A = ndrd.activate(ADMIN_STRUCTURE);
+  const B = ndrd.activate(probe);
+
+  const delta = ndrd.derive(A, B);
+  const allowed = ndrd.validate(delta);
 
   if (!allowed) {
     return res.status(403).json({
       ok: false,
-      access: "DENIED"
+      access: "DENIED",
+      reason: "STRUCTURE_MISMATCH"
     });
   }
 
-  res.json({
+  return res.json({
     ok: true,
     access: "GRANTED"
   });
