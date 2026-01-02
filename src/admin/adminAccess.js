@@ -1,30 +1,49 @@
 import express from "express";
 
-/* ========= ENGINE (STRUCTURAL CORE) ========= */
+
 import { TSL_NDR_D } from "../engines/TSL_NDR_D.js";
 
-/* ========= LAYERS (NON-EXECUTIVE) ========= */
-import { TSL_AE }  from "./TSL_AE.js";
+
+import { TSL_AE } from "./TSL_AE.js";
 import { TSL_STS } from "./TSL_STS.js";
 import { TSL_SAL } from "./TSL_SAL.js";
 
 const router = express.Router();
 
-/* ========= INSTANTIATION ========= */
+
 const ndrd = new TSL_NDR_D();
 const ae   = new TSL_AE();
+
 const sts  = new TSL_STS({
   expected: { density: 0, drift: 0 }
 });
+
 const sal  = new TSL_SAL();
 
-/* ========= STATE ========= */
+
 let ADMIN_BOUND = false;
 let ADMIN_STRUCTURE = null;
 
-/* =========================
-   INIT — First Structural Bind
-   ========================= */
+function TSL_ABSENT_LAYER({ decision, delta, trace }) {
+
+
+  if (decision !== "ALLOW") return "DENY";
+
+  const structuralStable =
+    Math.abs(delta.densityDelta) === 0 &&
+    Math.abs(delta.appearanceDelta) === 0;
+
+  const traceClean =
+    trace && trace.drift === 0;
+
+  if (structuralStable && traceClean) {
+    return "ALLOW";
+  }
+
+  return "DENY";
+}
+
+
 router.post("/init", (req, res) => {
   if (ADMIN_BOUND) {
     return res.status(403).json({
@@ -43,10 +62,10 @@ router.post("/init", (req, res) => {
 
   const result = ae.guard(
     () => {
-      const S = ndrd.extract(secret);
+      const S = ndrd.extract(secret);   // 🔹 NDR only
       ADMIN_STRUCTURE = S;
       ADMIN_BOUND = true;
-      return S;
+      return true;
     },
     {
       name: "ADMIN_INIT",
@@ -69,9 +88,7 @@ router.post("/init", (req, res) => {
   });
 });
 
-/* =========================
-   ACCESS — Structural Verification
-   ========================= */
+
 router.post("/access", (req, res) => {
   if (!ADMIN_BOUND || !ADMIN_STRUCTURE) {
     return res.status(403).json({
@@ -90,27 +107,33 @@ router.post("/access", (req, res) => {
 
   const result = ae.guard(
     () => {
-      const probeStructure = ndrd.extract(secret);
+     
+      const probe = ndrd.extract(secret);
 
       const A = ndrd.activate(ADMIN_STRUCTURE);
-      const B = ndrd.activate(probeStructure);
+      const B = ndrd.activate(probe);
 
       const delta = ndrd.derive(A, B);
 
-      const trace = sts.observe(
-        ndrd.encode(secret)
-      );
+    
+      const trace = sts.observe(ndrd.encode(secret));
 
-      const decision = sal.decide({
+      
+      const salDecision = sal.decide({
         structure: delta,
         trace,
-        execution: true
+        execution: false // ❗ Absent
       });
 
-      return decision;
+     
+      return TSL_ABSENT_LAYER({
+        decision: salDecision,
+        delta,
+        trace
+      });
     },
     {
-      name: "ADMIN_ACCESS",
+      name: "ADMIN_ACCESS_ABSENT",
       expectEffect: () => true
     },
     { phase: "access" }
