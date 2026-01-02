@@ -2,11 +2,12 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import cors from "cors";
 
+import adminAccessRouter from "./admin/adminAccess.js";
+
 const app = express();
 const PORT = process.env.PORT || 8080;
 const JWT_SECRET = process.env.JWT_SECRET || "DEV_SECRET_ONLY";
 
-/* CORS (ALLOW ONLY TRUSTED DOMAINS) */
 const allowedOrigins = [
   "https://diginetz-template.com",
   "https://www.diginetz-template.com",
@@ -27,10 +28,10 @@ app.use(
   })
 );
 
-/* middlewares */
 app.use(express.json());
 
-/* home */
+app.use("/api/admin", adminAccessRouter);
+
 app.get("/", (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -55,12 +56,10 @@ app.get("/", (req, res) => {
   `);
 });
 
-/* api status */
 app.get("/api/status", (req, res) => {
   res.json({ ok: true, time: Date.now() });
 });
 
-/* LOGIN */
 app.post("/api/login", (req, res) => {
   const { email, password } = req.body;
 
@@ -77,7 +76,6 @@ app.post("/api/login", (req, res) => {
   res.json({ ok: true, token });
 });
 
-/* AUTH MIDDLEWARE */
 function auth(req, res, next) {
   const header = req.headers.authorization;
   if (!header) {
@@ -94,12 +92,10 @@ function auth(req, res, next) {
   }
 }
 
-/* WHO AM I */
 app.get("/api/me", auth, (req, res) => {
   res.json({ ok: true, user: req.user });
 });
 
-/* start server */
 app.listen(PORT, "0.0.0.0", () => {
   console.log("SERVER STARTED ON PORT", PORT);
 });
