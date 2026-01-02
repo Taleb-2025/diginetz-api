@@ -1,11 +1,8 @@
-let ADMIN_BOUND = false;
-let ADMIN_STRUCTURE = null;
-
-router.post("/init", (req, res) => {
-  if (ADMIN_BOUND) {
+router.post("/access", (req, res) => {
+  if (!ADMIN_BOUND || !ADMIN_STRUCTURE) {
     return res.status(403).json({
       ok: false,
-      error: "ADMIN_ALREADY_BOUND"
+      error: "ADMIN_NOT_INITIALIZED"
     });
   }
 
@@ -17,13 +14,24 @@ router.post("/init", (req, res) => {
     });
   }
 
-  const S = ndrd.extract(secret);
+  const probeStructure = ndrd.extract(secret);
 
-  ADMIN_STRUCTURE = S;
-  ADMIN_BOUND = true;
+  const A = ndrd.activate(ADMIN_STRUCTURE);
+  const B = ndrd.activate(probeStructure);
+
+  const delta = ndrd.derive(A, B);
+  const allowed = ndrd.validate(delta);
+
+  if (!allowed) {
+    return res.status(403).json({
+      ok: false,
+      access: "DENIED",
+      reason: "STRUCTURE_MISMATCH"
+    });
+  }
 
   return res.json({
     ok: true,
-    message: "ADMIN_BOUND_SUCCESSFULLY"
+    access: "GRANTED"
   });
 });
