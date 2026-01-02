@@ -8,34 +8,24 @@ const router = express.Router();
 
 const ndrd = new TSL_NDR_D();
 const ae   = new TSL_AE();
-const sts  = new TSL_STS({
-  expected: { density: 0, drift: 0 }
-});
+const sts  = new TSL_STS({ expected: { density: 0, drift: 0 } });
 const sal  = new TSL_SAL();
 
 let ADMIN_BOUND = false;
 let ADMIN_STRUCTURE = null;
 
-/* =========================
-   INIT — First Time Binding
-   ========================= */
+/* ========= INIT ========= */
 router.post("/init", (req, res) => {
   if (ADMIN_BOUND) {
-    return res.status(403).json({
-      ok: false,
-      error: "ADMIN_ALREADY_BOUND"
-    });
+    return res.status(403).json({ ok: false, error: "ADMIN_ALREADY_BOUND" });
   }
 
   const { secret } = req.body;
   if (typeof secret !== "string") {
-    return res.status(400).json({
-      ok: false,
-      error: "SECRET_REQUIRED"
-    });
+    return res.status(400).json({ ok: false, error: "SECRET_REQUIRED" });
   }
 
-  const result = ae.guard(
+  const { report, result } = ae.guard(
     () => {
       const S = ndrd.extract(secret);
       ADMIN_STRUCTURE = S;
@@ -46,87 +36,63 @@ router.post("/init", (req, res) => {
       name: "ADMIN_INIT",
       expectEffect: () => ADMIN_STRUCTURE !== null
     },
-    { phase: "init" }
+    { layer: "NDR", phase: "init" }
   );
 
-  if (result.report.securityFlag !== "OK") {
-    return res.status(403).json({
-      ok: false,
-      error: "INIT_FAILED",
-      report: result.report
-    });
+  if (report.securityFlag !== "OK") {
+    return res.status(403).json({ ok: false, error: "INIT_BLOCKED", report });
   }
 
-  return res.json({
-    ok: true,
-    message: "ADMIN_BOUND_SUCCESSFULLY"
-  });
+  return res.json({ ok: true, message: "ADMIN_BOUND_SUCCESSFULLY" });
 });
 
-/* =========================
-   ACCESS — Structural Check
-   ========================= */
+/* ========= ACCESS ========= */
 router.post("/access", (req, res) => {
   if (!ADMIN_BOUND || !ADMIN_STRUCTURE) {
-    return res.status(403).json({
-      ok: false,
-      error: "ADMIN_NOT_INITIALIZED"
-    });
+    return res.status(403).json({ ok: false, error: "ADMIN_NOT_INITIALIZED" });
   }
 
   const { secret } = req.body;
   if (typeof secret !== "string") {
-    return res.status(400).json({
-      ok: false,
-      error: "SECRET_REQUIRED"
-    });
+    return res.status(400).json({ ok: false, error: "SECRET_REQUIRED" });
   }
 
-  const result = ae.guard(
+  const { report, result } = ae.guard(
     () => {
-      const probeStructure = ndrd.extract(secret);
+      /* Layer 1 — NDR */
+      const probe = ndrd.extract(secret);
 
+      /* Layer 2 — D */
       const A = ndrd.activate(ADMIN_STRUCTURE);
-      const B = ndrd.activate(probeStructure);
-
+      const B = ndrd.activate(probe);
       const delta = ndrd.derive(A, B);
 
+      /* Layer 3 — STS (trace only) */
       const trace = sts.observe(ndrd.encode(secret));
 
-      const decision = sal.decide({
+      /* Layer 4 — SAL (decision) */
+      return sal.decide({
         structure: delta,
         trace,
-        execution: true
+        execution: report?.executionState ?? "UNKNOWN"
       });
-
-      return decision;
     },
     {
       name: "ADMIN_ACCESS",
       expectEffect: () => true
     },
-    { phase: "access" }
+    { layer: "D/SAL", phase: "access" }
   );
 
-  if (result.report.securityFlag !== "OK") {
-    return res.status(403).json({
-      ok: false,
-      access: "DENIED",
-      report: result.report
-    });
+  if (report.securityFlag !== "OK") {
+    return res.status(403).json({ ok: false, access: "DENIED", report });
   }
 
-  if (result.result !== "ALLOW") {
-    return res.status(403).json({
-      ok: false,
-      access: "DENIED"
-    });
+  if (result !== "ALLOW") {
+    return res.status(403).json({ ok: false, access: "DENIED" });
   }
 
-  return res.json({
-    ok: true,
-    access: "GRANTED"
-  });
+  return res.json({ ok: true, access: "GRANTED" });
 });
 
 export default router;
