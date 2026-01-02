@@ -1,10 +1,16 @@
 import express from "express";
-import ndrd from "./TSL_AE.js";
+import { TSL_AE } from "./TSL_AE.js";
 
 const router = express.Router();
 
+const tsl = new TSL_AE();
+
 let ADMIN_BOUND = false;
-let ADMIN_STRUCTURE = null;
+let ADMIN_SECRET_HASH = null;
+
+function fingerprint(secret) {
+  return Buffer.from(secret).toString("base64");
+}
 
 router.post("/init", (req, res) => {
   if (ADMIN_BOUND) {
@@ -15,26 +21,43 @@ router.post("/init", (req, res) => {
   }
 
   const { secret } = req.body;
-  if (!secret) {
+  if (!secret || typeof secret !== "string") {
     return res.status(400).json({
       ok: false,
       error: "SECRET_REQUIRED"
     });
   }
 
-  const structure = ndrd.extract(secret);
+  const report = tsl.guard(
+    () => {
+      ADMIN_SECRET_HASH = fingerprint(secret);
+      ADMIN_BOUND = true;
+      return true;
+    },
+    {
+      name: "ADMIN_INIT",
+      expectEffect: () => true
+    },
+    { phase: "init" }
+  );
 
-  ADMIN_STRUCTURE = structure;
-  ADMIN_BOUND = true;
+  if (report.report.securityFlag !== "OK") {
+    return res.status(403).json({
+      ok: false,
+      error: "INIT_BLOCKED",
+      report: report.report
+    });
+  }
 
   return res.json({
     ok: true,
-    message: "ADMIN_BOUND_SUCCESSFULLY"
+    message: "ADMIN_BOUND_SUCCESSFULLY",
+    report: report.report
   });
 });
 
 router.post("/access", (req, res) => {
-  if (!ADMIN_BOUND || !ADMIN_STRUCTURE) {
+  if (!ADMIN_BOUND || !ADMIN_SECRET_HASH) {
     return res.status(403).json({
       ok: false,
       error: "ADMIN_NOT_INITIALIZED"
@@ -42,32 +65,40 @@ router.post("/access", (req, res) => {
   }
 
   const { secret } = req.body;
-  if (!secret) {
+  if (!secret || typeof secret !== "string") {
     return res.status(400).json({
       ok: false,
       error: "SECRET_REQUIRED"
     });
   }
 
-  const probe = ndrd.extract(secret);
+  const report = tsl.guard(
+    () => {
+      const incoming = fingerprint(secret);
+      if (incoming !== ADMIN_SECRET_HASH) {
+        throw new Error("SECRET_MISMATCH");
+      }
+      return true;
+    },
+    {
+      name: "ADMIN_ACCESS",
+      expectEffect: () => true
+    },
+    { phase: "access" }
+  );
 
-  const A = ndrd.activate(ADMIN_STRUCTURE);
-  const B = ndrd.activate(probe);
-
-  const delta = ndrd.derive(A, B);
-  const allowed = ndrd.validate(delta);
-
-  if (!allowed) {
+  if (report.report.securityFlag !== "OK") {
     return res.status(403).json({
       ok: false,
       access: "DENIED",
-      reason: "STRUCTURE_MISMATCH"
+      report: report.report
     });
   }
 
   return res.json({
     ok: true,
-    access: "GRANTED"
+    access: "GRANTED",
+    report: report.report
   });
 });
 
