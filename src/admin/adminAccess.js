@@ -2,14 +2,13 @@ import express from "express";
 import { TSL_AE } from "./TSL_AE.js";
 
 const router = express.Router();
-
 const tsl = new TSL_AE();
 
 let ADMIN_BOUND = false;
 let ADMIN_SECRET_HASH = null;
 
 function fingerprint(secret) {
-  return Buffer.from(secret).toString("base64");
+  return Buffer.from(secret, "utf8").toString("base64");
 }
 
 router.post("/init", (req, res) => {
@@ -21,6 +20,7 @@ router.post("/init", (req, res) => {
   }
 
   const { secret } = req.body;
+
   if (!secret || typeof secret !== "string") {
     return res.status(400).json({
       ok: false,
@@ -28,7 +28,7 @@ router.post("/init", (req, res) => {
     });
   }
 
-  const report = tsl.guard(
+  const { report } = tsl.guard(
     () => {
       ADMIN_SECRET_HASH = fingerprint(secret);
       ADMIN_BOUND = true;
@@ -41,18 +41,18 @@ router.post("/init", (req, res) => {
     { phase: "init" }
   );
 
-  if (report.report.securityFlag !== "OK") {
+  if (report.securityFlag !== "OK") {
     return res.status(403).json({
       ok: false,
       error: "INIT_BLOCKED",
-      report: report.report
+      report
     });
   }
 
   return res.json({
     ok: true,
     message: "ADMIN_BOUND_SUCCESSFULLY",
-    report: report.report
+    report
   });
 });
 
@@ -65,6 +65,7 @@ router.post("/access", (req, res) => {
   }
 
   const { secret } = req.body;
+
   if (!secret || typeof secret !== "string") {
     return res.status(400).json({
       ok: false,
@@ -72,12 +73,14 @@ router.post("/access", (req, res) => {
     });
   }
 
-  const report = tsl.guard(
+  const { report } = tsl.guard(
     () => {
       const incoming = fingerprint(secret);
+
       if (incoming !== ADMIN_SECRET_HASH) {
         throw new Error("SECRET_MISMATCH");
       }
+
       return true;
     },
     {
@@ -87,18 +90,18 @@ router.post("/access", (req, res) => {
     { phase: "access" }
   );
 
-  if (report.report.securityFlag !== "OK") {
+  if (report.securityFlag !== "OK") {
     return res.status(403).json({
       ok: false,
       access: "DENIED",
-      report: report.report
+      report
     });
   }
 
   return res.json({
     ok: true,
     access: "GRANTED",
-    report: report.report
+    report
   });
 });
 
