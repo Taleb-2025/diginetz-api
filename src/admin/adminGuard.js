@@ -13,7 +13,6 @@
     document.body.style.justifyContent = "center";
     document.body.style.height = "100vh";
     document.body.innerHTML = "<h2>ACCESS DENIED</h2>";
-    throw new Error("ADMIN_ACCESS_DENIED");
   }
 
   function allow() {
@@ -22,12 +21,13 @@
 
   try {
     const granted = sessionStorage.getItem(FLAG_KEY);
+
     if (granted === "true") {
       allow();
     } else {
       deny();
     }
-  } catch (e) {
+  } catch {
     deny();
   }
 })();
