@@ -24,7 +24,8 @@ const STRUCT_FILE = path.join(DATA_DIR, "admin.structure.json");
 function loadStructure() {
   if (!fs.existsSync(STRUCT_FILE)) return null;
   try {
-    return JSON.parse(fs.readFileSync(STRUCT_FILE, "utf8")).structure || null;
+    const raw = fs.readFileSync(STRUCT_FILE, "utf8");
+    return JSON.parse(raw).structure || null;
   } catch {
     return null;
   }
@@ -79,7 +80,7 @@ router.post("/guard", (req, res) => {
     () => {
 
       /* --------
-         INIT (first ever time)
+         INIT — أول مرة فقط
       -------- */
       if (!storedStructure) {
         const S = ndrd.extract(secret);
@@ -92,14 +93,18 @@ router.post("/guard", (req, res) => {
       }
 
       /* --------
-         ACCESS
+         ACCESS — مقارنة بنيوية صحيحة
       -------- */
+
+      // إعادة تفعيل البنية المرجعية من جديد (نقطة الإصلاح)
+      const reference = ndrd.activate(
+        ndrd.extract(ndrd.encode(storedStructure))
+      );
+
       const probeStructure = ndrd.extract(secret);
+      const probe = ndrd.activate(probeStructure);
 
-      const A = ndrd.activate(storedStructure);
-      const B = ndrd.activate(probeStructure);
-
-      const delta = ndrd.derive(A, B);
+      const delta = ndrd.derive(reference, probe);
       const trace = sts.observe(ndrd.encode(secret));
 
       const salDecision = sal.decide({
