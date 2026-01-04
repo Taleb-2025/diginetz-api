@@ -14,20 +14,27 @@ const ae   = new TSL_AE();
 const sts  = new TSL_STS({ expected: { density: 0, drift: 0 } });
 const sal  = new TSL_SAL();
 
-const DATA_DIR  = "/data";
-const FP_FILE   = path.join(DATA_DIR, "admin.fingerprint.json");
+/* =========================
+   Persistent fingerprint
+========================= */
+
+const DATA_DIR = "/data";
+const FP_FILE  = path.join(DATA_DIR, "admin.fingerprint.json");
 
 function loadFingerprint() {
   if (!fs.existsSync(FP_FILE)) return null;
   try {
-    return JSON.parse(fs.readFileSync(FP_FILE, "utf8")).fingerprint || null;
+    const raw = fs.readFileSync(FP_FILE, "utf8");
+    return JSON.parse(raw).fingerprint || null;
   } catch {
     return null;
   }
 }
 
 function saveFingerprint(fp) {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
   fs.writeFileSync(
     FP_FILE,
     JSON.stringify({ fingerprint: fp }, null, 2),
@@ -35,17 +42,16 @@ function saveFingerprint(fp) {
   );
 }
 
-function extractFingerprint(structure) {
-  const A = ndrd.activate(structure);
-  return A.fingerprint;
-}
+/* =========================
+   Absent Execution Layer
+========================= */
 
 function absentDecision({ decision, delta, trace }) {
   if (decision !== "ALLOW") return "DENY";
 
   const stable =
-    Math.abs(delta.densityDelta) === 0 &&
-    Math.abs(delta.appearanceDelta) === 0;
+    delta.densityDelta === 0 &&
+    delta.appearanceDelta === 0;
 
   const cleanTrace =
     trace?.short?.drift === 0 &&
@@ -54,31 +60,49 @@ function absentDecision({ decision, delta, trace }) {
   return stable && cleanTrace ? "ALLOW" : "DENY";
 }
 
-router.post("/guard", (req, res) => {
+/* =========================
+   ROUTE
+========================= */
+
+router.post("/access", (req, res) => {
   const { secret } = req.body;
 
-  if (typeof secret !== "string") {
-    return res.status(400).json({ ok: false, error: "SECRET_REQUIRED" });
+  if (typeof secret !== "string" || !secret.length) {
+    return res.status(400).json({
+      ok: false,
+      error: "SECRET_REQUIRED"
+    });
   }
 
   const storedFingerprint = loadFingerprint();
 
   const result = ae.guard(
     () => {
-      const S = ndrd.extract(secret);
-      const fp = extractFingerprint(S);
-
-      // INIT — first ever time
+      /* --------
+         INIT
+      -------- */
       if (!storedFingerprint) {
-        saveFingerprint(fp);
-        return { phase: "INIT", decision: "ALLOW" };
+        const S = ndrd.extract(secret);
+        const A = ndrd.activate(S);
+
+        saveFingerprint(A.fingerprint);
+
+        return {
+          phase: "INIT",
+          decision: "ALLOW"
+        };
       }
 
-      // ACCESS — structural comparison
-      const probe = ndrd.extract(secret);
+      /* --------
+         ACCESS
+      -------- */
+      const probeStructure = ndrd.extract(secret);
 
-      const A = ndrd.activate({ ...S, fingerprint: storedFingerprint });
-      const B = ndrd.activate(probe);
+      const A = ndrd.activate({
+        fingerprint: storedFingerprint
+      });
+
+      const B = ndrd.activate(probeStructure);
 
       const delta = ndrd.derive(A, B);
       const trace = sts.observe(ndrd.encode(secret));
@@ -95,7 +119,10 @@ router.post("/guard", (req, res) => {
         trace
       });
 
-      return { phase: "ACCESS", decision: finalDecision };
+      return {
+        phase: "ACCESS",
+        decision: finalDecision
+      };
     },
     {
       name: "ADMIN_STRUCTURAL_ACCESS",
@@ -104,11 +131,17 @@ router.post("/guard", (req, res) => {
   );
 
   if (result.report.securityFlag !== "OK") {
-    return res.status(403).json({ ok: false, access: "DENIED" });
+    return res.status(403).json({
+      ok: false,
+      access: "DENIED"
+    });
   }
 
   if (result.result.decision !== "ALLOW") {
-    return res.status(403).json({ ok: false, access: "DENIED" });
+    return res.status(403).json({
+      ok: false,
+      access: "DENIED"
+    });
   }
 
   return res.json({
