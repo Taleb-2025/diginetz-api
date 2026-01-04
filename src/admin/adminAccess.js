@@ -15,29 +15,28 @@ const sts  = new TSL_STS({ expected: { density: 0, drift: 0 } });
 const sal  = new TSL_SAL();
 
 /* =========================
-   Persistent fingerprint
+   Persistent STRUCTURE (S)
 ========================= */
 
 const DATA_DIR = "/data";
-const FP_FILE  = path.join(DATA_DIR, "admin.fingerprint.json");
+const STRUCT_FILE = path.join(DATA_DIR, "admin.structure.json");
 
-function loadFingerprint() {
-  if (!fs.existsSync(FP_FILE)) return null;
+function loadStructure() {
+  if (!fs.existsSync(STRUCT_FILE)) return null;
   try {
-    const raw = fs.readFileSync(FP_FILE, "utf8");
-    return JSON.parse(raw).fingerprint || null;
+    return JSON.parse(fs.readFileSync(STRUCT_FILE, "utf8")).structure || null;
   } catch {
     return null;
   }
 }
 
-function saveFingerprint(fp) {
+function saveStructure(S) {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
   fs.writeFileSync(
-    FP_FILE,
-    JSON.stringify({ fingerprint: fp }, null, 2),
+    STRUCT_FILE,
+    JSON.stringify({ structure: S }, null, 2),
     "utf8"
   );
 }
@@ -64,7 +63,7 @@ function absentDecision({ decision, delta, trace }) {
    ROUTE
 ========================= */
 
-router.post("/access", (req, res) => {
+router.post("/guard", (req, res) => {
   const { secret } = req.body;
 
   if (typeof secret !== "string" || !secret.length) {
@@ -74,18 +73,17 @@ router.post("/access", (req, res) => {
     });
   }
 
-  const storedFingerprint = loadFingerprint();
+  const storedStructure = loadStructure();
 
   const result = ae.guard(
     () => {
-      /* --------
-         INIT
-      -------- */
-      if (!storedFingerprint) {
-        const S = ndrd.extract(secret);
-        const A = ndrd.activate(S);
 
-        saveFingerprint(A.fingerprint);
+      /* --------
+         INIT (first ever time)
+      -------- */
+      if (!storedStructure) {
+        const S = ndrd.extract(secret);
+        saveStructure(S);
 
         return {
           phase: "INIT",
@@ -98,10 +96,7 @@ router.post("/access", (req, res) => {
       -------- */
       const probeStructure = ndrd.extract(secret);
 
-      const A = ndrd.activate({
-        fingerprint: storedFingerprint
-      });
-
+      const A = ndrd.activate(storedStructure);
       const B = ndrd.activate(probeStructure);
 
       const delta = ndrd.derive(A, B);
