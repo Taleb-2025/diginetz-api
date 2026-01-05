@@ -17,7 +17,7 @@ const sal  = new TSL_SAL();
 const DATA_DIR = "/data";
 const REF_FILE = path.join(DATA_DIR, "admin.reference.json");
 
-const EPSILON = 0.0001;
+const EPSILON = 0.01;
 
 function loadRef() {
   if (!fs.existsSync(REF_FILE)) return null;
