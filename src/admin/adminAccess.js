@@ -9,30 +9,26 @@ import { TSL_SAL } from "./TSL_SAL.js";
 
 const router = express.Router();
 
+/* -------- Engines -------- */
+
 const ndrd = new TSL_NDR_D();
 const ae   = new TSL_AE();
 const sts  = new TSL_STS({ expected: { density: 0, drift: 0 } });
 const sal  = new TSL_SAL();
 
+/* -------- Storage -------- */
+
 const DATA_DIR = "/data";
 const REF_FILE = path.join(DATA_DIR, "admin.reference.json");
 
-/* 🟢 نافذة القبول الواقعية */
-const THRESHOLDS = {
-  STRONG: {
-    density: 0.01,
-    appearance: 0.01
-  },
-  WEAK: {
-    density: 0.05,
-    appearance: 0.05
-  }
+/* -------- Thresholds -------- */
+
+const STRUCTURE_THRESHOLD = {
+  density: 0.05,
+  appearance: 0.05
 };
 
-/* 🧠 معامل التعلم */
-const ADAPT_RATE = 0.1;
-
-/* ---------- Reference IO ---------- */
+/* -------- Reference IO -------- */
 
 function loadRef() {
   if (!fs.existsSync(REF_FILE)) return null;
@@ -54,67 +50,37 @@ function saveRef(ref) {
   );
 }
 
-/* ---------- Utility ---------- */
+/* -------- Decision Gate -------- */
 
-function abs(v) {
-  return Math.abs(v);
+function structureMatch(delta) {
+  return (
+    Math.abs(delta.densityDelta) < STRUCTURE_THRESHOLD.density &&
+    Math.abs(delta.appearanceDelta) < STRUCTURE_THRESHOLD.appearance
+  );
 }
 
-/* 🧠 دمج مرجعي تدريجي */
-function adaptReference(oldRef, probeRef, rate) {
-  if (typeof oldRef !== "object") return probeRef;
-
-  const adapted = {};
-  for (const key in probeRef) {
-    adapted[key] =
-      oldRef[key] * (1 - rate) + probeRef[key] * rate;
-  }
-  return adapted;
-}
-
-/* ---------- Decision Gate ---------- */
-
-function decisionGate(salDecision, delta) {
-  if (salDecision !== "ALLOW") return "DENY";
-
-  const dD = abs(delta.densityDelta);
-  const dA = abs(delta.appearanceDelta);
-
-  if (
-    dD < THRESHOLDS.STRONG.density &&
-    dA < THRESHOLDS.STRONG.appearance
-  ) {
-    return "ALLOW";
-  }
-
-  if (
-    dD < THRESHOLDS.WEAK.density &&
-    dA < THRESHOLDS.WEAK.appearance
-  ) {
-    return "ALLOW_UPDATE";
-  }
-
-  return "DENY";
-}
-
-/* ---------- Route ---------- */
+/* -------- Route -------- */
 
 router.post("/guard", (req, res) => {
   const { secret } = req.body;
 
   if (typeof secret !== "string" || !secret.length) {
-    return res.status(400).json({ ok: false, error: "SECRET_REQUIRED" });
+    return res.status(400).json({
+      ok: false,
+      error: "SECRET_REQUIRED"
+    });
   }
 
-  const storedRef = loadRef();
+  const storedStructure = loadRef();
 
   const result = ae.guard(
     () => {
-      /* 🟡 INIT PHASE */
-      if (!storedRef) {
-        const S = ndrd.extract(secret);
-        const A = ndrd.activate(S);
-        saveRef(A);
+
+      /* ---------- INIT ---------- */
+      if (!storedStructure) {
+        const structure = ndrd.extract(secret);
+
+        saveRef(structure);
 
         return {
           phase: "INIT",
@@ -122,39 +88,47 @@ router.post("/guard", (req, res) => {
         };
       }
 
-      /* 🔵 ACCESS PHASE */
-      const probeS = ndrd.extract(secret);
-      const probeA = ndrd.activate(probeS);
+      /* ---------- ACCESS ---------- */
 
-      /* ❗ لا نعيد activate المرجع */
+      // 1️⃣ Extract deterministic structure
+      const probeStructure = ndrd.extract(secret);
+
+      // 2️⃣ Structural delta (stable space)
       const delta = ndrd.derive(
-        storedRef,
-        probeA
+        storedStructure,
+        probeStructure
       );
 
-      const trace = sts.observe(ndrd.encode(secret));
+      // 3️⃣ Behavioral trace (dynamic)
+      const trace = sts.observe(
+        ndrd.encode(secret)
+      );
 
+      // 4️⃣ High-level decision
       const salDecision = sal.decide({
         structure: delta,
         trace,
         execution: false
       });
 
-      const gateDecision = decisionGate(salDecision, delta);
+      // 5️⃣ Final gate
+      if (salDecision !== "ALLOW") {
+        return {
+          phase: "ACCESS",
+          decision: "DENY"
+        };
+      }
 
-      /* 🧠 تحديث المرجع عند القبول الجزئي */
-      if (gateDecision === "ALLOW_UPDATE") {
-        const newRef = adaptReference(
-          storedRef,
-          probeA,
-          ADAPT_RATE
-        );
-        saveRef(newRef);
+      if (!structureMatch(delta)) {
+        return {
+          phase: "ACCESS",
+          decision: "DENY"
+        };
       }
 
       return {
         phase: "ACCESS",
-        decision: gateDecision
+        decision: "ALLOW"
       };
     },
     {
@@ -163,24 +137,26 @@ router.post("/guard", (req, res) => {
     }
   );
 
-  /* ---------- Final Enforcement ---------- */
+  /* -------- Enforcement -------- */
 
   if (result.report.securityFlag !== "OK") {
-    return res.status(403).json({ ok: false, access: "DENIED" });
+    return res.status(403).json({
+      ok: false,
+      access: "DENIED"
+    });
   }
 
-  if (
-    result.result.decision !== "ALLOW" &&
-    result.result.decision !== "ALLOW_UPDATE"
-  ) {
-    return res.status(403).json({ ok: false, access: "DENIED" });
+  if (result.result.decision !== "ALLOW") {
+    return res.status(403).json({
+      ok: false,
+      access: "DENIED"
+    });
   }
 
   return res.json({
     ok: true,
     access: "GRANTED",
-    phase: result.result.phase,
-    mode: result.result.decision
+    phase: result.result.phase
   });
 });
 
