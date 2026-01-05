@@ -43,14 +43,11 @@ function within(v) {
   return Math.abs(v) <= EPSILON;
 }
 
-function absentGate(decision, delta, trace) {
+function absentGate(decision, delta) {
   if (decision !== "ALLOW") return "DENY";
 
   if (!within(delta.densityDelta)) return "DENY";
   if (!within(delta.appearanceDelta)) return "DENY";
-
-  if (!within(trace?.short?.drift ?? 0)) return "DENY";
-  if (!within(trace?.mid?.drift ?? 0)) return "DENY";
 
   return "ALLOW";
 }
@@ -76,8 +73,10 @@ router.post("/guard", (req, res) => {
       const probeS = ndrd.extract(secret);
       const probeA = ndrd.activate(probeS);
 
-      // 🔧 السطر الوحيد الذي أصلح كل شيء
-      const delta = ndrd.derive(ndrd.activate(storedRef), probeA);
+      const delta = ndrd.derive(
+        ndrd.activate(storedRef),
+        probeA
+      );
 
       const trace = sts.observe(ndrd.encode(secret));
 
@@ -89,7 +88,7 @@ router.post("/guard", (req, res) => {
 
       return {
         phase: "ACCESS",
-        decision: absentGate(salDecision, delta, trace)
+        decision: absentGate(salDecision, delta)
       };
     },
     {
