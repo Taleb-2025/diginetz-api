@@ -17,7 +17,22 @@ const sal  = new TSL_SAL();
 const DATA_DIR = "/data";
 const REF_FILE = path.join(DATA_DIR, "admin.reference.json");
 
-const EPSILON = 0.01;
+/* 🟢 نافذة القبول الواقعية */
+const THRESHOLDS = {
+  STRONG: {
+    density: 0.01,
+    appearance: 0.01
+  },
+  WEAK: {
+    density: 0.05,
+    appearance: 0.05
+  }
+};
+
+/* 🧠 معامل التعلم */
+const ADAPT_RATE = 0.1;
+
+/* ---------- Reference IO ---------- */
 
 function loadRef() {
   if (!fs.existsSync(REF_FILE)) return null;
@@ -39,18 +54,50 @@ function saveRef(ref) {
   );
 }
 
-function within(v) {
-  return Math.abs(v) <= EPSILON;
+/* ---------- Utility ---------- */
+
+function abs(v) {
+  return Math.abs(v);
 }
 
-function absentGate(decision, delta) {
-  if (decision !== "ALLOW") return "DENY";
+/* 🧠 دمج مرجعي تدريجي */
+function adaptReference(oldRef, probeRef, rate) {
+  if (typeof oldRef !== "object") return probeRef;
 
-  if (!within(delta.densityDelta)) return "DENY";
-  if (!within(delta.appearanceDelta)) return "DENY";
-
-  return "ALLOW";
+  const adapted = {};
+  for (const key in probeRef) {
+    adapted[key] =
+      oldRef[key] * (1 - rate) + probeRef[key] * rate;
+  }
+  return adapted;
 }
+
+/* ---------- Decision Gate ---------- */
+
+function decisionGate(salDecision, delta) {
+  if (salDecision !== "ALLOW") return "DENY";
+
+  const dD = abs(delta.densityDelta);
+  const dA = abs(delta.appearanceDelta);
+
+  if (
+    dD < THRESHOLDS.STRONG.density &&
+    dA < THRESHOLDS.STRONG.appearance
+  ) {
+    return "ALLOW";
+  }
+
+  if (
+    dD < THRESHOLDS.WEAK.density &&
+    dA < THRESHOLDS.WEAK.appearance
+  ) {
+    return "ALLOW_UPDATE";
+  }
+
+  return "DENY";
+}
+
+/* ---------- Route ---------- */
 
 router.post("/guard", (req, res) => {
   const { secret } = req.body;
@@ -63,18 +110,25 @@ router.post("/guard", (req, res) => {
 
   const result = ae.guard(
     () => {
+      /* 🟡 INIT PHASE */
       if (!storedRef) {
         const S = ndrd.extract(secret);
         const A = ndrd.activate(S);
         saveRef(A);
-        return { phase: "INIT", decision: "ALLOW" };
+
+        return {
+          phase: "INIT",
+          decision: "ALLOW"
+        };
       }
 
+      /* 🔵 ACCESS PHASE */
       const probeS = ndrd.extract(secret);
       const probeA = ndrd.activate(probeS);
 
+      /* ❗ لا نعيد activate المرجع */
       const delta = ndrd.derive(
-        ndrd.activate(storedRef),
+        storedRef,
         probeA
       );
 
@@ -86,9 +140,21 @@ router.post("/guard", (req, res) => {
         execution: false
       });
 
+      const gateDecision = decisionGate(salDecision, delta);
+
+      /* 🧠 تحديث المرجع عند القبول الجزئي */
+      if (gateDecision === "ALLOW_UPDATE") {
+        const newRef = adaptReference(
+          storedRef,
+          probeA,
+          ADAPT_RATE
+        );
+        saveRef(newRef);
+      }
+
       return {
         phase: "ACCESS",
-        decision: absentGate(salDecision, delta)
+        decision: gateDecision
       };
     },
     {
@@ -97,18 +163,24 @@ router.post("/guard", (req, res) => {
     }
   );
 
+  /* ---------- Final Enforcement ---------- */
+
   if (result.report.securityFlag !== "OK") {
     return res.status(403).json({ ok: false, access: "DENIED" });
   }
 
-  if (result.result.decision !== "ALLOW") {
+  if (
+    result.result.decision !== "ALLOW" &&
+    result.result.decision !== "ALLOW_UPDATE"
+  ) {
     return res.status(403).json({ ok: false, access: "DENIED" });
   }
 
   return res.json({
     ok: true,
     access: "GRANTED",
-    phase: result.result.phase
+    phase: result.result.phase,
+    mode: result.result.decision
   });
 });
 
