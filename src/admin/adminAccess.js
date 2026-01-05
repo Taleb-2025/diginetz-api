@@ -17,6 +17,8 @@ const sal  = new TSL_SAL();
 const DATA_DIR = "/data";
 const REF_FILE = path.join(DATA_DIR, "admin.reference.json");
 
+const EPSILON = 0.0001; // ε
+
 function loadRef() {
   if (!fs.existsSync(REF_FILE)) return null;
   try {
@@ -37,12 +39,19 @@ function saveRef(ref) {
   );
 }
 
+function within(v) {
+  return Math.abs(v) <= EPSILON;
+}
+
 function absentGate(decision, delta, trace) {
   if (decision !== "ALLOW") return "DENY";
-  if (delta.densityDelta !== 0) return "DENY";
-  if (delta.appearanceDelta !== 0) return "DENY";
-  if (trace?.short?.drift !== 0) return "DENY";
-  if (trace?.mid?.drift !== 0) return "DENY";
+
+  if (!within(delta.densityDelta)) return "DENY";
+  if (!within(delta.appearanceDelta)) return "DENY";
+
+  if (!within(trace?.short?.drift ?? 0)) return "DENY";
+  if (!within(trace?.mid?.drift ?? 0)) return "DENY";
+
   return "ALLOW";
 }
 
