@@ -76,7 +76,7 @@ router.post("/guard", (req, res) => {
       const probeS = ndrd.extract(secret);
       const probeA = ndrd.activate(probeS);
 
-      // 🔧 السطر المُصلِح الوحيد
+      // 🔧 السطر الوحيد الذي أصلح كل شيء
       const delta = ndrd.derive(ndrd.activate(storedRef), probeA);
 
       const trace = sts.observe(ndrd.encode(secret));
