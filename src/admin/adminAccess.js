@@ -17,7 +17,7 @@ const sal  = new TSL_SAL();
 const DATA_DIR = "/data";
 const REF_FILE = path.join(DATA_DIR, "admin.reference.json");
 
-const EPSILON = 0.0001; // ε
+const EPSILON = 0.0001;
 
 function loadRef() {
   if (!fs.existsSync(REF_FILE)) return null;
@@ -73,10 +73,13 @@ router.post("/guard", (req, res) => {
         return { phase: "INIT", decision: "ALLOW" };
       }
 
+      // 🔑 السطر الوحيد الذي يصلح كل شيء
+      const reference = ndrd.activate(storedRef);
+
       const probeS = ndrd.extract(secret);
       const probeA = ndrd.activate(probeS);
 
-      const delta = ndrd.derive(storedRef, probeA);
+      const delta = ndrd.derive(reference, probeA);
       const trace = sts.observe(ndrd.encode(secret));
 
       const salDecision = sal.decide({
