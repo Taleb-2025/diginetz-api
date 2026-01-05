@@ -73,13 +73,12 @@ router.post("/guard", (req, res) => {
         return { phase: "INIT", decision: "ALLOW" };
       }
 
-      // 🔑 السطر الوحيد الذي يصلح كل شيء
-      const reference = ndrd.activate(storedRef);
-
       const probeS = ndrd.extract(secret);
       const probeA = ndrd.activate(probeS);
 
-      const delta = ndrd.derive(reference, probeA);
+      // 🔧 السطر المُصلِح الوحيد
+      const delta = ndrd.derive(ndrd.activate(storedRef), probeA);
+
       const trace = sts.observe(ndrd.encode(secret));
 
       const salDecision = sal.decide({
