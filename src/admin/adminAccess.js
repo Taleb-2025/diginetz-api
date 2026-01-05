@@ -23,13 +23,13 @@ const REF_FILE = path.join(DATA_DIR, "admin.reference.json");
 
 /* ---------- Parameters ---------- */
 
-// مسافة القبول (0 = مطابق تمامًا ، 1 = مختلف تمامًا)
-const ACCEPTANCE_THRESHOLD = 0.15;
+// 🔼 رفع العتبة قليلًا للسماح بالضجيج الطبيعي
+const ACCEPTANCE_THRESHOLD = 0.30;
 
-// معدل التعلّم (EMA)
+// معدل التعلّم (Exponential Moving Average)
 const ADAPT_RATE = 0.1;
 
-/* ---------- IO ---------- */
+/* ---------- Reference IO ---------- */
 
 function loadRef() {
   if (!fs.existsSync(REF_FILE)) return null;
@@ -53,21 +53,21 @@ function saveRef(ref) {
 
 /* ---------- Math Utilities ---------- */
 
-// حساب مسافة مُطبَّعة بين بنيتين
+// حساب مسافة مُطبَّعة بين البنية الحالية والمرجع
 function normalizedDistance(delta) {
   const d = Math.abs(delta.densityDelta);
   const a = Math.abs(delta.appearanceDelta);
 
-  // تطبيع إلى مجال [0..1]
+  // تطبيع إلى المجال [0 .. 1]
   return Math.min(1, (d + a) / 2);
 }
 
-// تحديث مرجعي (Exponential Moving Average)
+// تحديث المرجع (تعلم تدريجي)
 function updateReference(oldRef, newRef, rate) {
   const updated = {};
-  for (const k in newRef) {
-    updated[k] =
-      oldRef[k] * (1 - rate) + newRef[k] * rate;
+  for (const key in newRef) {
+    updated[key] =
+      oldRef[key] * (1 - rate) + newRef[key] * rate;
   }
   return updated;
 }
@@ -89,7 +89,7 @@ router.post("/guard", (req, res) => {
   const result = ae.guard(
     () => {
 
-      /* ---------- INIT ---------- */
+      /* ---------- INIT PHASE ---------- */
       if (!storedRef) {
         const structure = ndrd.extract(secret);
         saveRef(structure);
@@ -100,26 +100,26 @@ router.post("/guard", (req, res) => {
         };
       }
 
-      /* ---------- ACCESS ---------- */
+      /* ---------- ACCESS PHASE ---------- */
 
-      // 1️⃣ استخراج بنية حالية (noisy but meaningful)
+      // 1) استخراج بنية حالية (noisy)
       const probeStructure = ndrd.extract(secret);
 
-      // 2️⃣ حساب الفرق البنيوي
+      // 2) اشتقاق الفرق البنيوي
       const delta = ndrd.derive(
         storedRef,
         probeStructure
       );
 
-      // 3️⃣ تطبيع الفرق إلى مسافة
+      // 3) تحويل الفرق إلى مسافة مُطبَّعة
       const distance = normalizedDistance(delta);
 
-      // 4️⃣ سلوك زمني (طبقة إضافية)
+      // 4) مراقبة السلوك الزمني
       const trace = sts.observe(
         ndrd.encode(secret)
       );
 
-      // 5️⃣ قرار عالي المستوى
+      // 5) قرار SAL
       const salDecision = sal.decide({
         structure: delta,
         trace,
@@ -127,15 +127,21 @@ router.post("/guard", (req, res) => {
       });
 
       if (salDecision !== "ALLOW") {
-        return { phase: "ACCESS", decision: "DENY" };
+        return {
+          phase: "ACCESS",
+          decision: "DENY"
+        };
       }
 
-      // 6️⃣ قرار نهائي بالمسافة
+      // 6) قرار نهائي بالمسافة
       if (distance > ACCEPTANCE_THRESHOLD) {
-        return { phase: "ACCESS", decision: "DENY" };
+        return {
+          phase: "ACCESS",
+          decision: "DENY"
+        };
       }
 
-      // 7️⃣ تحديث المرجع (تعلّم تدريجي)
+      // 7) تحديث المرجع (تعلم بطيء وآمن)
       const updatedRef = updateReference(
         storedRef,
         probeStructure,
