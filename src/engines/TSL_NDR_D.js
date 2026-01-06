@@ -1,15 +1,23 @@
+// ==========================================================
+// TSL_NDR_D v2 — Behavioral / Rhythmic Structural Engine
+// Compatible with TSL + AE + STS
+// ==========================================================
+
 export class TSL_NDR_D {
 
   constructor(config = {}) {
     this.scales = config.scales ?? [4, 8, 16];
-    this.tolerance = config.tolerance ?? {
-      density: 1e-6,
-      appearanceCount: 0,
-      local: 0,
-      scale: 0
+
+    // Zone-based tolerance (NOT zero-based)
+    this.zones = config.zones ?? {
+      accept: 0.35,
+      adapt: 0.55
     };
   }
 
+  /* ======================================================
+     Encoding → Bits (unchanged, low-level only)
+     ====================================================== */
   encode(input) {
     if (Array.isArray(input)) return input.slice();
 
@@ -21,94 +29,154 @@ export class TSL_NDR_D {
     return bits;
   }
 
+  /* ======================================================
+     Canonicalization → Events / Rhythm
+     ====================================================== */
+  bitsToEvents(bits) {
+    const events = [];
+    let gap = 0;
+
+    for (let i = 0; i < bits.length; i++) {
+      if (bits[i] === 1) {
+        events.push(gap);
+        gap = 0;
+      } else {
+        gap++;
+      }
+    }
+
+    // normalize gaps (relative, not absolute)
+    const max = Math.max(...events, 1);
+    return events.map(v => v / max);
+  }
+
+  /* ======================================================
+     NDR — Behavioral Extraction
+     ====================================================== */
   extract(input) {
     const bits = this.encode(input);
+    const events = this.bitsToEvents(bits);
 
-    const appearance = [];
-    for (let i = 0; i < bits.length; i++)
-      if (bits[i] === 1) appearance.push(i);
+    /* -------- Rhythmic Invariants -------- */
+    const mean =
+      events.reduce((a, b) => a + b, 0) / (events.length || 1);
 
-    const relations = [];
-    for (let i = 0; i < appearance.length; i++)
-      for (let j = i + 1; j < appearance.length; j++)
-        relations.push(appearance[j] - appearance[i]);
+    const variance =
+      events.reduce((s, v) => s + Math.pow(v - mean, 2), 0) /
+      (events.length || 1);
 
     const invariants = {
-      length: bits.length,
-      appearanceCount: appearance.length,
-      density: bits.length === 0 ? 0 : appearance.length / bits.length
+      eventCount: events.length,
+      rhythmMean: mean,
+      rhythmVariance: variance
     };
 
-    const localOrder = [];
-    for (let i = 1; i < appearance.length; i++)
-      localOrder.push(appearance[i] - appearance[i - 1]);
+    /* -------- Local Rhythm Shape -------- */
+    const deltas = [];
+    for (let i = 1; i < events.length; i++) {
+      deltas.push(events[i] - events[i - 1]);
+    }
 
+    /* -------- Multi-Scale Rhythm -------- */
     const multiScale = {};
     for (const size of this.scales) {
-      const windows = [];
-      for (let i = 0; i < bits.length; i += size) {
-        let count = 0;
-        for (let j = i; j < i + size && j < bits.length; j++)
-          if (bits[j] === 1) count++;
-        windows.push(count);
+      const buckets = [];
+      for (let i = 0; i < events.length; i += size) {
+        const slice = events.slice(i, i + size);
+        if (!slice.length) continue;
+        const avg =
+          slice.reduce((a, b) => a + b, 0) / slice.length;
+        buckets.push(avg);
       }
-      multiScale[size] = windows;
+      multiScale[size] = buckets;
     }
 
     return {
-      appearance,
-      relations,
       invariants,
-      localOrder,
+      rhythm: events,
+      localShape: deltas,
       multiScale
     };
   }
 
+  /* ======================================================
+     Activation
+     ====================================================== */
   activate(S) {
     return {
       invariants: S.invariants,
-      localVector: S.localOrder.slice(),
+      shapeVector: S.localShape.slice(),
       scaleVector: this.flattenScales(S.multiScale)
     };
   }
 
   flattenScales(scales) {
     const out = [];
-    for (const k of Object.keys(scales))
+    for (const k of Object.keys(scales)) {
       out.push(...scales[k]);
+    }
     return out;
   }
 
+  /* ======================================================
+     Structural Delta (Normalized)
+     ====================================================== */
   derive(A, B) {
     return {
-      densityDelta: B.invariants.density - A.invariants.density,
-      appearanceDelta:
-        B.invariants.appearanceCount - A.invariants.appearanceCount,
-      localShift: this.vectorDistance(A.localVector, B.localVector),
-      scaleShift: this.vectorDistance(A.scaleVector, B.scaleVector)
+      rhythmShift:
+        this.vectorDistance(A.shapeVector, B.shapeVector),
+
+      scaleShift:
+        this.vectorDistance(A.scaleVector, B.scaleVector),
+
+      invariantShift:
+        Math.abs(
+          A.invariants.rhythmMean -
+          B.invariants.rhythmMean
+        ) +
+        Math.abs(
+          A.invariants.rhythmVariance -
+          B.invariants.rhythmVariance
+        )
     };
   }
 
   vectorDistance(a, b) {
     const n = Math.max(a.length, b.length);
+    if (n === 0) return 0;
+
     let s = 0;
     for (let i = 0; i < n; i++) {
       const x = a[i] ?? 0;
       const y = b[i] ?? 0;
-      s += (x - y) * (x - y);
+      s += Math.abs(x - y);
     }
-    return Math.sqrt(s);
+    return s / n; // normalized
   }
 
-  validate(delta) {
-    return (
-      Math.abs(delta.densityDelta) <= this.tolerance.density &&
-      Math.abs(delta.appearanceDelta) <= this.tolerance.appearanceCount &&
-      Math.abs(delta.localShift) <= this.tolerance.local &&
-      Math.abs(delta.scaleShift) <= this.tolerance.scale
-    );
+  /* ======================================================
+     Zone-Based Evaluation (TSL-compatible)
+     ====================================================== */
+  evaluate(delta) {
+    const score =
+      delta.rhythmShift * 0.5 +
+      delta.scaleShift * 0.3 +
+      delta.invariantShift * 0.2;
+
+    if (score <= this.zones.accept) {
+      return "ACCEPT";
+    }
+
+    if (score <= this.zones.adapt) {
+      return "ADAPT";
+    }
+
+    return "REJECT";
   }
 
+  /* ======================================================
+     Public API
+     ====================================================== */
   compare(inputA, inputB) {
     const SA = this.extract(inputA);
     const SB = this.extract(inputB);
@@ -117,9 +185,10 @@ export class TSL_NDR_D {
     const B = this.activate(SB);
 
     const delta = this.derive(A, B);
+    const decision = this.evaluate(delta);
 
     return {
-      contained: this.validate(delta),
+      decision,     // ACCEPT | ADAPT | REJECT
       delta,
       structureA: SA,
       structureB: SB
