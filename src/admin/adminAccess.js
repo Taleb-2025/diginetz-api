@@ -7,66 +7,51 @@ import { TSL_SAL } from "./TSL_SAL.js";
 
 const router = express.Router();
 
-/* ---------- Engines ---------- */
+/* ======================================================
+   Engines
+   ====================================================== */
 
 const ndrd = new TSL_NDR_D();
 const ae   = new TSL_AE();
-const sts  = new TSL_STS({ expected: { density: 0, drift: 0 } });
+const sts  = new TSL_STS();      
 const sal  = new TSL_SAL();
 
-/* ---------- Parameters ---------- */
+/* ======================================================
+   In-Memory Reference (Admin Only)
+   ====================================================== */
 
-const ACCEPTANCE_THRESHOLD = 0.30;
-const ADAPT_RATE = 0.1;
-
-/* ---------- In-Memory Reference ---------- */
-
-let cachedRef = null;
+let reference = null;
 let refLock = false;
 
-/* ---------- Math ---------- */
-
-function normalizedDistance(delta) {
-  const d = Math.min(1, Math.abs(delta.densityDelta));
-  const a = Math.min(1, Math.abs(delta.appearanceDelta));
-  return 0.6 * d + 0.4 * a;
-}
-
-function safeUpdateReference(oldRef, newRef, rate) {
-  const updated = {};
-  for (const key in oldRef) {
-    if (
-      typeof oldRef[key] === "number" &&
-      typeof newRef[key] === "number"
-    ) {
-      updated[key] =
-        oldRef[key] * (1 - rate) + newRef[key] * rate;
-    } else {
-      updated[key] = oldRef[key];
-    }
-  }
-  return updated;
-}
-
-/* ---------- Route ---------- */
+/* ======================================================
+   Route
+   ====================================================== */
 
 router.post("/guard", async (req, res) => {
   try {
     const { secret, initToken } = req.body;
 
     if (typeof secret !== "string" || !secret.length) {
-      return res.status(400).json({ ok: false });
+      return res.status(400).json({
+        ok: false,
+        error: "SECRET_REQUIRED"
+      });
     }
 
     const result = ae.guard(() => {
 
-      /* ---------- INIT ---------- */
-      if (!cachedRef) {
+      /* ==================================================
+         INIT PHASE (Protected)
+         ================================================== */
+      if (!reference) {
         if (initToken !== process.env.INIT_TOKEN) {
-          return { phase: "INIT", decision: "DENY" };
+          return {
+            phase: "INIT",
+            decision: "DENY"
+          };
         }
 
-        cachedRef = ndrd.extract(secret);
+        reference = ndrd.extract(secret);
 
         return {
           phase: "INIT",
@@ -74,51 +59,71 @@ router.post("/guard", async (req, res) => {
         };
       }
 
-      /* ---------- ACCESS ---------- */
-      const probe = ndrd.extract(secret);
-      const delta = ndrd.derive(cachedRef, probe);
-      const distance = normalizedDistance(delta);
+      /* ==================================================
+         ACCESS PHASE
+         ================================================== */
 
-      const trace = sts.observe(
-        ndrd.encode(secret)
+      // 1) Extract current structure
+      const probe = ndrd.extract(secret);
+
+      // 2) Structural delta
+      const delta = ndrd.derive(
+        ndrd.activate(reference),
+        ndrd.activate(probe)
       );
 
+      // 3) NDR-D decision (ACCEPT | ADAPT | REJECT)
+      const structuralDecision = ndrd.evaluate(delta);
+
+      // 4) Temporal trace (rhythm, not bits)
+      const trace = sts.observe(probe.rhythm);
+
+      // 5) SAL decision (temporal / execution safety)
       const salDecision = sal.decide({
         structure: delta,
         trace,
         execution: false
       });
 
-      if (salDecision !== "ALLOW") {
-        return { phase: "ACCESS", decision: "DENY" };
-      }
+      /* ==================================================
+         DECISION MATRIX
+         ================================================== */
 
-      if (distance > ACCEPTANCE_THRESHOLD) {
-        return { phase: "ACCESS", decision: "DENY" };
-      }
-
-      /* ---------- SAFE LEARNING ---------- */
+      // Hard reject
       if (
-        distance < ACCEPTANCE_THRESHOLD * 0.5 &&
+        structuralDecision === "REJECT" ||
+        salDecision !== "ALLOW"
+      ) {
+        return {
+          phase: "ACCESS",
+          decision: "DENY"
+        };
+      }
+
+      // Safe adapt (learning)
+      if (
+        structuralDecision === "ADAPT" &&
         !refLock
       ) {
         refLock = true;
         try {
-          cachedRef = safeUpdateReference(
-            cachedRef,
-            probe,
-            ADAPT_RATE
-          );
+          // Replace reference with new stabilized structure
+          reference = probe;
         } finally {
           refLock = false;
         }
       }
 
+      // ACCEPT or ADAPT → allow access
       return {
         phase: "ACCESS",
         decision: "ALLOW"
       };
     });
+
+    /* ==================================================
+       Enforcement
+       ================================================== */
 
     if (
       result.report.securityFlag !== "OK" ||
@@ -137,7 +142,7 @@ router.post("/guard", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("GUARD_ERROR", err);
+    console.error("ADMIN_GUARD_ERROR", err);
     return res.status(500).json({
       ok: false,
       error: "INTERNAL_ERROR"
