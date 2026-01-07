@@ -7,28 +7,22 @@ import { TSL_SAL } from "./TSL_SAL.js";
 
 const router = express.Router();
 
-/* ======================================================
-   Engines
-   ====================================================== */
-
 const ndrd = new TSL_NDR_D();
 const ae   = new TSL_AE();
-const sts  = new TSL_STS();      
+const sts  = new TSL_STS();
 const sal  = new TSL_SAL();
-
-/* ======================================================
-   In-Memory Reference (Admin Only)
-   ====================================================== */
 
 let reference = null;
 let refLock = false;
 
-/* ======================================================
-   Route
-   ====================================================== */
-
 router.post("/guard", async (req, res) => {
   try {
+
+    console.log("INIT STEP CHECK", {
+      initToken: req.body.initToken,
+      envToken: process.env.INIT_TOKEN
+    });
+
     const { secret, initToken } = req.body;
 
     if (typeof secret !== "string" || !secret.length) {
@@ -40,9 +34,6 @@ router.post("/guard", async (req, res) => {
 
     const result = ae.guard(() => {
 
-      /* ==================================================
-         INIT PHASE (Protected)
-         ================================================== */
       if (!reference) {
         if (initToken !== process.env.INIT_TOKEN) {
           return {
@@ -59,37 +50,23 @@ router.post("/guard", async (req, res) => {
         };
       }
 
-      /* ==================================================
-         ACCESS PHASE
-         ================================================== */
-
-      // 1) Extract current structure
       const probe = ndrd.extract(secret);
 
-      // 2) Structural delta
       const delta = ndrd.derive(
         ndrd.activate(reference),
         ndrd.activate(probe)
       );
 
-      // 3) NDR-D decision (ACCEPT | ADAPT | REJECT)
       const structuralDecision = ndrd.evaluate(delta);
 
-      // 4) Temporal trace (rhythm, not bits)
       const trace = sts.observe(probe.rhythm);
 
-      // 5) SAL decision (temporal / execution safety)
       const salDecision = sal.decide({
         structure: delta,
         trace,
         execution: false
       });
 
-      /* ==================================================
-         DECISION MATRIX
-         ================================================== */
-
-      // Hard reject
       if (
         structuralDecision === "REJECT" ||
         salDecision !== "ALLOW"
@@ -100,30 +77,23 @@ router.post("/guard", async (req, res) => {
         };
       }
 
-      // Safe adapt (learning)
       if (
         structuralDecision === "ADAPT" &&
         !refLock
       ) {
         refLock = true;
         try {
-          // Replace reference with new stabilized structure
           reference = probe;
         } finally {
           refLock = false;
         }
       }
 
-      // ACCEPT or ADAPT → allow access
       return {
         phase: "ACCESS",
         decision: "ALLOW"
       };
     });
-
-    /* ==================================================
-       Enforcement
-       ================================================== */
 
     if (
       result.report.securityFlag !== "OK" ||
