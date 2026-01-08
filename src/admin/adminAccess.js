@@ -2,11 +2,12 @@ import express from "express";
 
 import { TSL_NDR } from "../engines/TSL_NDR.js";
 import { TSL_D }   from "../engines/TSL_D.js";
-import { TSL_RV } from "./TSL_RV.js";
 
-import { TSL_AE }  from "./TSL_AE.js";
+import { TSL_RV } from "./TSL_RV.js";
 import { TSL_STS } from "./TSL_STS.js";
-import { TSL_SAL } from "./TSL_SAL.js";
+import { TSL_AE }  from "./TSL_AE.js";
+
+import { Decision } from "./Decision.js";
 
 const router = express.Router();
 
@@ -14,88 +15,73 @@ const ndr = new TSL_NDR();
 const d   = new TSL_D();
 const rv  = new TSL_RV();
 
-const ae  = new TSL_AE();
 const sts = new TSL_STS();
-const sal = new TSL_SAL();
+const ae  = new TSL_AE();
 
 router.post("/guard", async (req, res) => {
   try {
     const { secret, initToken } = req.body;
 
     if (typeof secret !== "string" || !secret.length) {
-      return res.status(400).json({
-        ok: false,
-        error: "SECRET_REQUIRED"
+      return res.status(400).json({ ok: false });
+    }
+
+    /* ================= INIT ================= */
+    if (!rv.isInitialized()) {
+      if (initToken !== process.env.INIT_TOKEN) {
+        return res.status(403).json({ ok: false });
+      }
+
+      const S0 = ndr.extract(secret);
+      rv.init(S0);
+
+      return res.json({
+        ok: true,
+        phase: "INIT",
+        access: "GRANTED"
       });
     }
 
-    const result = ae.guard(() => {
+    /* ================= ACCESS ================= */
+    const S0 = rv.get();
+    const S1 = ndr.extract(secret);
 
-      if (!rv.isInitialized()) {
-        if (initToken !== process.env.INIT_TOKEN) {
-          return {
-            phase: "INIT",
-            decision: "DENY"
-          };
-        }
+    const delta = d.derive(
+      d.activate(S0),
+      d.activate(S1)
+    );
 
-        const S0 = ndr.extract(secret);
-        rv.init(S0);
+    const trace = sts.observe(delta);
+    const aeSignal = ae.observe
+      ? ae.observe(delta)
+      : null;
 
-        return {
-          phase: "INIT",
-          decision: "ALLOW"
-        };
-      }
-
-      const S0 = rv.get();
-      const S1 = ndr.extract(secret);
-
-      const { delta, decision: structuralDecision } =
-        d.compare(S0, S1);
-
-      const trace = sts.observe(delta);
-
-      const salDecision = sal.decide({
-        structure: delta,
-        trace,
-        execution: false
-      });
-
-      if (
-        structuralDecision === "REJECT" ||
-        salDecision !== "ALLOW"
-      ) {
-        return {
-          phase: "ACCESS",
-          decision: "DENY"
-        };
-      }
-
-      return {
-        phase: "ACCESS",
-        decision: "ALLOW"
-      };
+    const decision = Decision({
+      delta,
+      trace,
+      ae: aeSignal
     });
 
-    if (
-      result.report.securityFlag !== "OK" ||
-      result.result.decision !== "ALLOW"
-    ) {
+    if (decision === "DENY") {
       return res.status(403).json({
         ok: false,
         access: "DENIED"
       });
     }
 
+    if (decision === "ADAPT") {
+      rv.init(S1); // تحديث مرجعي مسيطر عليه
+    }
+
     return res.json({
       ok: true,
+      phase: "ACCESS",
       access: "GRANTED",
-      phase: result.result.phase
+      decision
     });
 
   } catch (err) {
-    console.error("ADMIN_GUARD_ERROR", err);
+    console.error("ADMIN_ACCESS_ERROR", err);
     return res.status(500).json({
       ok: false,
       error: "INTERNAL_ERROR"
