@@ -7,7 +7,7 @@ import { TSL_RV } from "./TSL_RV.js";
 import { TSL_STS } from "./TSL_STS.js";
 import { TSL_AE }  from "./TSL_AE.js";
 
-import { Decision } from "./Decision.js";
+import { TSL_Decision } from "./Decision.js";
 
 const router = express.Router();
 
