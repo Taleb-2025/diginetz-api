@@ -20,7 +20,6 @@ const sal = new TSL_SAL();
 
 router.post("/guard", async (req, res) => {
   try {
-
     const { secret, initToken } = req.body;
 
     if (typeof secret !== "string" || !secret.length) {
