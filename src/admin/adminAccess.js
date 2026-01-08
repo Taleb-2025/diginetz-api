@@ -3,7 +3,7 @@ import express from "express";
 import { TSL_NDR } from "../engines/TSL_NDR.js";
 import { TSL_D }   from "../engines/TSL_D.js";
 
-import { TSL_RV } from "./TSL_RV.js";
+import { TSL_RV }  from "./TSL_RV.js";
 import { TSL_STS } from "./TSL_STS.js";
 import { TSL_AE }  from "./TSL_AE.js";
 
@@ -23,13 +23,19 @@ router.post("/guard", async (req, res) => {
     const { secret, initToken } = req.body;
 
     if (typeof secret !== "string" || !secret.length) {
-      return res.status(400).json({ ok: false });
+      return res.status(400).json({
+        ok: false,
+        error: "SECRET_REQUIRED"
+      });
     }
 
     /* ================= INIT ================= */
     if (!rv.isInitialized()) {
       if (initToken !== process.env.INIT_TOKEN) {
-        return res.status(403).json({ ok: false });
+        return res.status(403).json({
+          ok: false,
+          error: "INIT_DENIED"
+        });
       }
 
       const S0 = ndr.extract(secret);
@@ -46,38 +52,40 @@ router.post("/guard", async (req, res) => {
     const S0 = rv.get();
     const S1 = ndr.extract(secret);
 
-    const delta = d.derive(
-      d.activate(S0),
-      d.activate(S1)
-    );
+    const A0 = d.activate(S0);
+    const A1 = d.activate(S1);
 
-    const trace = sts.observe(delta);
-    const aeSignal = ae.observe
-      ? ae.observe(delta)
+    const deltaProfile = d.derive(A0, A1);
+    const deltaContainment = d.validate(deltaProfile);
+
+    const stsReport = sts.observe
+      ? sts.observe(deltaProfile)
       : null;
 
-    const decision = Decision({
-      delta,
-      trace,
-      ae: aeSignal
+    const aeReport = ae.observe
+      ? ae.observe(deltaProfile)
+      : null;
+
+    const decisionResult = TSL_Decision({
+      deltaContainment,
+      deltaProfile,
+      stsReport,
+      aeReport
     });
 
-    if (decision === "DENY") {
+    if (decisionResult.decision === "DENY") {
       return res.status(403).json({
         ok: false,
-        access: "DENIED"
+        access: "DENIED",
+        signals: decisionResult.signals
       });
-    }
-
-    if (decision === "ADAPT") {
-      rv.init(S1); // تحديث مرجعي مسيطر عليه
     }
 
     return res.json({
       ok: true,
       phase: "ACCESS",
       access: "GRANTED",
-      decision
+      decision: decisionResult
     });
 
   } catch (err) {
