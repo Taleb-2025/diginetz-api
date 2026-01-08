@@ -1,27 +1,25 @@
 import express from "express";
 
-import { TSL_NDR_D } from "../engines/TSL_NDR_D.js";
-import { TSL_AE } from "./TSL_AE.js";
+import { TSL_NDR } from "../engines/TSL_NDR.js";
+import { TSL_D }   from "../engines/TSL_D.js";
+import { TSL_RV }  from "../engines/TSL_RV.js";
+
+import { TSL_AE }  from "./TSL_AE.js";
 import { TSL_STS } from "./TSL_STS.js";
 import { TSL_SAL } from "./TSL_SAL.js";
 
 const router = express.Router();
 
-const ndrd = new TSL_NDR_D();
-const ae   = new TSL_AE();
-const sts  = new TSL_STS();
-const sal  = new TSL_SAL();
+const ndr = new TSL_NDR();
+const d   = new TSL_D();
+const rv  = new TSL_RV();
 
-let reference = null;
-let refLock = false;
+const ae  = new TSL_AE();
+const sts = new TSL_STS();
+const sal = new TSL_SAL();
 
 router.post("/guard", async (req, res) => {
   try {
-
-    console.log("INIT STEP CHECK", {
-      initToken: req.body.initToken,
-      envToken: process.env.INIT_TOKEN
-    });
 
     const { secret, initToken } = req.body;
 
@@ -34,7 +32,7 @@ router.post("/guard", async (req, res) => {
 
     const result = ae.guard(() => {
 
-      if (!reference) {
+      if (!rv.isInitialized()) {
         if (initToken !== process.env.INIT_TOKEN) {
           return {
             phase: "INIT",
@@ -42,7 +40,8 @@ router.post("/guard", async (req, res) => {
           };
         }
 
-        reference = ndrd.extract(secret);
+        const S0 = ndr.extract(secret);
+        rv.init(S0);
 
         return {
           phase: "INIT",
@@ -50,16 +49,13 @@ router.post("/guard", async (req, res) => {
         };
       }
 
-      const probe = ndrd.extract(secret);
+      const S0 = rv.get();
+      const S1 = ndr.extract(secret);
 
-      const delta = ndrd.derive(
-        ndrd.activate(reference),
-        ndrd.activate(probe)
-      );
+      const { delta, decision: structuralDecision } =
+        d.compare(S0, S1);
 
-      const structuralDecision = ndrd.evaluate(delta);
-
-      const trace = sts.observe(probe.rhythm);
+      const trace = sts.observe(delta);
 
       const salDecision = sal.decide({
         structure: delta,
@@ -75,18 +71,6 @@ router.post("/guard", async (req, res) => {
           phase: "ACCESS",
           decision: "DENY"
         };
-      }
-
-      if (
-        structuralDecision === "ADAPT" &&
-        !refLock
-      ) {
-        refLock = true;
-        try {
-          reference = probe;
-        } finally {
-          refLock = false;
-        }
       }
 
       return {
