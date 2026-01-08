@@ -23,19 +23,13 @@ router.post("/guard", async (req, res) => {
     const { secret, initToken } = req.body;
 
     if (typeof secret !== "string" || !secret.length) {
-      return res.status(400).json({
-        ok: false,
-        error: "SECRET_REQUIRED"
-      });
+      return res.status(400).json({ ok: false });
     }
 
     /* ================= INIT ================= */
     if (!rv.isInitialized()) {
       if (initToken !== process.env.INIT_TOKEN) {
-        return res.status(403).json({
-          ok: false,
-          error: "INIT_DENIED"
-        });
+        return res.status(403).json({ ok: false });
       }
 
       const S0 = ndr.extract(secret);
@@ -52,23 +46,17 @@ router.post("/guard", async (req, res) => {
     const S0 = rv.get();
     const S1 = ndr.extract(secret);
 
-    const A0 = d.activate(S0);
-    const A1 = d.activate(S1);
+    // 👇 الاستخدام الصحيح لمحرك TSL_D
+    const containment = d.contain(S0, S1);
 
-    const deltaProfile = d.derive(A0, A1);
-    const deltaContainment = d.validate(deltaProfile);
-
-    const stsReport = sts.observe
-      ? sts.observe(deltaProfile)
-      : null;
-
-    const aeReport = ae.observe
-      ? ae.observe(deltaProfile)
+    const stsReport = sts.observe(containment.delta);
+    const aeReport  = ae.observe
+      ? ae.observe(containment.delta)
       : null;
 
     const decisionResult = TSL_Decision({
-      deltaContainment,
-      deltaProfile,
+      deltaContainment: containment.contained,
+      deltaProfile: containment.delta,
       stsReport,
       aeReport
     });
@@ -77,7 +65,7 @@ router.post("/guard", async (req, res) => {
       return res.status(403).json({
         ok: false,
         access: "DENIED",
-        signals: decisionResult.signals
+        reason: decisionResult
       });
     }
 
