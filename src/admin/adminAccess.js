@@ -46,17 +46,20 @@ router.post("/guard", async (req, res) => {
     const S0 = rv.get();
     const S1 = ndr.extract(secret);
 
-    // 👇 الاستخدام الصحيح لمحرك TSL_D
-    const containment = d.contain(S0, S1);
+    // ✅ API الصحيح للمحرك
+    const comparison = d.compare(S0, S1);
 
-    const stsReport = sts.observe(containment.delta);
-    const aeReport  = ae.observe
-      ? ae.observe(containment.delta)
+    const stsReport = sts.observe
+      ? sts.observe(comparison.delta)
+      : null;
+
+    const aeReport = ae.observe
+      ? ae.observe(comparison.delta)
       : null;
 
     const decisionResult = TSL_Decision({
-      deltaContainment: containment.contained,
-      deltaProfile: containment.delta,
+      deltaContainment: comparison.decision === "ACCEPT",
+      deltaProfile: comparison.delta,
       stsReport,
       aeReport
     });
