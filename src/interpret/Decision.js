@@ -1,57 +1,46 @@
 export function TSL_Decision({
   deltaContainment,
-  deltaProfile = {},
+  deltaProfile,
   stsReport,
   aeReport
 }) {
   const signals = [];
 
-  if (stsReport?.anomaly === true) {
-    signals.push({ source: "sts", state: "temporal-anomaly" });
+  if (stsReport?.short && !stsReport.short.aligned) {
+    signals.push({ source: "sts", scope: "short" });
   }
 
-  if (aeReport?.absenceDetected === true) {
-    signals.push({ source: "ae", state: "expected-missing" });
+  if (stsReport?.mid && !stsReport.mid.aligned) {
+    signals.push({ source: "sts", scope: "mid" });
+  }
+
+  if (stsReport?.long && !stsReport.long.aligned) {
+    signals.push({ source: "sts", scope: "long" });
+  }
+
+  if (aeReport?.securityFlag === "ALERT") {
+    signals.push({ source: "ae", reason: aeReport.reason });
   }
 
   const magnitude =
-    Math.abs(deltaProfile.densityDelta ?? 0) +
-    Math.abs(deltaProfile.appearanceDelta ?? 0) +
-    Math.abs(deltaProfile.localShift ?? 0) +
-    Math.abs(deltaProfile.scaleShift ?? 0);
-
-  const ACCEPT_ZONE = 0.05;
-  const TOLERANT_ZONE = 0.15;
+    Math.abs(deltaProfile?.densityDelta ?? 0) +
+    Math.abs(deltaProfile?.appearanceDelta ?? 0) +
+    Math.abs(deltaProfile?.localShift ?? 0) +
+    Math.abs(deltaProfile?.scaleShift ?? 0);
 
   if (deltaContainment === true) {
     return {
       decision: "ALLOW",
-      mode: "STRICT",
       basis: "structural-containment",
-      signals,
-      magnitude
-    };
-  }
-
-  if (
-    deltaContainment === false &&
-    magnitude <= TOLERANT_ZONE &&
-    signals.length === 0
-  ) {
-    return {
-      decision: "ALLOW",
-      mode: "TOLERANT",
-      basis: "boundary-tolerance",
-      signals,
-      magnitude
+      magnitude,
+      signals
     };
   }
 
   return {
     decision: "DENY",
-    mode: "REJECT",
-    basis: "out-of-scope",
-    signals,
-    magnitude
+    basis: "out-of-structure",
+    magnitude,
+    signals
   };
 }
