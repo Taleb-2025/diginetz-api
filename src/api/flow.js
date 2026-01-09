@@ -8,7 +8,7 @@ import { TSL_STS } from "../state/TSL_STS.js";
 import { TSL_AE }  from "../state/TSL_AE.js";
 
 import { TSL_Decision } from "../interpret/Decision.js";
-import { TSL_EG } from "../gateway/TSL_EG.js";
+import { TSL_EG } from "../execution/TSL_EG.js";
 
 const router = express.Router();
 
