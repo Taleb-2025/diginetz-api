@@ -1,14 +1,10 @@
 export function TSL_Decision({
-  deltaContainment,   // true | false من TSL_D
-  deltaProfile,       // قيم الدلتا التفصيلية
-  stsReport,          // رصد فقط
-  aeReport            // رصد فقط
+  deltaContainment,
+  deltaProfile = {},
+  stsReport,
+  aeReport
 }) {
-
   const signals = [];
-  let mode = "STRICT"; // STRICT | TOLERANT
-
-  /* ---------- توصيف الإشارات ---------- */
 
   if (stsReport?.anomaly === true) {
     signals.push({ source: "sts", state: "temporal-anomaly" });
@@ -18,22 +14,15 @@ export function TSL_Decision({
     signals.push({ source: "ae", state: "expected-missing" });
   }
 
-  /* ---------- حساب شدة التغير ---------- */
-  // نفترض أن deltaProfile يحتوي قيم عددية
   const magnitude =
     Math.abs(deltaProfile.densityDelta ?? 0) +
     Math.abs(deltaProfile.appearanceDelta ?? 0) +
     Math.abs(deltaProfile.localShift ?? 0) +
     Math.abs(deltaProfile.scaleShift ?? 0);
 
-  /* ---------- تحديد نطاق التغير ---------- */
-  // هذه القيم قابلة للضبط لاحقًا
-  const ACCEPT_ZONE = 0.05;   // تغير طبيعي
-  const TOLERANT_ZONE = 0.15; // تغير قريب من الحد
+  const ACCEPT_ZONE = 0.05;
+  const TOLERANT_ZONE = 0.15;
 
-  /* ---------- منطق القرار ---------- */
-
-  // 1) احتواء صريح
   if (deltaContainment === true) {
     return {
       decision: "ALLOW",
@@ -44,7 +33,6 @@ export function TSL_Decision({
     };
   }
 
-  // 2) خارج الاحتواء لكن داخل الهامش
   if (
     deltaContainment === false &&
     magnitude <= TOLERANT_ZONE &&
@@ -59,7 +47,6 @@ export function TSL_Decision({
     };
   }
 
-  // 3) كل ما عدا ذلك
   return {
     decision: "DENY",
     mode: "REJECT",
@@ -68,4 +55,3 @@ export function TSL_Decision({
     magnitude
   };
 }
-
