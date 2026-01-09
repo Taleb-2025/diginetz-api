@@ -1,81 +1,71 @@
-// ==========================================================
-// TSL_NDR — Behavioral / Rhythmic Structural Extraction
-// ==========================================================
+// TSL_NDR.js
+// Noise-Driven Structural Representation Engine
+// Core / Stateless / Deterministic
 
 export class TSL_NDR {
-
-  constructor(config = {}) {
-    this.scales = config.scales ?? [4, 8, 16];
-  }
-
-  encode(input) {
-    if (Array.isArray(input)) return input.slice();
-
-    const bits = [];
-    for (const c of String(input)) {
-      const bin = c.charCodeAt(0).toString(2).padStart(8, "0");
-      for (const b of bin) bits.push(b === "1" ? 1 : 0);
-    }
-    return bits;
-  }
-
-  bitsToEvents(bits) {
-    const events = [];
-    let gap = 0;
-
-    for (let i = 0; i < bits.length; i++) {
-      if (bits[i] === 1) {
-        events.push(gap);
-        gap = 0;
-      } else {
-        gap++;
-      }
-    }
-
-    const max = Math.max(...events, 1);
-    return events.map(v => v / max);
+  constructor(options = {}) {
+    this.depthLimit = options.depthLimit ?? 32;
+    this.normalizeNumbers = options.normalizeNumbers ?? true;
+    this.ignoreKeys = new Set(options.ignoreKeys ?? []);
   }
 
   extract(input) {
-    const bits = this.encode(input);
-    const events = this.bitsToEvents(bits);
-
-    const mean =
-      events.reduce((a, b) => a + b, 0) / (events.length || 1);
-
-    const variance =
-      events.reduce((s, v) => s + Math.pow(v - mean, 2), 0) /
-      (events.length || 1);
-
-    const invariants = {
-      eventCount: events.length,
-      rhythmMean: mean,
-      rhythmVariance: variance
-    };
-
-    const localShape = [];
-    for (let i = 1; i < events.length; i++) {
-      localShape.push(events[i] - events[i - 1]);
-    }
-
-    const multiScale = {};
-    for (const size of this.scales) {
-      const buckets = [];
-      for (let i = 0; i < events.length; i += size) {
-        const slice = events.slice(i, i + size);
-        if (!slice.length) continue;
-        const avg =
-          slice.reduce((a, b) => a + b, 0) / slice.length;
-        buckets.push(avg);
-      }
-      multiScale[size] = buckets;
-    }
+    const structure = this.#walk(input, 0);
 
     return {
-      invariants,
-      rhythm: events,
-      localShape,
-      multiScale
+      engine: "TSL_NDR",
+      version: "1.0.0",
+      fingerprint: this.#fingerprint(structure),
+      structure
     };
+  }
+
+  /* ================= INTERNAL ================= */
+
+  #walk(value, depth) {
+    if (depth > this.depthLimit) return "[DEPTH_LIMIT]";
+
+    if (value === null) return "null";
+    if (value === undefined) return "undefined";
+
+    const t = typeof value;
+
+    if (t === "number") {
+      return this.normalizeNumbers ? "number" : value;
+    }
+
+    if (t === "string") return "string";
+    if (t === "boolean") return "boolean";
+    if (t === "function") return "function";
+
+    if (Array.isArray(value)) {
+      return value.map(v => this.#walk(v, depth + 1));
+    }
+
+    if (t === "object") {
+      const out = {};
+      const keys = Object.keys(value)
+        .filter(k => !this.ignoreKeys.has(k))
+        .sort();
+
+      for (const k of keys) {
+        out[k] = this.#walk(value[k], depth + 1);
+      }
+      return out;
+    }
+
+    return "unknown";
+  }
+
+  #fingerprint(structure) {
+    const str = JSON.stringify(structure);
+    let h = 2166136261;
+
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+    }
+
+    return (h >>> 0).toString(16);
   }
 }
