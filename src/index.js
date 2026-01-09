@@ -1,16 +1,23 @@
-// src/index.js
 import express from "express";
+import cors from "cors";
 import flowRouter from "./api/flow.js";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+app.use(cors({
+  origin: [
+    "https://diginetz-template.com",
+    "https://www.diginetz-template.com"
+  ],
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type"]
+}));
+
 app.use(express.json());
 
-// واجهة تشغيل محركات TSL
 app.use("/api/flow", flowRouter);
 
-// Health check بسيط فقط
 app.get("/", (req, res) => {
   res.json({
     service: "DigiNetz TSL Core",
