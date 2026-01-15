@@ -1,3 +1,5 @@
+// diginetz-api/src/execution/TSL_EG.js
+
 export class TSL_EG {
   constructor({
     ndr,
@@ -5,7 +7,8 @@ export class TSL_EG {
     rv,
     sts,
     ae,
-    decision
+    decision,
+    eventDropper
   }) {
     if (!ndr || !d || !rv || !decision) {
       throw new Error("TSL_EG_MISSING_CORE");
@@ -17,6 +20,7 @@ export class TSL_EG {
     this.sts = sts;
     this.ae = ae;
     this.decision = decision;
+    this.eventDropper = eventDropper;
   }
 
   init(input, context = {}) {
@@ -52,6 +56,21 @@ export class TSL_EG {
       const S1 = this.ndr.extract(input);
 
       const containment = this.d.contain(S0, S1);
+
+      /* ================= Event Dropping ================= */
+      if (this.eventDropper) {
+        const drop = this.eventDropper.evaluate(containment.delta);
+        if (drop.dropped) {
+          return {
+            ok: true,
+            phase: "ACCESS",
+            decision: "NO_EVENT",
+            dropped: true,
+            reason: drop.reason
+          };
+        }
+      }
+      /* ================================================== */
 
       let stsReport = null;
       if (this.sts) {
