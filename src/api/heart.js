@@ -2,11 +2,19 @@
 
 import express from "express";
 import fetch from "node-fetch";
+import { TSL_EventDropper } from "../execution/TSL_EventDropper.js";
 
 const router = express.Router();
 
 const TSL_CORE_URL =
   process.env.TSL_CORE_URL || "http://localhost:8080/api/flow";
+
+/* ---------- Event Dropper ---------- */
+const eventDropper = new TSL_EventDropper({
+  minDeltaWeight: 0.05,
+  minStructuralDistance: 0.01,
+  allowEmptyDelta: false
+});
 
 /* ---------- normalize heart signal ---------- */
 function normalizeHeartStream(raw) {
@@ -26,17 +34,13 @@ function normalizeHeartStream(raw) {
   return "";
 }
 
-/* ---------- INIT baseline (rest state) ---------- */
+/* ---------- INIT ---------- */
 router.post("/init", async (req, res) => {
   const { heartStream } = req.body;
-
   const input = normalizeHeartStream(heartStream);
 
   if (!input) {
-    return res.status(400).json({
-      ok: false,
-      reason: "INVALID_HEART_STREAM"
-    });
+    return res.status(400).json({ ok: false, reason: "INVALID_HEART_STREAM" });
   }
 
   try {
@@ -57,17 +61,13 @@ router.post("/init", async (req, res) => {
   }
 });
 
-/* ---------- EXECUTE comparison (activity / stress) ---------- */
+/* ---------- EXECUTE ---------- */
 router.post("/execute", async (req, res) => {
   const { heartStream } = req.body;
-
   const input = normalizeHeartStream(heartStream);
 
   if (!input) {
-    return res.status(400).json({
-      ok: false,
-      reason: "INVALID_HEART_STREAM"
-    });
+    return res.status(400).json({ ok: false, reason: "INVALID_HEART_STREAM" });
   }
 
   try {
@@ -78,6 +78,18 @@ router.post("/execute", async (req, res) => {
     });
 
     const data = await r.json();
+
+    const drop = eventDropper.evaluate(data.report);
+
+    if (drop.dropped) {
+      return res.status(200).json({
+        ok: true,
+        phase: "ACCESS",
+        dropped: true,
+        reason: drop.reason
+      });
+    }
+
     return res.status(r.status).json(data);
   } catch (err) {
     return res.status(500).json({
