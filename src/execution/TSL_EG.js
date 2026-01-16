@@ -79,11 +79,8 @@ export class TSL_EG {
       /* ---------- STS ---------- */
       let stsReport = null;
       if (this.sts) {
-        stsReport = this.sts.observe(
-          typeof input === "string"
-            ? this.ndr.encode(input)
-            : input
-        );
+        // نمرر الإشارة الخام كما هي (لا encode)
+        stsReport = this.sts.observe(input);
       }
 
       /* ---------- AE ---------- */
