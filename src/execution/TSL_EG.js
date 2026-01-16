@@ -23,6 +23,8 @@ export class TSL_EG {
     this.eventDropper = eventDropper;
   }
 
+  /* ================= INIT ================= */
+
   init(input, context = {}) {
     if (this.rv.isInitialized()) {
       return {
@@ -42,6 +44,8 @@ export class TSL_EG {
     };
   }
 
+  /* ================= EXECUTE ================= */
+
   execute(input, context = {}) {
     if (!this.rv.isInitialized()) {
       return {
@@ -55,11 +59,12 @@ export class TSL_EG {
       const S0 = this.rv.get();
       const S1 = this.ndr.extract(input);
 
-      const containment = this.d.contain(S0, S1);
+      /* ---------- DERIVE DELTA ---------- */
+      const delta = this.d.derive(S0, S1);
 
-      /* ================= Event Dropping ================= */
+      /* ---------- EVENT DROPPING ---------- */
       if (this.eventDropper) {
-        const drop = this.eventDropper.evaluate(containment.delta);
+        const drop = this.eventDropper.evaluate(delta);
         if (drop.dropped) {
           return {
             ok: true,
@@ -70,8 +75,8 @@ export class TSL_EG {
           };
         }
       }
-      /* ================================================== */
 
+      /* ---------- STS ---------- */
       let stsReport = null;
       if (this.sts) {
         stsReport = this.sts.observe(
@@ -81,6 +86,7 @@ export class TSL_EG {
         );
       }
 
+      /* ---------- AE ---------- */
       let aeReport = null;
       if (this.ae) {
         aeReport = this.ae.guard(
@@ -90,9 +96,10 @@ export class TSL_EG {
         ).report;
       }
 
+      /* ---------- DECISION ---------- */
       const decisionResult = this.decision({
-        deltaContainment: containment.contained,
-        deltaProfile: containment.delta,
+        deltaContainment: !delta.identical,
+        deltaProfile: delta,
         stsReport,
         aeReport
       });
@@ -105,6 +112,7 @@ export class TSL_EG {
       };
     };
 
+    /* ---------- AE PIPELINE GUARD ---------- */
     if (this.ae) {
       const guarded = this.ae.guard(
         run,
