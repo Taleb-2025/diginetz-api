@@ -4,11 +4,15 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "jest"
   },
   "dependencies": {
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
     "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
   }
 }
