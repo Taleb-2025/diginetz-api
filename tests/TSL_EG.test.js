@@ -1,4 +1,4 @@
-import { TSL_EG } from "../src/execution/TSL_EG.js";
+import TSL_EG from "../src/execution/TSL_EG.js";
 
 test("TSL_EG can initialize and execute", () => {
   const eg = new TSL_EG({
