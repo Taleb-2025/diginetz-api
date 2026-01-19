@@ -1,6 +1,7 @@
-// TSL_NDR.js
+// diginetz-api/src/engines/TSL_NDR.js
 // Noise-Driven Structural Representation Engine
 // Core / Stateless / Deterministic / Cache-Safe
+// TSL_NDR v1.2.0 (Production Ready)
 
 export class TSL_NDR {
   constructor(options = {}) {
@@ -13,24 +14,25 @@ export class TSL_NDR {
   }
 
   extract(input) {
-    const seen = new WeakSet();
-    const structure = this.#walk(input, 0, seen);
+    const cacheKey = this.enableCache
+      ? this.#stableFingerprint(input)
+      : null;
 
-    const fingerprint = this.#fingerprint(structure);
-
-    if (this.enableCache && this.cache.has(fingerprint)) {
-      return this.cache.get(fingerprint);
+    if (this.enableCache && this.cache.has(cacheKey)) {
+      return this.cache.get(cacheKey);
     }
+
+    const structure = this.#walk(input, 0, new WeakSet());
 
     const result = {
       engine: "TSL_NDR",
       version: "1.2.0",
-      fingerprint,
+      fingerprint: this.#fingerprint(structure),
       structure
     };
 
     if (this.enableCache) {
-      this.#cacheSet(fingerprint, result);
+      this.#cacheSet(cacheKey, result);
     }
 
     return result;
@@ -43,21 +45,19 @@ export class TSL_NDR {
 
     if (value === null) return "null";
     if (value === undefined) return "undefined";
+    if (Number.isNaN(value)) return "nan";
+    if (value === Infinity) return "infinity";
 
     if (typeof value === "object") {
       if (seen.has(value)) return "[CIRCULAR]";
       seen.add(value);
     }
 
-    if (Number.isNaN(value)) return "nan";
-    if (value === Infinity) return "infinity";
-
     const t = typeof value;
 
     if (t === "number") {
       return this.normalizeNumbers ? "number" : value;
     }
-
     if (t === "string") return "string";
     if (t === "boolean") return "boolean";
     if (t === "bigint") return "bigint";
@@ -91,7 +91,7 @@ export class TSL_NDR {
 
   #fingerprint(structure) {
     const stable = this.#stableStringify(structure);
-    let h = 2166136261;
+    let h = 2166136261; // FNV-1a offset basis
 
     for (let i = 0; i < stable.length; i++) {
       h ^= stable.charCodeAt(i);
@@ -99,6 +99,15 @@ export class TSL_NDR {
     }
 
     return (h >>> 0).toString(16);
+  }
+
+  #stableFingerprint(input) {
+    try {
+      const temp = this.#walk(input, 0, new WeakSet());
+      return this.#fingerprint(temp);
+    } catch {
+      return "fallback_" + Math.random().toString(36).slice(2);
+    }
   }
 
   #stableStringify(obj) {
@@ -113,7 +122,7 @@ export class TSL_NDR {
     const keys = Object.keys(obj).sort();
     return (
       "{" +
-      keys.map(k => k + ":" + this.#stableStringify(obj[k])).join(",") +
+      keys.map(k => `${k}:${this.#stableStringify(obj[k])}`).join(",") +
       "}"
     );
   }
