@@ -1,8 +1,5 @@
 import express from "express";
 import cors from "cors";
-
-import flowRouter from "./api/flow.js";
-import automotiveRouter from "./api/automotive.js";
 import tslRouter from "./api/tsl/containment.js";
 
 const app = express();
@@ -14,35 +11,23 @@ app.use(cors({
     "https://www.diginetz-template.com"
   ],
   methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type"],
-  maxAge: 86400
+  allowedHeaders: ["Content-Type"]
 }));
 
 app.use(express.json());
 
-app.use("/api/flow", flowRouter);
-app.use("/api/automotive", automotiveRouter);
 app.use("/api/tsl", tslRouter);
 
 app.get("/", (req, res) => {
   res.json({
     service: "DigiNetz TSL Core",
     engine: "TSL",
-    status: "RUNNING",
-    mode: "DETERMINISTIC"
+    status: "RUNNING"
   });
 });
 
 app.get("/health", (req, res) => {
   res.status(200).json({ ok: true });
-});
-
-app.use((err, req, res, next) => {
-  console.error("TSL CORE ERROR:", err);
-  res.status(500).json({
-    error: "INTERNAL_ERROR",
-    engine: "TSL"
-  });
 });
 
 app.listen(PORT, "0.0.0.0", () => {
