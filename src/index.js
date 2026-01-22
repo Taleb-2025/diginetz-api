@@ -3,11 +3,10 @@ import cors from "cors";
 
 import flowRouter from "./api/flow.js";
 import automotiveRouter from "./api/automotive.js";
+import tslRouter from "./api/tsl/containment.js";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
-
-/* ================= MIDDLEWARE ================= */
 
 app.use(cors({
   origin: [
@@ -21,14 +20,10 @@ app.use(cors({
 
 app.use(express.json());
 
-/* ================= ROUTES ================= */
-
 app.use("/api/flow", flowRouter);
 app.use("/api/automotive", automotiveRouter);
+app.use("/api/tsl", tslRouter);
 
-/* ================= SYSTEM ================= */
-
-// Health / Identity (deterministic – no time)
 app.get("/", (req, res) => {
   res.json({
     service: "DigiNetz TSL Core",
@@ -42,8 +37,6 @@ app.get("/health", (req, res) => {
   res.status(200).json({ ok: true });
 });
 
-/* ================= ERROR ================= */
-
 app.use((err, req, res, next) => {
   console.error("TSL CORE ERROR:", err);
   res.status(500).json({
@@ -51,8 +44,6 @@ app.use((err, req, res, next) => {
     engine: "TSL"
   });
 });
-
-/* ================= BOOT ================= */
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`TSL CORE API RUNNING ON PORT ${PORT}`);
