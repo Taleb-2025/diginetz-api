@@ -1,5 +1,5 @@
 import express from "express";
-import { createTSLGuardSDK } from "../../guard/tsl.guard.js";
+import { createTSLGuard } from "../../guard/tsl.guard.js";
 
 const router = express.Router();
 
@@ -68,7 +68,7 @@ function containmentDecision(S0, S1) {
 const runtimeState = {};
 
 /* guarded engine (wraps existing logic – does NOT replace it) */
-const tslGuard = createTSLGuardSDK({
+const tslGuard = createTSLGuard({
   decision: containmentDecision,
   rv: runtimeState
 });
@@ -88,8 +88,8 @@ router.post("/containment", (req, res) => {
 
   /* ---------- Guarded Execution ---------- */
 
-  const S0 = tslGuard.init(reference);
-  const S1 = tslGuard.execute(test);
+  tslGuard.init(reference);
+  tslGuard.execute(test);
 
   /* ---------- Fallback to Original Structure Output ---------- */
   /* (kept to preserve existing API contract) */
