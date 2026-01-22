@@ -1,30 +1,10 @@
-import { Request, Response } from "express";
+import express from "express";
 
-function requireToken(req: Request, res: Response): boolean {
-  const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith("Bearer ")) {
-    res.status(401).json({ error: "Missing or invalid token" });
-    return false;
-  }
-  const token = auth.replace("Bearer ", "").trim();
-  if (token !== process.env.TSL_API_TOKEN) {
-    res.status(403).json({ error: "Invalid token" });
-    return false;
-  }
-  return true;
-}
+const router = express.Router();
 
-function parseSamples(input: any): number[] | null {
-  if (!input || !Array.isArray(input.samples)) return null;
-  const nums = input.samples
-    .map((v: any) => Number(v))
-    .filter((v: number) => !isNaN(v));
-  return nums.length >= 2 ? nums : null;
-}
-
-function buildStructure(samples: number[]) {
-  const transitions: string[] = [];
-  const runs: string[] = [];
+function buildStructure(samples) {
+  const transitions = [];
+  const runs = [];
 
   for (let i = 1; i < samples.length; i++) {
     const d = samples[i] - samples[i - 1];
@@ -35,6 +15,7 @@ function buildStructure(samples: number[]) {
 
   let current = transitions[0];
   let count = 1;
+
   for (let i = 1; i < transitions.length; i++) {
     if (transitions[i] === current) count++;
     else {
@@ -43,6 +24,7 @@ function buildStructure(samples: number[]) {
       count = 1;
     }
   }
+
   runs.push(`${current}${count}`);
 
   return {
@@ -53,43 +35,44 @@ function buildStructure(samples: number[]) {
   };
 }
 
-function containmentDecision(S0: any, S1: any) {
+function containmentDecision(S0, S1) {
   if (S1.length !== S0.length) {
-    return { state: "BROKEN", reason: "Length mismatch" };
+    return { state: "BROKEN", reason: "LENGTH_MISMATCH" };
   }
+
   if (!S0.transitionSignature.includes(S1.transitionSignature)) {
-    return { state: "BROKEN", reason: "Transition pattern broken" };
+    return { state: "BROKEN", reason: "TRANSITION_BREAK" };
   }
+
   if (S1.complexity > S0.complexity) {
-    return { state: "BROKEN", reason: "Structural complexity exceeded" };
+    return { state: "BROKEN", reason: "COMPLEXITY_EXCEEDED" };
   }
+
   if (
     S1.transitionSignature === S0.transitionSignature &&
     S1.runSignature === S0.runSignature
   ) {
-    return { state: "MATCH", reason: "Exact structural identity" };
+    return { state: "MATCH", reason: "STRUCTURAL_IDENTITY" };
   }
-  return { state: "CONTAINED", reason: "Structural containment preserved" };
+
+  return { state: "CONTAINED", reason: "STRUCTURAL_CONTAINMENT" };
 }
 
-export async function tslContainment(req: Request, res: Response) {
-  if (!requireToken(req, res)) return;
+router.post("/containment", (req, res) => {
+  const { reference, test } = req.body;
 
-  const refSamples = parseSamples(req.body?.reference);
-  const testSamples = parseSamples(req.body?.test);
-
-  if (!refSamples || !testSamples) {
-    res.status(400).json({ error: "Invalid input samples" });
-    return;
+  if (!reference || !test) {
+    return res.status(400).json({
+      error: "INVALID_INPUT"
+    });
   }
 
-  const S0 = buildStructure(refSamples);
-  const S1 = buildStructure(testSamples);
-  const decision = containmentDecision(S0, S1);
+  const decision = containmentDecision(reference, test);
 
   res.json({
-    state: decision.state,
-    reason: decision.reason,
-    structure: { S0, S1 }
+    engine: "TSL",
+    decision
   });
-}
+});
+
+export default router;
