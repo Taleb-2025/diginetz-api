@@ -1,10 +1,18 @@
+// src/guard/tsl.guard.js
+// TSL Guard – Internal Runtime Protection Layer
+// Injected inside API (NOT SDK for frontend)
+
 import { TSL_NDR } from "../engines/TSL_NDR.js";
 import { TSL_D } from "../engines/TSL_D.js";
-import { TSL_RV } from "../engines/TSL_RV.js";
 import { TSL_EventDropper } from "../execution/TSL_EventDropper.js";
 import { TSL_EG } from "../execution/TSL_EG.js";
+import { TSL_RV } from "../state/TSL_RV.js";
 
-export function createTSLGuardSDK(options = {}) {
+/**
+ * Create guarded TSL execution instance
+ * This is INTERNAL – used by API routes only
+ */
+export function createTSLGuard(options = {}) {
   const {
     decision,
     eventDropperConfig = {},
@@ -19,10 +27,14 @@ export function createTSLGuardSDK(options = {}) {
     throw new Error("TSL_GUARD: decision function is required");
   }
 
-  const ndr = new TSL_NDR(ndrOptions);
-  const d = new TSL_D();
+  /* ---------- Runtime State ---------- */
   const rv = new TSL_RV();
 
+  /* ---------- Core Engines ---------- */
+  const ndr = new TSL_NDR(ndrOptions);
+  const d = new TSL_D();
+
+  /* ---------- Event Dropper ---------- */
   const eventDropper = new TSL_EventDropper({
     minDeltaWeight: eventDropperConfig.minDeltaWeight ?? 0.05,
     minStructuralDistance:
@@ -30,6 +42,7 @@ export function createTSLGuardSDK(options = {}) {
     allowEmptyDelta: eventDropperConfig.allowEmptyDelta ?? false
   });
 
+  /* ---------- Execution Graph ---------- */
   const eg = new TSL_EG({
     ndr,
     d,
@@ -40,7 +53,11 @@ export function createTSLGuardSDK(options = {}) {
     eventDropper
   });
 
+  /* ---------- Guarded Interface ---------- */
   return {
+    /**
+     * Initialize reference structure (S0)
+     */
     init(input, context = {}) {
       return eg.init(input, {
         ...context,
@@ -48,6 +65,9 @@ export function createTSLGuardSDK(options = {}) {
       });
     },
 
+    /**
+     * Execute guarded comparison (S1)
+     */
     execute(input, context = {}) {
       return eg.execute(input, {
         ...context,
@@ -55,18 +75,30 @@ export function createTSLGuardSDK(options = {}) {
       });
     },
 
+    /**
+     * Reset runtime state (optional)
+     */
+    reset() {
+      if (typeof rv.reset === "function") {
+        rv.reset();
+      }
+    },
+
+    /**
+     * Introspection
+     */
     meta() {
       return {
-        guard: "TSL",
-        version: "1.0.0",
+        layer: "TSL_GUARD",
+        stateful: true,
         engines: {
           ndr: true,
           d: true,
-          rv: true,
-          eventDropper: true,
           eg: true
         },
-        runtime: {
+        protections: {
+          eventDropping: true,
+          runtimeState: true,
           sts: !!enableSTS,
           ae: !!enableAE
         }
