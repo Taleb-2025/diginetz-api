@@ -1,11 +1,9 @@
 import { TSL_NDR } from "../engines/TSL_NDR.js";
 import { TSL_D } from "../engines/TSL_D.js";
+import { TSL_RV } from "../engines/TSL_RV.js";
 import { TSL_EventDropper } from "../execution/TSL_EventDropper.js";
 import { TSL_EG } from "../execution/TSL_EG.js";
 
-/**
- * Create a guarded TSL execution engine
- */
 export function createTSLGuardSDK(options = {}) {
   const {
     decision,
@@ -14,16 +12,16 @@ export function createTSLGuardSDK(options = {}) {
     enableSTS = false,
     enableAE = false,
     sts = null,
-    ae = null,
-    rv = {}
+    ae = null
   } = options;
 
   if (typeof decision !== "function") {
-    throw new Error("TSL_GUARD_SDK: decision function is required");
+    throw new Error("TSL_GUARD: decision function is required");
   }
 
   const ndr = new TSL_NDR(ndrOptions);
   const d = new TSL_D();
+  const rv = new TSL_RV();
 
   const eventDropper = new TSL_EventDropper({
     minDeltaWeight: eventDropperConfig.minDeltaWeight ?? 0.05,
@@ -59,8 +57,19 @@ export function createTSLGuardSDK(options = {}) {
 
     meta() {
       return {
-        sdk: "TSL_GUARD_SDK",
-        version: "1.0.0"
+        guard: "TSL",
+        version: "1.0.0",
+        engines: {
+          ndr: true,
+          d: true,
+          rv: true,
+          eventDropper: true,
+          eg: true
+        },
+        runtime: {
+          sts: !!enableSTS,
+          ae: !!enableAE
+        }
       };
     }
   };
