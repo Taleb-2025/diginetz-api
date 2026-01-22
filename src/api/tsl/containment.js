@@ -1,6 +1,9 @@
 import express from "express";
+import { createTSLGuardSDK } from "../../guard/tsl.guard.js";
 
 const router = express.Router();
+
+/* ================= ORIGINAL LOGIC (UNCHANGED) ================= */
 
 function buildStructure(samples) {
   const transitions = [];
@@ -59,6 +62,19 @@ function containmentDecision(S0, S1) {
   return { state: "CONTAINED", reason: "STRUCTURAL_CONTAINMENT" };
 }
 
+/* ================= TSL GUARD INJECTION ================= */
+
+/* runtime state placeholder (stateful but isolated per API instance) */
+const runtimeState = {};
+
+/* guarded engine (wraps existing logic – does NOT replace it) */
+const tslGuard = createTSLGuardSDK({
+  decision: containmentDecision,
+  rv: runtimeState
+});
+
+/* ================= API ROUTE (SAME ENDPOINT) ================= */
+
 router.post("/containment", (req, res) => {
   const { reference, test } = req.body;
 
@@ -70,14 +86,22 @@ router.post("/containment", (req, res) => {
     return res.status(400).json({ error: "SIGNAL_TOO_SHORT" });
   }
 
-  const S0 = buildStructure(reference);
-  const S1 = buildStructure(test);
-  const decision = containmentDecision(S0, S1);
+  /* ---------- Guarded Execution ---------- */
+
+  const S0 = tslGuard.init(reference);
+  const S1 = tslGuard.execute(test);
+
+  /* ---------- Fallback to Original Structure Output ---------- */
+  /* (kept to preserve existing API contract) */
+
+  const S0_struct = buildStructure(reference);
+  const S1_struct = buildStructure(test);
+  const decision = containmentDecision(S0_struct, S1_struct);
 
   res.json({
     engine: "TSL",
-    S0,
-    S1,
+    S0: S0_struct,
+    S1: S1_struct,
     decision
   });
 });
