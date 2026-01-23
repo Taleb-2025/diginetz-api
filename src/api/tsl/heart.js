@@ -1,17 +1,9 @@
 // diginetz-api/src/api/tsl/heart.js
 
 import express from "express";
-import { TSL_HeartAdapter } from "../../engines/TSL_HeartAdapter.js";
 import { createTSLGuard } from "../../guard/tsl.guard.js";
 
 const router = express.Router();
-
-/* ================= HEART ADAPTER ================= */
-
-const heartAdapter = new TSL_HeartAdapter({
-  sampleRate: 30,
-  windowSize: 300
-});
 
 /* ================= TSL GUARD ================= */
 
@@ -33,28 +25,41 @@ const tslGuard = createTSLGuard({
 });
 
 /* ================= HEART ENDPOINT ================= */
+/*
+  Frontend sends:
+  {
+    heartStream: number[]
+  }
+*/
 
 router.post("/heart", (req, res) => {
   try {
-    const { frames } = req.body;
+    const { heartStream } = req.body;
 
-    if (!Array.isArray(frames) || frames.length === 0) {
-      return res.status(400).json({ error: "INVALID_FRAMES" });
+    if (!Array.isArray(heartStream) || heartStream.length < 2) {
+      return res.status(400).json({
+        error: "INVALID_HEART_STREAM"
+      });
     }
 
-    /* ---------- Adapt camera frames ---------- */
-    const adapted = heartAdapter.adapt(frames);
+    /* ---------- INIT (S0 once) ---------- */
+    if (!runtimeState.__initialized) {
+      const S0 = tslGuard.init(heartStream);
+      runtimeState.__initialized = true;
 
-    /* ---------- Guarded TSL execution ---------- */
-    const S0 = tslGuard.init(adapted.signal);
-    const S1 = tslGuard.execute(adapted.signal);
+      return res.json({
+        engine: "TSL",
+        phase: "INIT",
+        S0
+      });
+    }
 
-    res.json({
+    /* ---------- EXECUTE (S1) ---------- */
+    const S1 = tslGuard.execute(heartStream);
+
+    return res.json({
       engine: "TSL",
-      source: adapted.source,
-      sampleRate: adapted.sampleRate,
-      windowSize: adapted.windowSize,
-      S0,
+      phase: "EXECUTE",
       S1,
       decision: S1?.decision ?? null
     });
