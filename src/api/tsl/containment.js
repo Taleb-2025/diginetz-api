@@ -64,16 +64,21 @@ function containmentDecision(S0, S1) {
 
 /* ================= TSL GUARD INJECTION ================= */
 
-/* runtime state placeholder (stateful but isolated per API instance) */
+/* Guard decision MUST NOT use API structure logic */
+function guardDecision() {
+  return { state: "GUARDED" };
+}
+
+/* runtime state placeholder */
 const runtimeState = {};
 
-/* guarded engine (wraps existing logic – does NOT replace it) */
+/* guarded engine */
 const tslGuard = createTSLGuard({
-  decision: containmentDecision,
+  decision: guardDecision,
   rv: runtimeState
 });
 
-/* ================= API ROUTE (SAME ENDPOINT) ================= */
+/* ================= API ROUTE ================= */
 
 router.post("/containment", (req, res) => {
   const { reference, test } = req.body;
@@ -87,13 +92,10 @@ router.post("/containment", (req, res) => {
   }
 
   /* ---------- Guarded Execution ---------- */
-
   tslGuard.init(reference);
   tslGuard.execute(test);
 
-  /* ---------- Fallback to Original Structure Output ---------- */
-  /* (kept to preserve existing API contract) */
-
+  /* ---------- Official Structural Analysis ---------- */
   const S0_struct = buildStructure(reference);
   const S1_struct = buildStructure(test);
   const decision = containmentDecision(S0_struct, S1_struct);
