@@ -1,4 +1,6 @@
 // diginetz-api/src/api/flow.js
+// Hybrid Structural–Numeric Flow
+// Numbers observe → Structure decides
 
 import express from "express";
 
@@ -19,6 +21,9 @@ import { TSL_Interpreter } from "../interpret/TSL_Interpreter.js";
 import { TSL_SAL } from "../layers/TSL_SAL.js";
 import { TSL_DCLS } from "../policy/TSL_DCLS.js";
 
+/* ---------- Numeric Observer ---------- */
+import { TSL_NumericObserver } from "../policy/TSL_NumericObserver.js";
+
 const router = express.Router();
 
 /* =========================================================
@@ -35,7 +40,8 @@ const eg = new TSL_EG({
 
 const interpreter = new TSL_Interpreter();
 const sal         = new TSL_SAL();
-const policy      = new TSL_DCLS();
+const dcls        = new TSL_DCLS();
+const numericObs  = new TSL_NumericObserver();
 
 /* =========================================================
    INIT — Reference Initialization (S0)
@@ -51,15 +57,15 @@ router.post("/init", (req, res) => {
     });
   }
 
-  const result = eg.init(input, {
+  const initResult = eg.init(input, {
     source: "api/flow/init"
   });
 
-  return res.json(result);
+  return res.json(initResult);
 });
 
 /* =========================================================
-   EXECUTE — Full Structural Flow
+   EXECUTE — Hybrid Structural Flow
    ========================================================= */
 
 router.post("/execute", (req, res) => {
@@ -72,35 +78,61 @@ router.post("/execute", (req, res) => {
     });
   }
 
-  /* ---------- Execution Gate ---------- */
-  const executionReport = eg.execute(input, {
+  /* ---------- 1. EXECUTION GRAPH (NO DECISION) ---------- */
+  const exec = eg.execute(input, {
     source: "api/flow/execute"
   });
 
-  if (!executionReport.ok) {
-    return res.status(403).json(executionReport);
+  if (!exec.ok) {
+    return res.status(403).json(exec);
   }
 
-  /* ---------- Interpretation ---------- */
-  const tslResult = interpreter.interpret(executionReport);
+  /**
+   * exec MUST expose (after تعديل TSL_EG):
+   * {
+   *   structure,   // S1 structure
+   *   delta,       // delta profile
+   *   trace,       // STS report
+   *   ae           // AE report
+   * }
+   */
 
-  /* ---------- Structural Allowance ---------- */
+  /* ---------- 2. NUMERIC OBSERVATION (NO DECISION) ---------- */
+  const numericReport = numericObs.observe({
+    delta: exec.delta,
+    trace: exec.trace,
+    ae: exec.ae
+  });
+
+  /* ---------- 3. STRUCTURAL INTERPRETATION ---------- */
+  const tslResult = interpreter.interpret({
+    structure: exec.structure
+  });
+
+  /* ---------- 4. STRUCTURAL ALLOWANCE LAYER ---------- */
   const salResult = sal.decide({
     tsl_result: tslResult
   });
 
-  /* ---------- Decision Policy ---------- */
-  const finalDecision = policy.decide({
-    tsl: tslResult,
-    sal: salResult
-  });
+  /* ---------- 5. DYNAMIC CONSTRAINT ADAPTATION ---------- */
+  const adaptedConstraints = dcls.adapt(
+    numericReport,
+    numericObs.constraints()
+  );
 
+  /* ---------- 6. FINAL RESPONSE ---------- */
   return res.json({
-    ok: finalDecision.decision === "ALLOW",
-    execution: executionReport,
+    ok: salResult.decision === "ALLOW",
+    execution: {
+      structure: exec.structure,
+      delta: exec.delta,
+      trace: exec.trace,
+      ae: exec.ae
+    },
+    numeric: numericReport,
     tsl: tslResult,
     sal: salResult,
-    decision: finalDecision
+    constraints: adaptedConstraints
   });
 });
 
