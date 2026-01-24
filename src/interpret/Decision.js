@@ -1,8 +1,9 @@
-// src/decision/TSL_StructuralDecision.js
+// diginetz-api/src/policy/TSL_StructuralDecision.js
 // ----------------------------------------------------
 // TSL Structural Decision Layer
-// Principle: Numbers precede structure, structure decides
+// Principle: Numbers observe → Structure decides
 // ----------------------------------------------------
+// - Reads STRUCTURAL INTERPRETATION only
 // - No numeric thresholds
 // - No statistics
 // - No history
@@ -68,7 +69,8 @@ function allow(reason) {
   return {
     decision: "ALLOW",
     state: "STABLE",
-    reason
+    reason,
+    layer: "TSL_StructuralDecision"
   };
 }
 
@@ -77,7 +79,8 @@ function allowWithWarning(reason) {
     decision: "ALLOW",
     state: "RISK",
     reason,
-    warning: true
+    warning: true,
+    layer: "TSL_StructuralDecision"
   };
 }
 
@@ -85,6 +88,7 @@ function deny(reason) {
   return {
     decision: "DENY",
     state: "UNSAFE",
-    reason
+    reason,
+    layer: "TSL_StructuralDecision"
   };
 }
