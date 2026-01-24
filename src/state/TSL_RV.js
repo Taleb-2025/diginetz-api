@@ -1,23 +1,30 @@
+// diginetz-api/src/state/TSL_RV.js
+// ----------------------------------------------------
+// TSL_RV — Reference Vault
+// Role: Store & serve structural reference (S0)
+// No policy, no decisions
+// ----------------------------------------------------
 
 export class TSL_RV {
   constructor() {
     this._reference = null;
-    this._locked = false;
     this._createdAt = null;
   }
 
-  init(structure) {
-    if (this._locked) {
-      throw new Error("REFERENCE_ALREADY_INITIALIZED");
-    }
+  /* ===============================
+     INIT
+     =============================== */
 
+  init(structure) {
     if (!structure || typeof structure !== "object") {
-      throw new Error("INVALID_STRUCTURE");
+      return {
+        ok: false,
+        reason: "INVALID_STRUCTURE"
+      };
     }
 
     this._reference = this._clone(structure);
     this._createdAt = Date.now();
-    this._locked = true;
 
     return {
       ok: true,
@@ -25,31 +32,47 @@ export class TSL_RV {
     };
   }
 
+  /* ===============================
+     GET
+     =============================== */
+
   get() {
-    if (!this._locked) return null;
+    if (!this._reference) return null;
     return this._clone(this._reference);
   }
 
+  /* ===============================
+     STATE
+     =============================== */
+
   isInitialized() {
-    return this._locked;
+    return !!this._reference;
   }
 
   meta() {
     return {
-      initialized: this._locked,
+      initialized: this.isInitialized(),
       createdAt: this._createdAt
     };
   }
 
-  reset(force = false) {
-    if (!force) {
-      throw new Error("RESET_REQUIRES_FORCE");
-    }
+  /* ===============================
+     RESET (SAFE & IDENTITY)
+     =============================== */
 
+  reset() {
     this._reference = null;
-    this._locked = false;
     this._createdAt = null;
+
+    return {
+      ok: true,
+      state: "CLEARED"
+    };
   }
+
+  /* ===============================
+     INTERNAL
+     =============================== */
 
   _clone(obj) {
     return JSON.parse(JSON.stringify(obj));
