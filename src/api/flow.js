@@ -65,6 +65,25 @@ router.post("/init", (req, res) => {
 });
 
 /* =========================================================
+   RESET — Clear Reference (S0)
+   ========================================================= */
+
+router.post("/reset", (req, res) => {
+  if (typeof eg.reset !== "function") {
+    return res.status(500).json({
+      ok: false,
+      error: "RESET_NOT_SUPPORTED"
+    });
+  }
+
+  const result = eg.reset({
+    source: "api/flow/reset"
+  });
+
+  return res.json(result);
+});
+
+/* =========================================================
    EXECUTE — Hybrid Structural Flow
    ========================================================= */
 
@@ -86,16 +105,6 @@ router.post("/execute", (req, res) => {
   if (!exec.ok) {
     return res.status(403).json(exec);
   }
-
-  /**
-   * exec MUST expose (after تعديل TSL_EG):
-   * {
-   *   structure,   // S1 structure
-   *   delta,       // delta profile
-   *   trace,       // STS report
-   *   ae           // AE report
-   * }
-   */
 
   /* ---------- 2. NUMERIC OBSERVATION (NO DECISION) ---------- */
   const numericReport = numericObs.observe({
