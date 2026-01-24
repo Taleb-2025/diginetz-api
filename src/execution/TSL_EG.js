@@ -27,15 +27,47 @@ export class TSL_EG {
   }
 
   /* ===================================================
+     RESET — Explicit Reference Reset (SAFE)
+     =================================================== */
+
+  reset(context = {}) {
+    if (!this.rv.isInitialized()) {
+      return {
+        ok: true,
+        phase: "RESET",
+        state: "NO_REFERENCE"
+      };
+    }
+
+    this.rv.reset();
+
+    return {
+      ok: true,
+      phase: "RESET",
+      state: "CLEARED"
+    };
+  }
+
+  /* ===================================================
      INIT — Reference Initialization (S0)
      =================================================== */
 
   init(input, context = {}) {
+    if (typeof input !== "string" || !input.length) {
+      return {
+        ok: false,
+        phase: "INIT",
+        reason: "INVALID_INPUT"
+      };
+    }
+
+    // 🔒 Prevent silent overwrite (must reset first)
     if (this.rv.isInitialized()) {
       return {
         ok: false,
         phase: "INIT",
-        reason: "ALREADY_INITIALIZED"
+        reason: "REFERENCE_EXISTS",
+        hint: "CALL_RESET_FIRST"
       };
     }
 
@@ -59,6 +91,14 @@ export class TSL_EG {
         ok: false,
         phase: "ACCESS",
         reason: "REFERENCE_NOT_INITIALIZED"
+      };
+    }
+
+    if (typeof input !== "string" || !input.length) {
+      return {
+        ok: false,
+        phase: "ACCESS",
+        reason: "INVALID_INPUT"
       };
     }
 
