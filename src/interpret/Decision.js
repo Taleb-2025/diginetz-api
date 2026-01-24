@@ -1,106 +1,90 @@
-export function TSL_Decision({
-  deltaContainment,
-  deltaProfile,
-  stsReport,
-  aeReport,
-  history = []
+// src/decision/TSL_StructuralDecision.js
+// ----------------------------------------------------
+// TSL Structural Decision Layer
+// Principle: Numbers precede structure, structure decides
+// ----------------------------------------------------
+// - No numeric thresholds
+// - No statistics
+// - No history
+// - No aggregation
+// - Deterministic structural judgment only
+// ----------------------------------------------------
+
+export function TSL_StructuralDecision({
+  structural_state,
+  relation_type,
+  structural_break,
+  continuity,
+  stability,
+  aeReport
 }) {
-  const signals = [];
 
-  if (stsReport?.short && !stsReport.short.aligned) {
-    signals.push({ source: "sts", scope: "short" });
+  /* ================= HARD DENIAL ================= */
+
+  if (structural_state === "COLLAPSING") {
+    return deny("STRUCTURAL_COLLAPSE");
   }
 
-  if (stsReport?.mid && !stsReport.mid.aligned) {
-    signals.push({ source: "sts", scope: "mid" });
+  if (structural_break === "GLOBAL_BREAK") {
+    return deny("GLOBAL_STRUCTURAL_BREAK");
   }
 
-  if (stsReport?.long && !stsReport.long.aligned) {
-    signals.push({ source: "sts", scope: "long" });
+  if (continuity === "UNSUSTAINABLE") {
+    return deny("UNSUSTAINABLE_STRUCTURE");
   }
 
   if (aeReport?.securityFlag === "ALERT") {
-    signals.push({ source: "ae", reason: aeReport.reason });
+    return deny("ABSENCE_EXECUTION_ALERT");
   }
 
-  const instantMagnitude =
-    Math.abs(deltaProfile?.densityDelta ?? 0) +
-    Math.abs(deltaProfile?.appearanceDelta ?? 0) +
-    Math.abs(deltaProfile?.localShift ?? 0) +
-    Math.abs(deltaProfile?.scaleShift ?? 0);
+  /* ================= CONDITIONAL ALLOW ================= */
 
-  const window = history.slice(-5);
-  const cumulativeMagnitude =
-    window.reduce((s, h) => s + (h.magnitude ?? 0), 0) +
-    instantMagnitude;
+  if (
+    structural_state === "FRACTURED" ||
+    continuity === "AT_RISK"
+  ) {
+    return allowWithWarning("STRUCTURAL_RISK");
+  }
 
-  const anomalyPressure =
-    window.filter(h => h.state === "ANOMALOUS").length;
+  if (
+    relation_type === "STRUCTURAL_CONTAINMENT" &&
+    stability !== "LOW_STABILITY"
+  ) {
+    return allow("STRUCTURAL_CONTAINMENT_OK");
+  }
 
-  const policy = DecisionPolicy({
-    deltaContainment,
-    instantMagnitude,
-    cumulativeMagnitude,
-    anomalyPressure,
-    signals
-  });
+  if (relation_type === "STRUCTURAL_IDENTITY") {
+    return allow("STRUCTURAL_IDENTITY");
+  }
 
+  /* ================= DEFAULT ================= */
+
+  return deny("STRUCTURAL_UNCERTAINTY");
+}
+
+/* ================= RESULT HELPERS ================= */
+
+function allow(reason) {
   return {
-    decision: policy.decision,
-    state: policy.state,
-    basis: policy.basis,
-    magnitude: instantMagnitude,
-    cumulativeMagnitude,
-    signals
+    decision: "ALLOW",
+    state: "STABLE",
+    reason
   };
 }
 
-function DecisionPolicy({
-  deltaContainment,
-  instantMagnitude,
-  cumulativeMagnitude,
-  anomalyPressure,
-  signals
-}) {
-  if (
-    deltaContainment === true &&
-    instantMagnitude <= 0.05 &&
-    cumulativeMagnitude <= 0.1
-  ) {
-    return {
-      decision: "ALLOW",
-      state: "STABLE",
-      basis: "contained-low-pressure"
-    };
-  }
+function allowWithWarning(reason) {
+  return {
+    decision: "ALLOW",
+    state: "RISK",
+    reason,
+    warning: true
+  };
+}
 
-  if (
-    deltaContainment === false &&
-    instantMagnitude <= 0.15 &&
-    cumulativeMagnitude <= 0.25 &&
-    signals.length === 0
-  ) {
-    return {
-      decision: "ALLOW",
-      state: "DRIFTING",
-      basis: "tolerant-structural-drift"
-    };
-  }
-
-  if (
-    instantMagnitude <= 0.3 &&
-    anomalyPressure <= 2
-  ) {
-    return {
-      decision: "ALLOW",
-      state: "ANOMALOUS",
-      basis: "accumulated-anomaly"
-    };
-  }
-
+function deny(reason) {
   return {
     decision: "DENY",
-    state: "CRITICAL",
-    basis: "structural-instability"
+    state: "UNSAFE",
+    reason
   };
 }
