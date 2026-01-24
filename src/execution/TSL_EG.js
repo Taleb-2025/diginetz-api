@@ -1,7 +1,9 @@
 // diginetz-api/src/execution/TSL_EG.js
-// TSL Execution Graph
-// Orchestrates structural engines ONLY
-// No interpretation, no decision, no policy
+// ----------------------------------------------------
+// TSL_EG — Execution Graph
+// Role: Execute structural pipeline ONLY
+// No decisions, no policies, no interpretation
+// ----------------------------------------------------
 
 export class TSL_EG {
   constructor({
@@ -16,23 +18,24 @@ export class TSL_EG {
       throw new Error("TSL_EG_MISSING_CORE");
     }
 
-    this.ndr = ndr;               // Structural extraction
-    this.d = d;                   // Delta derivation
-    this.rv = rv;                 // Reference vault
-    this.sts = sts || null;       // Structural trace (optional)
-    this.ae = ae || null;         // Absence execution guard (optional)
-    this.eventDropper = eventDropper || null; // Structural noise filter
+    this.ndr = ndr;
+    this.d   = d;
+    this.rv  = rv;
+    this.sts = sts;
+    this.ae  = ae;
+    this.eventDropper = eventDropper;
   }
 
-  /* ================= INIT ================= */
-  // Establish reference structure (S0)
+  /* ===================================================
+     INIT — Reference Initialization (S0)
+     =================================================== */
 
   init(input, context = {}) {
     if (this.rv.isInitialized()) {
       return {
         ok: false,
         phase: "INIT",
-        reason: "REFERENCE_ALREADY_INITIALIZED"
+        reason: "ALREADY_INITIALIZED"
       };
     }
 
@@ -46,91 +49,91 @@ export class TSL_EG {
     };
   }
 
-  /* ================= EXECUTE ================= */
-  // Run full structural pipeline and return execution report
+  /* ===================================================
+     EXECUTE — Structural Execution (NO DECISION)
+     =================================================== */
 
   execute(input, context = {}) {
     if (!this.rv.isInitialized()) {
       return {
         ok: false,
-        phase: "EXECUTE",
+        phase: "ACCESS",
         reason: "REFERENCE_NOT_INITIALIZED"
       };
     }
 
-    const pipeline = () => {
+    const run = () => {
+      /* ---------- STRUCTURES ---------- */
       const S0 = this.rv.get();
       const S1 = this.ndr.extract(input);
 
-      /* ---------- DELTA ---------- */
+      /* ---------- DELTA (STRUCTURAL DIFFERENCE) ---------- */
       const delta = this.d.derive(S0, S1);
 
-      /* ---------- EVENT DROPPING ---------- */
+      /* ---------- EVENT DROPPING (OPTIONAL) ---------- */
       if (this.eventDropper) {
         const drop = this.eventDropper.evaluate(delta);
         if (drop?.dropped) {
           return {
             ok: true,
-            phase: "EXECUTE",
+            phase: "ACCESS",
             dropped: true,
-            reason: drop.reason,
-            delta
+            reason: drop.reason
           };
         }
       }
 
-      /* ---------- STS ---------- */
-      let stsReport = null;
-      if (this.sts) {
-        stsReport = this.sts.observe(input);
-      }
+      /* ---------- STRUCTURAL TRACE (STS) ---------- */
+      const trace = this.sts
+        ? this.sts.observe(S1)
+        : null;
 
-      /* ---------- AE (EXECUTION GUARD) ---------- */
-      let aeReport = null;
-      if (this.ae) {
-        const guarded = this.ae.guard(
-          () => true,
-          { name: "TSL_EG_EXECUTION", expectEffect: () => true },
-          context
-        );
-        aeReport = guarded.report;
-      }
+      /* ---------- ABSENCE EXECUTION (AE) ---------- */
+      const aeReport = this.ae
+        ? this.ae.guard(
+            () => true,
+            {
+              name: "TSL_EG_EXECUTION",
+              expectEffect: () => true
+            },
+            context
+          ).report
+        : null;
 
-      /* ---------- EXECUTION REPORT ---------- */
+      /* ---------- OUTPUT (RAW, NO DECISION) ---------- */
       return {
         ok: true,
-        phase: "EXECUTE",
-        dropped: false,
-        structure: {
-          reference: S0,
-          current: S1,
-          delta
-        },
-        trace: stsReport,
+        phase: "ACCESS",
+        structure: S1,
+        delta,
+        trace,
         ae: aeReport
       };
     };
 
     /* ---------- AE PIPELINE GUARD ---------- */
     if (this.ae) {
-      const guardedPipeline = this.ae.guard(
-        pipeline,
-        { name: "TSL_EG_PIPELINE", expectEffect: () => true },
+      const guarded = this.ae.guard(
+        run,
+        {
+          name: "TSL_EG_PIPELINE",
+          expectEffect: () => true
+        },
         context
       );
 
-      if (guardedPipeline.report?.securityFlag !== "OK") {
+      if (guarded.report?.securityFlag !== "OK") {
         return {
           ok: false,
-          phase: "EXECUTE",
+          phase: "ACCESS",
           reason: "AE_PIPELINE_BLOCKED",
-          ae: guardedPipeline.report
+          ae: guarded.report
         };
       }
 
-      return guardedPipeline.result;
+      return guarded.result;
     }
 
-    return pipeline();
+    return run();
   }
 }
