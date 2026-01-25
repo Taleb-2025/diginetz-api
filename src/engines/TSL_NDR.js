@@ -1,27 +1,20 @@
-// diginetz-api/src/engines/TSL_NDR.js
-
-
-export class TSL_NDR_v3 {
+export class TSL_NDR {
   constructor(options = {}) {
     this.minLength = options.minLength ?? 2;
   }
 
-  /* ===================================================
-     EXTRACT — Pure Structural Representation
-     =================================================== */
-
   extract(input) {
     if (!Array.isArray(input)) {
-      throw new Error("TSL_NDR_v3: input must be number[]");
+      throw new Error("TSL_NDR: input must be number[]");
     }
 
     if (input.length < this.minLength) {
-      throw new Error("TSL_NDR_v3: insufficient data length");
+      throw new Error("TSL_NDR: insufficient data length");
     }
 
     for (const v of input) {
       if (typeof v !== "number" || Number.isNaN(v)) {
-        throw new Error("TSL_NDR_v3: all values must be valid numbers");
+        throw new Error("TSL_NDR: all values must be valid numbers");
       }
     }
 
@@ -41,7 +34,7 @@ export class TSL_NDR_v3 {
     });
 
     return {
-      engine: "TSL_NDR_v3",
+      engine: "TSL_NDR",
       length: input.length,
       relations,
       runs,
@@ -53,10 +46,6 @@ export class TSL_NDR_v3 {
     };
   }
 
-  /* ===================================================
-     RELATIONS
-     =================================================== */
-
   #deriveRelations(arr) {
     const rel = [];
     for (let i = 1; i < arr.length; i++) {
@@ -66,10 +55,6 @@ export class TSL_NDR_v3 {
     }
     return rel;
   }
-
-  /* ===================================================
-     RUN-LENGTH STRUCTURE
-     =================================================== */
 
   #deriveRuns(relations) {
     if (relations.length === 0) return [];
@@ -92,10 +77,6 @@ export class TSL_NDR_v3 {
     return runs;
   }
 
-  /* ===================================================
-     TOPOLOGY (CHANGE SHAPE)
-     =================================================== */
-
   #deriveTopology(relations) {
     const topo = [];
     let last = null;
@@ -108,10 +89,6 @@ export class TSL_NDR_v3 {
     }
     return topo;
   }
-
-  /* ===================================================
-     GLOBAL PATTERN
-     =================================================== */
 
   #derivePattern(relations) {
     if (relations.every(r => r === "UP")) return "MONOTONIC_UP";
@@ -127,10 +104,6 @@ export class TSL_NDR_v3 {
     return "MIXED";
   }
 
-  /* ===================================================
-     SYMMETRY
-     =================================================== */
-
   #deriveSymmetry(relations) {
     const mid = Math.floor(relations.length / 2);
     for (let i = 0; i < mid; i++) {
@@ -140,10 +113,6 @@ export class TSL_NDR_v3 {
     }
     return "MIRRORED";
   }
-
-  /* ===================================================
-     IDENTITY FEATURES
-     =================================================== */
 
   #deriveIdentity(relations, runs) {
     const alphabet = Array.from(new Set(relations));
@@ -156,13 +125,9 @@ export class TSL_NDR_v3 {
     };
   }
 
-  /* ===================================================
-     FINGERPRINT (STRUCTURAL ONLY)
-     =================================================== */
-
   #fingerprint(structure) {
     const stable = this.#stableStringify(structure);
-    let h = 2166136261; // FNV-1a
+    let h = 2166136261;
 
     for (let i = 0; i < stable.length; i++) {
       h ^= stable.charCodeAt(i);
