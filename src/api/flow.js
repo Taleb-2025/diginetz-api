@@ -8,7 +8,7 @@
 import express from "express";
 
 /* ---------- TSL Input Adapter ---------- */
-import { DefaultTSLAdapter } from "../adapter/TSL_InputAdapter.js";
+import { DefaultTSLAdapter } from "../adapters/tsl-input-adapter.js";
 
 /* ---------- Reference Store ---------- */
 import { TSL_ReferenceStore } from "../store/TSL_ReferenceStore.js";
@@ -30,10 +30,7 @@ router.post("/init", (req, res) => {
   const { input } = req.body;
 
   try {
-    // flow.js DOES NOT CARE what input is
-    // It just forwards it to the adapter
     const adapted = adapter.adapt(input);
-
     const ref = referenceStore.save(adapted);
 
     return res.json({
@@ -65,8 +62,6 @@ router.post("/execute", (req, res) => {
 
   try {
     const reference = referenceStore.load(referenceId);
-
-    // Again: NO LOGIC HERE
     const adapted = adapter.adapt(input);
 
     return res.json({
