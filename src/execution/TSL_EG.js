@@ -48,30 +48,6 @@ export class TSL_EG {
       const structure = this.ndr.extract(numericInput);
       const delta = this.d.derive(referenceStructure, structure);
 
-      /* ================= STRUCTURAL RELATION DERIVATION ================= */
-
-      // identity: نفس البصمة ونفس الطول
-      structure.identity =
-        structure.fingerprint === referenceStructure.fingerprint &&
-        structure.length === referenceStructure.length;
-
-      // containment: نفس البصمة لكن بطول أصغر أو مساوي
-      structure.contained =
-        structure.fingerprint === referenceStructure.fingerprint &&
-        structure.length <= referenceStructure.length &&
-        !structure.identity;
-
-      // overlap: تشابه جزئي بدون احتواء
-      structure.overlap =
-        structure.fingerprint === referenceStructure.fingerprint &&
-        structure.length !== referenceStructure.length;
-
-      // divergence: بصمة مختلفة
-      structure.diverged =
-        structure.fingerprint !== referenceStructure.fingerprint;
-
-      /* ================= EVENT DROPPER ================= */
-
       if (this.eventDropper) {
         const drop = this.eventDropper.evaluate(delta);
         if (drop?.dropped) {
