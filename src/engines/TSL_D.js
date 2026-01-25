@@ -1,18 +1,15 @@
 export class TSL_D {
-  derive(A, B) {
-    if (!A || !B) {
-      throw new Error("TSL_D: invalid inputs");
+  derive(S0, S1) {
+    if (!S0 || !S1) {
+      throw new Error("TSL_D: invalid structures");
     }
 
     const changes = [];
 
-    this.#diffArray("relations", A.relations, B.relations, changes);
-    this.#diffRuns(A.runs, B.runs, changes);
-    this.#diffValue("pattern", A.pattern, B.pattern, changes);
-    this.#diffValue("symmetry", A.symmetry, B.symmetry, changes);
-    this.#diffIdentity(A.identity, B.identity, changes);
-
-    /* ===== RELATION DERIVATION (CRITICAL FIX) ===== */
+    this.#diffArray("relations", S0.relations, S1.relations, changes);
+    this.#diffRuns(S0.runs, S1.runs, changes);
+    this.#diffValue("pattern", S0.pattern, S1.pattern, changes);
+    this.#diffValue("symmetry", S0.symmetry, S1.symmetry, changes);
 
     const identical = changes.length === 0;
 
@@ -29,24 +26,28 @@ export class TSL_D {
         c.type === "RUN_STRUCTURE_CHANGE"
       );
 
-    const overlap =
-      !identical && !contained && !diverged;
+    const overlap = !identical && !contained && !diverged;
+
+    const pressure     = this.#derivePressure(S0, S1);
+    const volatility   = this.#deriveVolatility(S0, S1);
+    const deformation  = this.#deriveDeformation(S0, S1);
 
     return {
       engine: "TSL_D",
       identical,
       deltaCount: changes.length,
       changes,
-
-      /* ===== SEMANTIC FLAGS ===== */
       identity: identical,
       contained,
       overlap,
-      diverged
+      diverged,
+      pressure,
+      volatility,
+      deformation
     };
   }
 
-  #diffArray(name, a, b, out) {
+  #diffArray(name, a = [], b = [], out) {
     const max = Math.max(a.length, b.length);
     for (let i = 0; i < max; i++) {
       if (a[i] !== b[i]) {
@@ -59,11 +60,12 @@ export class TSL_D {
     }
   }
 
-  #diffRuns(a, b, out) {
+  #diffRuns(a = [], b = [], out) {
     const max = Math.max(a.length, b.length);
     for (let i = 0; i < max; i++) {
       const ra = a[i];
       const rb = b[i];
+
       if (!ra || !rb) {
         out.push({
           type: "RUN_STRUCTURE_CHANGE",
@@ -71,6 +73,7 @@ export class TSL_D {
         });
         continue;
       }
+
       if (ra.dir !== rb.dir || ra.run !== rb.run) {
         out.push({
           type: "RUN_MUTATION",
@@ -89,22 +92,61 @@ export class TSL_D {
     }
   }
 
-  #diffIdentity(a, b, out) {
-    if (!a || !b) {
-      out.push({ type: "IDENTITY_MISSING" });
-      return;
+  #derivePressure(S0, S1) {
+    if (!Array.isArray(S0.runs) || !Array.isArray(S1.runs)) {
+      return "UNKNOWN";
     }
 
-    if (a.runCount !== b.runCount) {
-      out.push({ type: "RUN_COUNT_CHANGE" });
+    if (S0.runs.length !== S1.runs.length) {
+      return "HIGH";
     }
 
-    if (a.hasPlateau !== b.hasPlateau) {
-      out.push({ type: "PLATEAU_CHANGE" });
+    let changed = 0;
+    for (let i = 0; i < S0.runs.length; i++) {
+      if (S0.runs[i].run !== S1.runs[i].run) {
+        changed++;
+      }
     }
 
-    if (a.alphabet.length !== b.alphabet.length) {
-      out.push({ type: "ALPHABET_CHANGE" });
+    if (changed === 0) return "LOW";
+    if (changed <= 2) return "MEDIUM";
+    return "HIGH";
+  }
+
+  #deriveVolatility(S0, S1) {
+    if (!Array.isArray(S1.relations)) return "UNKNOWN";
+
+    let switches = 0;
+    for (let i = 1; i < S1.relations.length; i++) {
+      if (S1.relations[i] !== S1.relations[i - 1]) {
+        switches++;
+      }
     }
+
+    if (switches === 0) return "STABLE";
+    if (switches <= 2) return "MODERATE";
+    return "TURBULENT";
+  }
+
+  #deriveDeformation(S0, S1) {
+    if (!Array.isArray(S0.runs) || !Array.isArray(S1.runs)) {
+      return "UNKNOWN";
+    }
+
+    if (S0.runs.length !== S1.runs.length) {
+      return "GLOBAL";
+    }
+
+    let local = false;
+    for (let i = 0; i < S0.runs.length; i++) {
+      if (S0.runs[i].dir !== S1.runs[i].dir) {
+        return "GLOBAL";
+      }
+      if (S0.runs[i].run !== S1.runs[i].run) {
+        local = true;
+      }
+    }
+
+    return local ? "LOCAL" : "NONE";
   }
 }
