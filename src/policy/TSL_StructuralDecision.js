@@ -3,6 +3,9 @@
 // TSL Structural Decision Layer
 // Principle: Numbers observe → Structure decides
 // ----------------------------------------------------
+// - Reads STRUCTURAL INTERPRETATION only
+// - Deterministic structural judgment
+// ----------------------------------------------------
 
 export function TSL_StructuralDecision({
   structural_state,
@@ -13,7 +16,9 @@ export function TSL_StructuralDecision({
   aeReport
 }) {
 
-  /* ================= HARD DENIAL (ABSOLUTE) ================= */
+  /* ==================================================
+   * 1️⃣ ABSOLUTE DENIAL (NO DISCUSSION)
+   * ================================================== */
 
   if (structural_state === "COLLAPSING") {
     return deny("STRUCTURAL_COLLAPSE");
@@ -31,14 +36,16 @@ export function TSL_StructuralDecision({
     return deny("ABSENCE_EXECUTION_ALERT");
   }
 
-  /* ================= IDENTITY (HIGHEST PRIORITY) ================= */
+  /* ==================================================
+   * 2️⃣ ABSOLUTE ALLOW (STRUCTURAL TRUTH)
+   * ================================================== */
 
+  // الهوية أقوى حالة ممكنة
   if (relation_type === "STRUCTURAL_IDENTITY") {
     return allow("STRUCTURAL_IDENTITY");
   }
 
-  /* ================= CONTAINMENT ================= */
-
+  // الاحتواء يأتي مباشرة بعد الهوية
   if (
     relation_type === "STRUCTURAL_CONTAINMENT" &&
     stability !== "LOW_STABILITY"
@@ -46,7 +53,9 @@ export function TSL_StructuralDecision({
     return allow("STRUCTURAL_CONTAINMENT_OK");
   }
 
-  /* ================= CONDITIONAL RISK ================= */
+  /* ==================================================
+   * 3️⃣ CONDITIONAL / RISK STATES
+   * ================================================== */
 
   if (
     structural_state === "FRACTURED" ||
@@ -55,7 +64,9 @@ export function TSL_StructuralDecision({
     return allowWithWarning("STRUCTURAL_RISK");
   }
 
-  /* ================= DEFAULT ================= */
+  /* ==================================================
+   * 4️⃣ FALLBACK (UNKNOWN = DENY)
+   * ================================================== */
 
   return deny("STRUCTURAL_UNCERTAINTY");
 }
