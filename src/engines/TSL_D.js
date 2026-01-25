@@ -13,31 +13,37 @@ export class TSL_D {
 
     const identical = changes.length === 0;
 
+    const identity = identical;
+
     const contained =
-      !identical &&
-      changes.every(c =>
-        c.type === "RUN_MUTATION" ||
-        c.type === "FIELD_CHANGE"
+      identical ||
+      (
+        !identical &&
+        changes.every(c =>
+          c.type === "RUN_MUTATION" ||
+          c.type === "FIELD_CHANGE"
+        )
       );
 
     const diverged =
+      !contained &&
       changes.some(c =>
         c.type === "RELATION_CHANGE" ||
         c.type === "RUN_STRUCTURE_CHANGE"
       );
 
-    const overlap = !identical && !contained && !diverged;
+    const overlap = !identity && !contained && !diverged;
 
-    const pressure     = this.#derivePressure(S0, S1);
-    const volatility   = this.#deriveVolatility(S0, S1);
-    const deformation  = this.#deriveDeformation(S0, S1);
+    const pressure    = this.#derivePressure(S0, S1);
+    const volatility  = this.#deriveVolatility(S0, S1);
+    const deformation = this.#deriveDeformation(S0, S1);
 
     return {
       engine: "TSL_D",
       identical,
       deltaCount: changes.length,
       changes,
-      identity: identical,
+      identity,
       contained,
       overlap,
       diverged,
