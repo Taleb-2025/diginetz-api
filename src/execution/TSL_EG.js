@@ -1,96 +1,41 @@
 // diginetz-api/src/execution/TSL_EG.js
 // ----------------------------------------------------
-// TSL_EG — Execution Graph
+// TSL_EG — Execution Graph (PURE)
 // Role: Execute structural pipeline ONLY
-// No decisions, no policies, no interpretation
+// - NO reference storage
+// - NO decisions
+// - NO interpretation
 // ----------------------------------------------------
 
 export class TSL_EG {
   constructor({
     ndr,
     d,
-    rv,
     sts,
     ae,
     eventDropper
   }) {
-    if (!ndr || !d || !rv) {
+    if (!ndr || !d) {
       throw new Error("TSL_EG_MISSING_CORE");
     }
 
     this.ndr = ndr;
     this.d   = d;
-    this.rv  = rv;
     this.sts = sts;
     this.ae  = ae;
     this.eventDropper = eventDropper;
   }
 
   /* ===================================================
-     RESET — Explicit Reference Reset (SAFE)
+     EXECUTE WITH EXTERNAL REFERENCE (S0)
      =================================================== */
 
-  reset(context = {}) {
-    if (!this.rv.isInitialized()) {
-      return {
-        ok: true,
-        phase: "RESET",
-        state: "NO_REFERENCE"
-      };
-    }
-
-    this.rv.reset();
-
-    return {
-      ok: true,
-      phase: "RESET",
-      state: "CLEARED"
-    };
-  }
-
-  /* ===================================================
-     INIT — Reference Initialization (S0)
-     =================================================== */
-
-  init(input, context = {}) {
-    if (typeof input !== "string" || !input.length) {
-      return {
-        ok: false,
-        phase: "INIT",
-        reason: "INVALID_INPUT"
-      };
-    }
-
-    // 🔒 Prevent silent overwrite (must reset first)
-    if (this.rv.isInitialized()) {
-      return {
-        ok: false,
-        phase: "INIT",
-        reason: "REFERENCE_EXISTS",
-        hint: "CALL_RESET_FIRST"
-      };
-    }
-
-    const structure = this.ndr.extract(input);
-    this.rv.init(structure);
-
-    return {
-      ok: true,
-      phase: "INIT",
-      reference: this.rv.meta()
-    };
-  }
-
-  /* ===================================================
-     EXECUTE — Structural Execution (NO DECISION)
-     =================================================== */
-
-  execute(input, context = {}) {
-    if (!this.rv.isInitialized()) {
+  executeWithReference(S0, input, context = {}) {
+    if (!S0 || typeof S0 !== "object") {
       return {
         ok: false,
         phase: "ACCESS",
-        reason: "REFERENCE_NOT_INITIALIZED"
+        reason: "INVALID_REFERENCE"
       };
     }
 
@@ -103,8 +48,7 @@ export class TSL_EG {
     }
 
     const run = () => {
-      /* ---------- STRUCTURES ---------- */
-      const S0 = this.rv.get();
+      /* ---------- STRUCTURE S1 ---------- */
       const S1 = this.ndr.extract(input);
 
       /* ---------- DELTA (STRUCTURAL DIFFERENCE) ---------- */
@@ -140,7 +84,7 @@ export class TSL_EG {
           ).report
         : null;
 
-      /* ---------- OUTPUT (RAW, NO DECISION) ---------- */
+      /* ---------- RAW OUTPUT (NO DECISION) ---------- */
       return {
         ok: true,
         phase: "ACCESS",
