@@ -12,11 +12,37 @@ export class TSL_D {
     this.#diffValue("symmetry", A.symmetry, B.symmetry, changes);
     this.#diffIdentity(A.identity, B.identity, changes);
 
+    /* ===== RELATION DERIVATION (CRITICAL FIX) ===== */
+
+    const identical = changes.length === 0;
+
+    const contained =
+      !identical &&
+      changes.every(c =>
+        c.type === "RUN_MUTATION" ||
+        c.type === "FIELD_CHANGE"
+      );
+
+    const diverged =
+      changes.some(c =>
+        c.type === "RELATION_CHANGE" ||
+        c.type === "RUN_STRUCTURE_CHANGE"
+      );
+
+    const overlap =
+      !identical && !contained && !diverged;
+
     return {
       engine: "TSL_D",
-      identical: changes.length === 0,
+      identical,
       deltaCount: changes.length,
-      changes
+      changes,
+
+      /* ===== SEMANTIC FLAGS ===== */
+      identity: identical,
+      contained,
+      overlap,
+      diverged
     };
   }
 
@@ -70,21 +96,15 @@ export class TSL_D {
     }
 
     if (a.runCount !== b.runCount) {
-      out.push({
-        type: "RUN_COUNT_CHANGE"
-      });
+      out.push({ type: "RUN_COUNT_CHANGE" });
     }
 
     if (a.hasPlateau !== b.hasPlateau) {
-      out.push({
-        type: "PLATEAU_CHANGE"
-      });
+      out.push({ type: "PLATEAU_CHANGE" });
     }
 
     if (a.alphabet.length !== b.alphabet.length) {
-      out.push({
-        type: "ALPHABET_CHANGE"
-      });
+      out.push({ type: "ALPHABET_CHANGE" });
     }
   }
 }
