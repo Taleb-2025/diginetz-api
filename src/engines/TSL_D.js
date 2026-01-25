@@ -1,7 +1,7 @@
-export class TSL_D_v3 {
+export class TSL_D {
   derive(A, B) {
     if (!A || !B) {
-      throw new Error("TSL_D_v3: invalid inputs");
+      throw new Error("TSL_D: invalid inputs");
     }
 
     const changes = [];
@@ -13,7 +13,7 @@ export class TSL_D_v3 {
     this.#diffIdentity(A.identity, B.identity, changes);
 
     return {
-      engine: "TSL_D_v3",
+      engine: "TSL_D",
       identical: changes.length === 0,
       deltaCount: changes.length,
       changes
