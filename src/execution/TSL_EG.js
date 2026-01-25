@@ -1,12 +1,3 @@
-// diginetz-api/src/execution/TSL_EG.js
-// ----------------------------------------------------
-// TSL_EG — Execution Graph (PURE)
-// Role: Execute structural pipeline ONLY
-// - NO reference storage
-// - NO decisions
-// - NO interpretation
-// ----------------------------------------------------
-
 export class TSL_EG {
   constructor({
     ndr,
@@ -20,18 +11,14 @@ export class TSL_EG {
     }
 
     this.ndr = ndr;
-    this.d   = d;
+    this.d = d;
     this.sts = sts;
-    this.ae  = ae;
+    this.ae = ae;
     this.eventDropper = eventDropper;
   }
 
-  /* ===================================================
-     EXECUTE WITH EXTERNAL REFERENCE (S0)
-     =================================================== */
-
-  executeWithReference(S0, input, context = {}) {
-    if (!S0 || typeof S0 !== "object") {
+  executeWithReference(referenceStructure, numericInput, context = {}) {
+    if (!referenceStructure || typeof referenceStructure !== "object") {
       return {
         ok: false,
         phase: "ACCESS",
@@ -39,22 +26,28 @@ export class TSL_EG {
       };
     }
 
-    if (typeof input !== "string" || !input.length) {
+    if (!Array.isArray(numericInput)) {
       return {
         ok: false,
         phase: "ACCESS",
-        reason: "INVALID_INPUT"
+        reason: "INVALID_INPUT_TYPE"
       };
     }
 
+    for (const v of numericInput) {
+      if (typeof v !== "number" || Number.isNaN(v)) {
+        return {
+          ok: false,
+          phase: "ACCESS",
+          reason: "NON_NUMERIC_INPUT"
+        };
+      }
+    }
+
     const run = () => {
-      /* ---------- STRUCTURE S1 ---------- */
-      const S1 = this.ndr.extract(input);
+      const structure = this.ndr.extract(numericInput);
+      const delta = this.d.derive(referenceStructure, structure);
 
-      /* ---------- DELTA (STRUCTURAL DIFFERENCE) ---------- */
-      const delta = this.d.derive(S0, S1);
-
-      /* ---------- EVENT DROPPING (OPTIONAL) ---------- */
       if (this.eventDropper) {
         const drop = this.eventDropper.evaluate(delta);
         if (drop?.dropped) {
@@ -67,42 +60,30 @@ export class TSL_EG {
         }
       }
 
-      /* ---------- STRUCTURAL TRACE (STS) ---------- */
-      const trace = this.sts
-        ? this.sts.observe(S1)
-        : null;
+      const trace = this.sts ? this.sts.observe(structure) : null;
 
-      /* ---------- ABSENCE EXECUTION (AE) ---------- */
       const aeReport = this.ae
         ? this.ae.guard(
             () => true,
-            {
-              name: "TSL_EG_EXECUTION",
-              expectEffect: () => true
-            },
+            { name: "TSL_EG_EXECUTION", expectEffect: () => true },
             context
           ).report
         : null;
 
-      /* ---------- RAW OUTPUT (NO DECISION) ---------- */
       return {
         ok: true,
         phase: "ACCESS",
-        structure: S1,
+        structure,
         delta,
         trace,
         ae: aeReport
       };
     };
 
-    /* ---------- AE PIPELINE GUARD ---------- */
     if (this.ae) {
       const guarded = this.ae.guard(
         run,
-        {
-          name: "TSL_EG_PIPELINE",
-          expectEffect: () => true
-        },
+        { name: "TSL_EG_PIPELINE", expectEffect: () => true },
         context
       );
 
