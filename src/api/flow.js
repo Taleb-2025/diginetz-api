@@ -30,8 +30,8 @@ const interpreter = new TSL_Interpreter();
 router.post("/init", (req, res) => {
   try {
     const adapted   = adapter.adapt(req.body.input);   // raw → number[]
-    const structure = ndr.extract(adapted);             // number[] → structure
-    const ref       = referenceStore.save(structure);   // persist S0
+    const structure = ndr.extract(adapted);            // number[] → structure
+    const ref       = referenceStore.save(structure);  // persist S0
 
     res.json({
       ok: true,
@@ -39,7 +39,10 @@ router.post("/init", (req, res) => {
       referenceId: ref.referenceId
     });
   } catch (err) {
-    res.status(400).json({ ok: false, error: err.message });
+    res.status(400).json({
+      ok: false,
+      error: err.message
+    });
   }
 });
 
@@ -52,19 +55,20 @@ router.post("/execute", (req, res) => {
     const reference = referenceStore.load(referenceId); // S0
     const adapted   = adapter.adapt(input);             // raw → number[]
 
-    const exec = eg.executeWithReference(reference, adapted); // S1 + delta
+    /* ===== EXECUTION (STRUCTURAL CONTAINMENT, NOT COMPARISON) ===== */
+    const exec = eg.executeWithReference(reference, adapted);
 
-    if (!exec.ok) {
+    if (!exec?.ok) {
       return res.status(403).json(exec);
     }
 
-    /* ===== STRUCTURAL INTERPRETATION (CRITICAL FIX) ===== */
+    /* ===== STRUCTURAL INTERPRETATION ===== */
     const interpretation = interpreter.interpret({
       structure: exec.structure,
       delta: exec.delta
     });
 
-    /* ===== DECISION FROM INTERPRETATION, NOT DELTA ===== */
+    /* ===== DECISION FROM INTERPRETATION ONLY ===== */
     const decision = TSL_Decision({
       ...interpretation,
       aeReport: exec.ae
@@ -78,7 +82,10 @@ router.post("/execute", (req, res) => {
     });
 
   } catch (err) {
-    res.status(400).json({ ok: false, error: err.message });
+    res.status(400).json({
+      ok: false,
+      error: err.message
+    });
   }
 });
 
