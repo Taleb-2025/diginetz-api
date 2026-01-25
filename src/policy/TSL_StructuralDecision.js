@@ -1,11 +1,4 @@
 // diginetz-api/src/policy/TSL_StructuralDecision.js
-// ----------------------------------------------------
-// TSL Structural Decision Layer
-// Principle: Numbers observe → Structure decides
-// ----------------------------------------------------
-// - Reads STRUCTURAL INTERPRETATION only
-// - Deterministic structural judgment
-// ----------------------------------------------------
 
 export function TSL_StructuralDecision({
   structural_state,
@@ -16,9 +9,11 @@ export function TSL_StructuralDecision({
   aeReport
 }) {
 
-  /* ==================================================
-   * 1️⃣ ABSOLUTE DENIAL (NO DISCUSSION)
-   * ================================================== */
+  /* ========= HARD DENY FIRST ========= */
+
+  if (aeReport?.securityFlag === "ALERT") {
+    return deny("ABSENCE_EXECUTION_ALERT");
+  }
 
   if (structural_state === "COLLAPSING") {
     return deny("STRUCTURAL_COLLAPSE");
@@ -32,20 +27,14 @@ export function TSL_StructuralDecision({
     return deny("UNSUSTAINABLE_STRUCTURE");
   }
 
-  if (aeReport?.securityFlag === "ALERT") {
-    return deny("ABSENCE_EXECUTION_ALERT");
-  }
+  /* ========= STRICT STRUCTURAL LOGIC ========= */
 
-  /* ==================================================
-   * 2️⃣ ABSOLUTE ALLOW (STRUCTURAL TRUTH)
-   * ================================================== */
-
-  // الهوية أقوى حالة ممكنة
+  // الهوية: مسموحة فقط
   if (relation_type === "STRUCTURAL_IDENTITY") {
     return allow("STRUCTURAL_IDENTITY");
   }
 
-  // الاحتواء يأتي مباشرة بعد الهوية
+  // الاحتواء: مسموح فقط إذا كان مستقرًا
   if (
     relation_type === "STRUCTURAL_CONTAINMENT" &&
     stability !== "LOW_STABILITY"
@@ -53,41 +42,18 @@ export function TSL_StructuralDecision({
     return allow("STRUCTURAL_CONTAINMENT_OK");
   }
 
-  /* ==================================================
-   * 3️⃣ CONDITIONAL / RISK STATES
-   * ================================================== */
+  /* ========= EVERYTHING ELSE = DENY ========= */
 
-  if (
-    structural_state === "FRACTURED" ||
-    continuity === "AT_RISK"
-  ) {
-    return allowWithWarning("STRUCTURAL_RISK");
-  }
-
-  /* ==================================================
-   * 4️⃣ FALLBACK (UNKNOWN = DENY)
-   * ================================================== */
-
-  return deny("STRUCTURAL_UNCERTAINTY");
+  return deny("NOT_CONTAINED");
 }
 
-/* ================= RESULT HELPERS ================= */
+/* ========= HELPERS ========= */
 
 function allow(reason) {
   return {
     decision: "ALLOW",
     state: "STABLE",
     reason,
-    layer: "TSL_StructuralDecision"
-  };
-}
-
-function allowWithWarning(reason) {
-  return {
-    decision: "ALLOW",
-    state: "RISK",
-    reason,
-    warning: true,
     layer: "TSL_StructuralDecision"
   };
 }
