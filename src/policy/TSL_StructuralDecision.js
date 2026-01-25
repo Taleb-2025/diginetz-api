@@ -3,13 +3,6 @@
 // TSL Structural Decision Layer
 // Principle: Numbers observe → Structure decides
 // ----------------------------------------------------
-// - Reads STRUCTURAL INTERPRETATION only
-// - No numeric thresholds
-// - No statistics
-// - No history
-// - No aggregation
-// - Deterministic structural judgment only
-// ----------------------------------------------------
 
 export function TSL_StructuralDecision({
   structural_state,
@@ -20,7 +13,7 @@ export function TSL_StructuralDecision({
   aeReport
 }) {
 
-  /* ================= HARD DENIAL ================= */
+  /* ================= HARD DENIAL (ABSOLUTE) ================= */
 
   if (structural_state === "COLLAPSING") {
     return deny("STRUCTURAL_COLLAPSE");
@@ -38,14 +31,13 @@ export function TSL_StructuralDecision({
     return deny("ABSENCE_EXECUTION_ALERT");
   }
 
-  /* ================= CONDITIONAL ALLOW ================= */
+  /* ================= IDENTITY (HIGHEST PRIORITY) ================= */
 
-  if (
-    structural_state === "FRACTURED" ||
-    continuity === "AT_RISK"
-  ) {
-    return allowWithWarning("STRUCTURAL_RISK");
+  if (relation_type === "STRUCTURAL_IDENTITY") {
+    return allow("STRUCTURAL_IDENTITY");
   }
+
+  /* ================= CONTAINMENT ================= */
 
   if (
     relation_type === "STRUCTURAL_CONTAINMENT" &&
@@ -54,8 +46,13 @@ export function TSL_StructuralDecision({
     return allow("STRUCTURAL_CONTAINMENT_OK");
   }
 
-  if (relation_type === "STRUCTURAL_IDENTITY") {
-    return allow("STRUCTURAL_IDENTITY");
+  /* ================= CONDITIONAL RISK ================= */
+
+  if (
+    structural_state === "FRACTURED" ||
+    continuity === "AT_RISK"
+  ) {
+    return allowWithWarning("STRUCTURAL_RISK");
   }
 
   /* ================= DEFAULT ================= */
