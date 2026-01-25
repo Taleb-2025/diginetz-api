@@ -1,68 +1,59 @@
 /* ============================================================
  * TSL Input Adapter
- * Enforces: Discrete → Δ → Direction → Structure
- * JavaScript Version
+ * Role: Raw Input → Numeric Representation
+ * - NO Δ extraction
+ * - NO direction
+ * - NO structure
+ * - NO interpretation
  * ============================================================
  */
 
-/* ---------- Direction Constants ---------- */
-export const Direction = {
-  UP: "+",
-  DOWN: "-",
-  SAME: "="
-};
-
-/* ---------- Default TSL Adapter ---------- */
 export class DefaultTSLAdapter {
 
   /**
-   * Convert raw input into discrete numeric states
-   * This is the LAST place where numbers are allowed
+   * Adapt raw input into numeric sequence
+   * This is the ONLY responsibility of this adapter
    */
-  toDiscrete(input) {
-    if (!Array.isArray(input)) {
-      throw new Error("TSL Adapter: input must be an array");
+  adapt(input) {
+    // Accept string: "1,2,3,2,1"
+    if (typeof input === "string") {
+      return this.#fromString(input);
     }
 
-    for (const v of input) {
+    // Accept array of numbers
+    if (Array.isArray(input)) {
+      return this.#fromArray(input);
+    }
+
+    throw new Error("TSL Adapter: unsupported input type");
+  }
+
+  /* ================= INTERNAL ================= */
+
+  #fromString(text) {
+    const values = text
+      .split(",")
+      .map(v => Number(v.trim()))
+      .filter(v => !Number.isNaN(v));
+
+    if (values.length < 2) {
+      throw new Error("TSL Adapter: insufficient numeric data");
+    }
+
+    return values;
+  }
+
+  #fromArray(arr) {
+    if (arr.length < 2) {
+      throw new Error("TSL Adapter: insufficient numeric data");
+    }
+
+    for (const v of arr) {
       if (typeof v !== "number" || Number.isNaN(v)) {
-        throw new Error("TSL Adapter: all discrete values must be numbers");
+        throw new Error("TSL Adapter: array must contain only numbers");
       }
     }
 
-    return input;
+    return arr;
   }
-
-  /**
-   * Extract numerical deltas between discrete states
-   * Numbers here are transitional only
-   */
-  toDelta(discrete) {
-    if (discrete.length < 2) return [];
-
-    const deltas = [];
-    for (let i = 1; i < discrete.length; i++) {
-      deltas.push(discrete[i] - discrete[i - 1]);
-    }
-    return deltas;
-  }
-
-  /**
-   * Collapse deltas into pure directional form
-   * After this step, numbers must not exist
-   */
-  toDirection(delta) {
-    return delta.map(d => {
-      if (d > 0) return Direction.UP;
-      if (d < 0) return Direction.DOWN;
-      return Direction.SAME;
-    });
-  }
-}
-
-/* ---------- Utility Pipeline ---------- */
-export function adaptToTSL(adapter, input) {
-  const discrete = adapter.toDiscrete(input);
-  const delta = adapter.toDelta(discrete);
-  return adapter.toDirection(delta);
 }
