@@ -1,6 +1,9 @@
 // diginetz-api/src/api/flow.js
+// ----------------------------------------------------
 // Hybrid Structural–Numeric Flow
 // Numbers observe → Structure decides
+// Reference handled OUTSIDE the engine
+// ----------------------------------------------------
 
 import express from "express";
 
@@ -8,8 +11,7 @@ import express from "express";
 import { TSL_NDR } from "../engines/TSL_NDR.js";
 import { TSL_D }   from "../engines/TSL_D.js";
 
-/* ---------- State ---------- */
-import { TSL_RV }  from "../state/TSL_RV.js";
+/* ---------- State / Observers ---------- */
 import { TSL_STS } from "../state/TSL_STS.js";
 import { TSL_AE }  from "../state/TSL_AE.js";
 
@@ -20,20 +22,23 @@ import { TSL_EG } from "../execution/TSL_EG.js";
 import { TSL_Interpreter } from "../interpret/TSL_Interpreter.js";
 import { TSL_SAL } from "../layers/TSL_SAL.js";
 import { TSL_DCLS } from "../policy/TSL_DCLS.js";
-
-/* ---------- Numeric Observer ---------- */
 import { TSL_NumericObserver } from "../policy/TSL_NumericObserver.js";
+
+/* ---------- Reference Store (NEW) ---------- */
+import { TSL_ReferenceStore } from "../store/TSL_ReferenceStore.js";
 
 const router = express.Router();
 
 /* =========================================================
-   Instantiate Core Pipeline
+   Instantiate Core Components
    ========================================================= */
 
+const ndr = new TSL_NDR();
+const d   = new TSL_D();
+
 const eg = new TSL_EG({
-  ndr: new TSL_NDR(),
-  d:   new TSL_D(),
-  rv:  new TSL_RV(),
+  ndr,
+  d,
   sts: new TSL_STS(),
   ae:  new TSL_AE()
 });
@@ -43,8 +48,11 @@ const sal         = new TSL_SAL();
 const dcls        = new TSL_DCLS();
 const numericObs  = new TSL_NumericObserver();
 
+/* ---------- Reference Store ---------- */
+const referenceStore = new TSL_ReferenceStore();
+
 /* =========================================================
-   INIT — Reference Initialization (S0)
+   INIT — Create Structural Reference (S0)
    ========================================================= */
 
 router.post("/init", (req, res) => {
@@ -57,48 +65,55 @@ router.post("/init", (req, res) => {
     });
   }
 
-  const initResult = eg.init(input, {
-    source: "api/flow/init"
-  });
+  try {
+    const structure = ndr.extract(input);
+    const ref = referenceStore.save(structure);
 
-  return res.json(initResult);
-});
-
-/* =========================================================
-   RESET — Clear Reference (S0)
-   ========================================================= */
-
-router.post("/reset", (req, res) => {
-  if (typeof eg.reset !== "function") {
+    return res.json({
+      ok: true,
+      phase: "INIT",
+      referenceId: ref.referenceId,
+      reused: ref.reused
+    });
+  } catch (err) {
     return res.status(500).json({
       ok: false,
-      error: "RESET_NOT_SUPPORTED"
+      error: err.message
     });
   }
-
-  const result = eg.reset({
-    source: "api/flow/reset"
-  });
-
-  return res.json(result);
 });
 
 /* =========================================================
-   EXECUTE — Hybrid Structural Flow
+   EXECUTE — Structural Comparison (S1 vs S0)
    ========================================================= */
 
 router.post("/execute", (req, res) => {
-  const { input } = req.body;
+  const { input, referenceId } = req.body;
 
-  if (typeof input !== "string" || !input.length) {
+  if (
+    typeof input !== "string" ||
+    !input.length ||
+    typeof referenceId !== "string"
+  ) {
     return res.status(400).json({
       ok: false,
       error: "INVALID_INPUT"
     });
   }
 
-  /* ---------- 1. EXECUTION GRAPH (NO DECISION) ---------- */
-  const exec = eg.execute(input, {
+  let reference;
+
+  try {
+    reference = referenceStore.load(referenceId);
+  } catch (err) {
+    return res.status(404).json({
+      ok: false,
+      error: err.message
+    });
+  }
+
+  /* ---------- 1. STRUCTURAL EXECUTION ---------- */
+  const exec = eg.executeWithReference(reference, input, {
     source: "api/flow/execute"
   });
 
@@ -106,7 +121,7 @@ router.post("/execute", (req, res) => {
     return res.status(403).json(exec);
   }
 
-  /* ---------- 2. NUMERIC OBSERVATION (NO DECISION) ---------- */
+  /* ---------- 2. NUMERIC OBSERVATION ---------- */
   const numericReport = numericObs.observe({
     delta: exec.delta,
     trace: exec.trace,
@@ -118,7 +133,7 @@ router.post("/execute", (req, res) => {
     structure: exec.structure
   });
 
-  /* ---------- 4. STRUCTURAL ALLOWANCE LAYER ---------- */
+  /* ---------- 4. STRUCTURAL ALLOWANCE ---------- */
   const salResult = sal.decide({
     tsl_result: tslResult
   });
@@ -132,6 +147,7 @@ router.post("/execute", (req, res) => {
   /* ---------- 6. FINAL RESPONSE ---------- */
   return res.json({
     ok: salResult.decision === "ALLOW",
+    referenceId,
     execution: {
       structure: exec.structure,
       delta: exec.delta,
