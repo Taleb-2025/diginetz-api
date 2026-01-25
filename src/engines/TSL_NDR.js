@@ -1,97 +1,168 @@
 // diginetz-api/src/engines/TSL_NDR.js
-// Noise-Driven Structural Representation Engine
-// Core / Stateless / Deterministic / Cache-Safe
-// TSL_NDR v1.2.0 (Production Ready)
 
-export class TSL_NDR {
+
+export class TSL_NDR_v3 {
   constructor(options = {}) {
-    this.depthLimit = options.depthLimit ?? 32;
-    this.normalizeNumbers = options.normalizeNumbers ?? true;
-    this.ignoreKeys = new Set(options.ignoreKeys ?? []);
-    this.enableCache = options.enableCache ?? true;
-    this.cache = new Map();
-    this.cacheLimit = options.cacheLimit ?? 1000;
+    this.minLength = options.minLength ?? 2;
   }
+
+  /* ===================================================
+     EXTRACT — Pure Structural Representation
+     =================================================== */
 
   extract(input) {
-    const cacheKey = this.enableCache
-      ? this.#stableFingerprint(input)
-      : null;
-
-    if (this.enableCache && this.cache.has(cacheKey)) {
-      return this.cache.get(cacheKey);
+    if (!Array.isArray(input)) {
+      throw new Error("TSL_NDR_v3: input must be number[]");
     }
 
-    const structure = this.#walk(input, 0, new WeakSet());
-
-    const result = {
-      engine: "TSL_NDR",
-      version: "1.2.0",
-      fingerprint: this.#fingerprint(structure),
-      structure
-    };
-
-    if (this.enableCache) {
-      this.#cacheSet(cacheKey, result);
+    if (input.length < this.minLength) {
+      throw new Error("TSL_NDR_v3: insufficient data length");
     }
 
-    return result;
-  }
-
-  /* ================= INTERNAL ================= */
-
-  #walk(value, depth, seen) {
-    if (depth > this.depthLimit) return "[DEPTH_LIMIT]";
-
-    if (value === null) return "null";
-    if (value === undefined) return "undefined";
-    if (Number.isNaN(value)) return "nan";
-    if (value === Infinity) return "infinity";
-
-    if (typeof value === "object") {
-      if (seen.has(value)) return "[CIRCULAR]";
-      seen.add(value);
-    }
-
-    const t = typeof value;
-
-    if (t === "number") {
-      return this.normalizeNumbers ? "number" : value;
-    }
-    if (t === "string") return "string";
-    if (t === "boolean") return "boolean";
-    if (t === "bigint") return "bigint";
-    if (t === "symbol") return "symbol";
-    if (t === "function") return "function";
-
-    if (value instanceof Date) return "date";
-
-    if (ArrayBuffer.isView(value)) {
-      return { type: "buffer", length: value.length };
-    }
-
-    if (Array.isArray(value)) {
-      return value.map(v => this.#walk(v, depth + 1, seen));
-    }
-
-    if (t === "object") {
-      const out = {};
-      const keys = Object.keys(value)
-        .filter(k => !this.ignoreKeys.has(k))
-        .sort();
-
-      for (const k of keys) {
-        out[k] = this.#walk(value[k], depth + 1, seen);
+    for (const v of input) {
+      if (typeof v !== "number" || Number.isNaN(v)) {
+        throw new Error("TSL_NDR_v3: all values must be valid numbers");
       }
-      return out;
     }
 
-    return "unknown";
+    const relations = this.#deriveRelations(input);
+    const runs      = this.#deriveRuns(relations);
+    const topology  = this.#deriveTopology(relations);
+    const pattern   = this.#derivePattern(relations);
+    const symmetry  = this.#deriveSymmetry(relations);
+    const identity  = this.#deriveIdentity(relations, runs);
+
+    const fingerprint = this.#fingerprint({
+      runs,
+      topology,
+      pattern,
+      symmetry,
+      identity
+    });
+
+    return {
+      engine: "TSL_NDR_v3",
+      length: input.length,
+      relations,
+      runs,
+      topology,
+      pattern,
+      symmetry,
+      identity,
+      fingerprint
+    };
   }
+
+  /* ===================================================
+     RELATIONS
+     =================================================== */
+
+  #deriveRelations(arr) {
+    const rel = [];
+    for (let i = 1; i < arr.length; i++) {
+      if (arr[i] > arr[i - 1]) rel.push("UP");
+      else if (arr[i] < arr[i - 1]) rel.push("DOWN");
+      else rel.push("SAME");
+    }
+    return rel;
+  }
+
+  /* ===================================================
+     RUN-LENGTH STRUCTURE
+     =================================================== */
+
+  #deriveRuns(relations) {
+    if (relations.length === 0) return [];
+
+    const runs = [];
+    let current = relations[0];
+    let count = 1;
+
+    for (let i = 1; i < relations.length; i++) {
+      if (relations[i] === current) {
+        count++;
+      } else {
+        runs.push({ dir: current, run: count });
+        current = relations[i];
+        count = 1;
+      }
+    }
+
+    runs.push({ dir: current, run: count });
+    return runs;
+  }
+
+  /* ===================================================
+     TOPOLOGY (CHANGE SHAPE)
+     =================================================== */
+
+  #deriveTopology(relations) {
+    const topo = [];
+    let last = null;
+
+    for (const r of relations) {
+      if (r !== last) {
+        topo.push(r);
+        last = r;
+      }
+    }
+    return topo;
+  }
+
+  /* ===================================================
+     GLOBAL PATTERN
+     =================================================== */
+
+  #derivePattern(relations) {
+    if (relations.every(r => r === "UP")) return "MONOTONIC_UP";
+    if (relations.every(r => r === "DOWN")) return "MONOTONIC_DOWN";
+    if (relations.every(r => r === "SAME")) return "STATIC";
+
+    let switches = 0;
+    for (let i = 1; i < relations.length; i++) {
+      if (relations[i] !== relations[i - 1]) switches++;
+    }
+
+    if (switches >= relations.length - 1) return "OSCILLATING";
+    return "MIXED";
+  }
+
+  /* ===================================================
+     SYMMETRY
+     =================================================== */
+
+  #deriveSymmetry(relations) {
+    const mid = Math.floor(relations.length / 2);
+    for (let i = 0; i < mid; i++) {
+      if (relations[i] !== relations[relations.length - 1 - i]) {
+        return "ASYMMETRIC";
+      }
+    }
+    return "MIRRORED";
+  }
+
+  /* ===================================================
+     IDENTITY FEATURES
+     =================================================== */
+
+  #deriveIdentity(relations, runs) {
+    const alphabet = Array.from(new Set(relations));
+    const hasPlateau = alphabet.includes("SAME");
+
+    return {
+      alphabet,
+      runCount: runs.length,
+      hasPlateau
+    };
+  }
+
+  /* ===================================================
+     FINGERPRINT (STRUCTURAL ONLY)
+     =================================================== */
 
   #fingerprint(structure) {
     const stable = this.#stableStringify(structure);
-    let h = 2166136261; // FNV-1a offset basis
+    let h = 2166136261; // FNV-1a
 
     for (let i = 0; i < stable.length; i++) {
       h ^= stable.charCodeAt(i);
@@ -99,15 +170,6 @@ export class TSL_NDR {
     }
 
     return (h >>> 0).toString(16);
-  }
-
-  #stableFingerprint(input) {
-    try {
-      const temp = this.#walk(input, 0, new WeakSet());
-      return this.#fingerprint(temp);
-    } catch {
-      return "fallback_" + Math.random().toString(36).slice(2);
-    }
   }
 
   #stableStringify(obj) {
@@ -125,13 +187,5 @@ export class TSL_NDR {
       keys.map(k => `${k}:${this.#stableStringify(obj[k])}`).join(",") +
       "}"
     );
-  }
-
-  #cacheSet(key, value) {
-    if (this.cache.size >= this.cacheLimit) {
-      const firstKey = this.cache.keys().next().value;
-      this.cache.delete(firstKey);
-    }
-    this.cache.set(key, value);
   }
 }
