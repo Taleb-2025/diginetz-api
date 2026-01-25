@@ -19,18 +19,18 @@ export class TSL_NDR {
     }
 
     const relations = this.#deriveRelations(input);
-    const runs      = this.#deriveRuns(relations);
-    const topology  = this.#deriveTopology(relations);
-    const pattern   = this.#derivePattern(relations);
-    const symmetry  = this.#deriveSymmetry(relations);
-    const identity  = this.#deriveIdentity(relations, runs);
+    const runs = this.#deriveRuns(relations);
+    const topology = this.#deriveTopology(relations);
+    const pattern = this.#derivePattern(relations);
+    const symmetry = this.#deriveSymmetry(relations);
+    const features = this.#deriveFeatures(relations, runs);
 
     const fingerprint = this.#fingerprint({
       runs,
       topology,
       pattern,
       symmetry,
-      identity
+      features
     });
 
     return {
@@ -41,7 +41,7 @@ export class TSL_NDR {
       topology,
       pattern,
       symmetry,
-      identity,
+      features,
       fingerprint
     };
   }
@@ -114,7 +114,7 @@ export class TSL_NDR {
     return "MIRRORED";
   }
 
-  #deriveIdentity(relations, runs) {
+  #deriveFeatures(relations, runs) {
     const alphabet = Array.from(new Set(relations));
     const hasPlateau = alphabet.includes("SAME");
 
