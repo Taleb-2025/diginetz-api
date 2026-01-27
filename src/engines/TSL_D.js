@@ -1,3 +1,5 @@
+// diginetz-api/src/engines/TSL_D.js
+
 export class TSL_D {
   derive(S0, S1) {
     if (!S0 || !S1) {
@@ -12,7 +14,6 @@ export class TSL_D {
     this.#diffValue("symmetry", S0.symmetry, S1.symmetry, changes);
 
     const identical = changes.length === 0;
-
     const identity = identical;
 
     const contained =
@@ -38,18 +39,39 @@ export class TSL_D {
     const volatility  = this.#deriveVolatility(S0, S1);
     const deformation = this.#deriveDeformation(S0, S1);
 
-    return {
-      engine: "TSL_D",
-      identical,
-      deltaCount: changes.length,
-      changes,
+    const changeMagnitude   = this.#deriveMagnitude(changes, deformation);
+    const changeScope       = this.#deriveScope(changes);
+    const deltaCoherence    = this.#deriveCoherence(changes);
+    const structuralTrend  = this.#deriveTrend(pressure, volatility, deformation);
+    const containmentPotential = this.#deriveContainmentPotential({
       identity,
       contained,
       overlap,
       diverged,
+      changeMagnitude
+    });
+
+    return {
+      engine: "TSL_D",
+
+      identical,
+      deltaCount: changes.length,
+      changes,
+
+      identity,
+      contained,
+      overlap,
+      diverged,
+
       pressure,
       volatility,
-      deformation
+      deformation,
+
+      changeMagnitude,
+      changeScope,
+      deltaCoherence,
+      structuralTrend,
+      containmentPotential
     };
   }
 
@@ -154,5 +176,48 @@ export class TSL_D {
     }
 
     return local ? "LOCAL" : "NONE";
+  }
+
+  #deriveMagnitude(changes, deformation) {
+    if (changes.length === 0) return "NONE";
+    if (deformation === "GLOBAL") return "GLOBAL";
+    if (deformation === "LOCAL") return "LOCAL";
+    return "REGIONAL";
+  }
+
+  #deriveScope(changes) {
+    const layers = new Set();
+    for (const c of changes) {
+      if (c.type === "RELATION_CHANGE") layers.add("RELATIONS");
+      if (c.type === "RUN_MUTATION" || c.type === "RUN_STRUCTURE_CHANGE") layers.add("RUNS");
+      if (c.type === "FIELD_CHANGE") layers.add("FIELDS");
+    }
+
+    if (layers.size === 0) return "NONE";
+    if (layers.size === 1) return [...layers][0];
+    return "MULTI_LAYER";
+  }
+
+  #deriveCoherence(changes) {
+    if (changes.length <= 1) return "COHERENT";
+
+    const types = new Set(changes.map(c => c.type));
+    if (types.size <= 2) return "COHERENT";
+
+    return "INCOHERENT";
+  }
+
+  #deriveTrend(pressure, volatility, deformation) {
+    if (deformation === "GLOBAL" || pressure === "HIGH") return "CHAOTIC";
+    if (pressure === "LOW" && volatility === "STABLE") return "STABILIZING";
+    return "DRIFTING";
+  }
+
+  #deriveContainmentPotential({ identity, contained, overlap, diverged, changeMagnitude }) {
+    if (identity) return "FULL";
+    if (contained && changeMagnitude !== "GLOBAL") return "FULL";
+    if (overlap) return "PARTIAL";
+    if (diverged) return "NONE";
+    return "UNKNOWN";
   }
 }
