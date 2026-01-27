@@ -1,3 +1,5 @@
+// diginetz-api/src/engines/TSL_NDR.js
+
 export class TSL_NDR {
   constructor(options = {}) {
     this.minLength = options.minLength ?? 2;
@@ -14,114 +16,71 @@ export class TSL_NDR {
 
     for (const v of input) {
       if (typeof v !== "number" || Number.isNaN(v)) {
-        throw new Error("TSL_NDR: all values must be valid numbers");
+        throw new Error("TSL_NDR: invalid numeric input");
       }
     }
 
-    const relations = this.#deriveRelations(input);
-    const runs = this.#deriveRuns(relations);
-    const topology = this.#deriveTopology(relations);
-    const pattern = this.#derivePattern(relations);
-    const symmetry = this.#deriveSymmetry(relations);
-    const features = this.#deriveFeatures(relations, runs);
+    const length = input.length;
+    const order = this.#deriveOrder(input);
+    const continuity = this.#deriveContinuity(order);
+    const boundaries = this.#deriveBoundaries(order);
 
     const fingerprint = this.#fingerprint({
-      runs,
-      topology,
-      pattern,
-      symmetry,
-      features
+      length,
+      order,
+      continuity,
+      boundaries
     });
 
     return {
       engine: "TSL_NDR",
-      length: input.length,
-      relations,
-      runs,
-      topology,
-      pattern,
-      symmetry,
-      features,
+      length,
+      order,
+      continuity,
+      boundaries,
       fingerprint
     };
   }
 
-  #deriveRelations(arr) {
+  #deriveOrder(arr) {
     const rel = [];
     for (let i = 1; i < arr.length; i++) {
-      if (arr[i] > arr[i - 1]) rel.push("UP");
-      else if (arr[i] < arr[i - 1]) rel.push("DOWN");
-      else rel.push("SAME");
+      if (arr[i] > arr[i - 1]) rel.push("+");
+      else if (arr[i] < arr[i - 1]) rel.push("-");
+      else rel.push("=");
     }
     return rel;
   }
 
-  #deriveRuns(relations) {
-    if (relations.length === 0) return [];
+  #deriveContinuity(order) {
+    if (order.length === 0) return [];
 
     const runs = [];
-    let current = relations[0];
+    let current = order[0];
     let count = 1;
 
-    for (let i = 1; i < relations.length; i++) {
-      if (relations[i] === current) {
+    for (let i = 1; i < order.length; i++) {
+      if (order[i] === current) {
         count++;
       } else {
-        runs.push({ dir: current, run: count });
-        current = relations[i];
+        runs.push({ dir: current, len: count });
+        current = order[i];
         count = 1;
       }
     }
 
-    runs.push({ dir: current, run: count });
+    runs.push({ dir: current, len: count });
     return runs;
   }
 
-  #deriveTopology(relations) {
-    const topo = [];
-    let last = null;
-
-    for (const r of relations) {
-      if (r !== last) {
-        topo.push(r);
-        last = r;
-      }
+  #deriveBoundaries(order) {
+    if (order.length === 0) {
+      return { start: null, end: null };
     }
-    return topo;
-  }
-
-  #derivePattern(relations) {
-    if (relations.every(r => r === "UP")) return "MONOTONIC_UP";
-    if (relations.every(r => r === "DOWN")) return "MONOTONIC_DOWN";
-    if (relations.every(r => r === "SAME")) return "STATIC";
-
-    let switches = 0;
-    for (let i = 1; i < relations.length; i++) {
-      if (relations[i] !== relations[i - 1]) switches++;
-    }
-
-    if (switches >= relations.length - 1) return "OSCILLATING";
-    return "MIXED";
-  }
-
-  #deriveSymmetry(relations) {
-    const mid = Math.floor(relations.length / 2);
-    for (let i = 0; i < mid; i++) {
-      if (relations[i] !== relations[relations.length - 1 - i]) {
-        return "ASYMMETRIC";
-      }
-    }
-    return "MIRRORED";
-  }
-
-  #deriveFeatures(relations, runs) {
-    const alphabet = Array.from(new Set(relations));
-    const hasPlateau = alphabet.includes("SAME");
 
     return {
-      alphabet,
-      runCount: runs.length,
-      hasPlateau
+      start: order[0],
+      end: order[order.length - 1]
     };
   }
 
