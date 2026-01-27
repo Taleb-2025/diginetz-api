@@ -1,3 +1,5 @@
+// diginetz-api/src/execution/TSL_EG.js
+
 export class TSL_EG {
   constructor({
     ndr,
@@ -55,7 +57,10 @@ export class TSL_EG {
             ok: true,
             phase: "ACCESS",
             dropped: true,
-            reason: drop.reason
+            reason: drop.reason,
+            reference: referenceStructure,
+            structure,
+            delta
           };
         }
       }
@@ -73,7 +78,8 @@ export class TSL_EG {
       return {
         ok: true,
         phase: "ACCESS",
-        structure,
+        reference: referenceStructure, // S0
+        structure,                     // S1
         delta,
         trace,
         ae: aeReport
