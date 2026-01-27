@@ -10,11 +10,22 @@ import { TSL_D } from "../engines/TSL_D.js";
 import { TSL_EG } from "../execution/TSL_EG.js";
 
 import { TSL_Interpreter } from "../interpret/TSL_Interpreter.js";
-import { TSL_Decision } from "../interpret/Decision.js";
+import { TSL_StructuralDecision as TSL_Decision } from "../policy/TSL_StructuralDecision.js";
 
 const router = express.Router();
 
-/* ========== CORE ========== */
+/* =====================================================
+   RAW BYTES ONLY — NO JSON, NO STRING, NO OBJECT
+   ===================================================== */
+
+router.use(
+  express.raw({
+    type: "application/octet-stream",
+    limit: "1mb"
+  })
+);
+
+/* ================= CORE ================= */
 
 const adapter = new DefaultTSLAdapter();
 const referenceStore = new TSL_ReferenceStore();
@@ -25,56 +36,79 @@ const eg  = new TSL_EG({ ndr, d });
 
 const interpreter = new TSL_Interpreter();
 
-/* ================= INIT ================= */
+/* ================= INIT (S0) ================= */
 
 router.post("/init", (req, res) => {
   try {
-    const adapted   = adapter.adapt(req.body.input);   // raw → number[]
-    const structure = ndr.extract(adapted);            // number[] → structure
-    const ref       = referenceStore.save(structure);  // persist S0
+    if (!Buffer.isBuffer(req.body)) {
+      return res.status(400).json({
+        ok: false,
+        error: "RAW_BYTES_REQUIRED"
+      });
+    }
 
-    res.json({
+    const bytes     = Uint8Array.from(req.body);
+    const adapted   = adapter.adapt(bytes);
+    const structure = ndr.extract(adapted);
+
+    const ref = referenceStore.save(structure);
+
+    return res.json({
       ok: true,
       phase: "INIT",
       referenceId: ref.referenceId
     });
+
   } catch (err) {
-    res.status(400).json({
+    return res.status(400).json({
       ok: false,
       error: err.message
     });
   }
 });
 
-/* ================= EXECUTE ================= */
+/* ================= EXECUTE (S1) ================= */
 
 router.post("/execute", (req, res) => {
   try {
-    const { input, referenceId } = req.body;
+    const referenceId = req.headers["x-reference-id"];
 
-    const reference = referenceStore.load(referenceId); // S0
-    const adapted   = adapter.adapt(input);             // raw → number[]
+    if (!referenceId || typeof referenceId !== "string") {
+      return res.status(400).json({
+        ok: false,
+        error: "MISSING_REFERENCE_ID"
+      });
+    }
 
-    /* ===== EXECUTION (STRUCTURAL CONTAINMENT, NOT COMPARISON) ===== */
+    if (!Buffer.isBuffer(req.body)) {
+      return res.status(400).json({
+        ok: false,
+        error: "RAW_BYTES_REQUIRED"
+      });
+    }
+
+    const reference = referenceStore.load(referenceId);
+
+    const bytes   = Uint8Array.from(req.body);
+    const adapted = adapter.adapt(bytes);
+
     const exec = eg.executeWithReference(reference, adapted);
 
     if (!exec?.ok) {
       return res.status(403).json(exec);
     }
 
-    /* ===== STRUCTURAL INTERPRETATION ===== */
     const interpretation = interpreter.interpret({
       structure: exec.structure,
-      delta: exec.delta
+      reference
     });
 
-    /* ===== DECISION FROM INTERPRETATION ONLY ===== */
     const decision = TSL_Decision({
       ...interpretation,
       aeReport: exec.ae
     });
 
-    res.json({
+    return res.json({
       ok: true,
       execution: exec,
       interpretation,
@@ -82,7 +116,7 @@ router.post("/execute", (req, res) => {
     });
 
   } catch (err) {
-    res.status(400).json({
+    return res.status(400).json({
       ok: false,
       error: err.message
     });
