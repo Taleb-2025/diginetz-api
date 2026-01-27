@@ -1,14 +1,10 @@
 // diginetz-api/src/execution/TSL_EG.js
 // ----------------------------------------------
-// TSL_EG (PURE STRUCTURAL PIPELINE)
-// - لا AE
-// - لا STS
-// - لا EventDropper
-// - لا Guards
-// - لا قرارات
-// ----------------------------------------------
-// الوظيفة الوحيدة:
-// S0 + numericInput → S1 → Δ → return
+// TSL_EG (STRICT STRUCTURAL GATE)
+// - No interpretation
+// - No policy
+// - No AE / STS / Dropper
+// - Enforces S0 as structural anchor
 // ----------------------------------------------
 
 export class TSL_EG {
@@ -18,20 +14,24 @@ export class TSL_EG {
     }
 
     this.ndr = ndr;
-    this.d = d;
+    this.d   = d;
   }
 
   executeWithReference(referenceStructure, numericInput) {
+    /* ===== VALIDATION ===== */
+
     if (!referenceStructure || typeof referenceStructure !== "object") {
       return {
         ok: false,
-        reason: "INVALID_REFERENCE"
+        phase: "ACCESS",
+        reason: "INVALID_REFERENCE_STRUCTURE"
       };
     }
 
     if (!Array.isArray(numericInput)) {
       return {
         ok: false,
+        phase: "ACCESS",
         reason: "INVALID_INPUT_TYPE"
       };
     }
@@ -40,17 +40,40 @@ export class TSL_EG {
       if (typeof v !== "number" || Number.isNaN(v)) {
         return {
           ok: false,
+          phase: "ACCESS",
           reason: "NON_NUMERIC_INPUT"
         };
       }
     }
 
-    const structure = this.ndr.extract(numericInput);   // S1
-    const delta     = this.d.derive(referenceStructure, structure); // Δ
+    /* ===== STRUCTURAL EXTRACTION (S1) ===== */
+
+    const structure = this.ndr.extract(numericInput);
+
+    /* ===== STRUCTURAL ANCHOR ENFORCEMENT ===== */
+
+    // enforce same atom domain implicitly via adapter
+    // enforce same minimum length
+    if (structure.length < referenceStructure.length) {
+      return {
+        ok: false,
+        phase: "STRUCTURE",
+        reason: "STRUCTURE_SHORTER_THAN_REFERENCE",
+        reference: referenceStructure,
+        structure
+      };
+    }
+
+    /* ===== DELTA ===== */
+
+    const delta = this.d.derive(referenceStructure, structure);
+
+    /* ===== RESULT ===== */
 
     return {
       ok: true,
-      reference: referenceStructure, // S0
+      phase: "STRUCTURE",
+      reference: referenceStructure, // S0 (ANCHOR)
       structure,                     // S1
       delta
     };
