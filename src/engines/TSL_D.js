@@ -1,21 +1,13 @@
 // diginetz-api/src/engines/TSL_D.js
 // ----------------------------------------------
-// TSL_D (PURE STRUCTURAL – FINAL)
+// TSL_D (LAW-BASED WITH STRUCTURAL CONTAINMENT)
 // ----------------------------------------------
-// Structural Laws (STRICT):
-// 1. LENGTH
-// 2. ORDER
-// 3. CONTINUITY
-// 4. BOUNDARIES
-// 5. EXTENT (STRUCTURAL, NON-NUMERIC)
-// ----------------------------------------------
-// Principles:
-// - No numeric comparison
-// - No magnitude
-// - No thresholds
-// - EXTENT is descriptive, never decisive
-// - Identity = all core laws identical
-// - Containment = same structure, extended length only
+// Structural Laws:
+// - LENGTH
+// - ORDER
+// - CONTINUITY
+// - BOUNDARIES
+// - EXTENT (classification only)
 // ----------------------------------------------
 
 export class TSL_D {
@@ -28,8 +20,8 @@ export class TSL_D {
     const changes = [];
 
     /* ===== LAW 1: LENGTH ===== */
-    const lengthSame = S0.length === S1.length;
-    if (!lengthSame) {
+    const lengthChanged = S0.length !== S1.length;
+    if (lengthChanged) {
       changes.push({ law: "LENGTH" });
     }
 
@@ -40,7 +32,8 @@ export class TSL_D {
     }
 
     /* ===== LAW 3: CONTINUITY ===== */
-    const continuitySame = this.#equal(S0.continuity, S1.continuity);
+    const continuitySame =
+      this.#equal(S0.continuity, S1.continuity);
     if (!continuitySame) {
       changes.push({ law: "CONTINUITY" });
     }
@@ -54,40 +47,30 @@ export class TSL_D {
       changes.push({ law: "BOUNDARIES" });
     }
 
-    /* ===== LAW 5: EXTENT ===== */
-    // EXTENT is structural annotation only
-    const extentSame = this.#equal(S0.extent, S1.extent);
-    if (!extentSame) {
-      changes.push({ law: "EXTENT" });
-    }
-
-    /* ===== FINAL RELATIONS ===== */
-
-    const identical =
-      lengthSame &&
+    /* ===== LAW 5: EXTENT (STRUCTURAL EXTENSION) ===== */
+    const isExtent =
+      lengthChanged &&
       orderSame &&
       continuitySame &&
       boundariesSame &&
-      extentSame;
+      S1.length > S0.length;
+
+    /* ===== FINAL RELATIONS ===== */
+
+    const identical = changes.length === 0;
 
     const contained =
       !identical &&
-      !orderSame === false &&
-      !continuitySame === false &&
-      !boundariesSame === false &&
-      S1.length > S0.length;
+      isExtent;
 
     const diverged =
       !contained &&
-      (
-        !orderSame ||
-        !boundariesSame
+      changes.some(c =>
+        c.law === "ORDER" || c.law === "BOUNDARIES"
       );
 
     const overlap =
-      !identical &&
-      !contained &&
-      !diverged;
+      !identical && !contained && !diverged;
 
     return {
       engine: "TSL_D",
@@ -98,7 +81,9 @@ export class TSL_D {
       diverged,
 
       deltaCount: changes.length,
-      changes
+      changes: isExtent
+        ? [...changes, { law: "EXTENT" }]
+        : changes
     };
   }
 
