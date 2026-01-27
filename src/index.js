@@ -15,7 +15,10 @@ app.use(cors({
     "https://www.diginetz-template.com"
   ],
   methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type"]
+  allowedHeaders: [
+    "Content-Type",
+    "x-reference-id"
+  ]
 }));
 
 /* ---------- Body ---------- */
