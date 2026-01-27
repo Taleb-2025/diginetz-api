@@ -6,7 +6,7 @@
 // 2. ORDER
 // 3. CONTINUITY
 // 4. BOUNDARIES
-// 5. EXTENT
+// 5. EXTENT  ← مقدار التغيّر البنيوي
 // ----------------------------------------------
 
 export class TSL_NDR {
@@ -29,11 +29,11 @@ export class TSL_NDR {
       }
     }
 
-    const length      = input.length;
-    const order       = this.#deriveOrder(input);
-    const continuity  = this.#deriveContinuity(order);
-    const boundaries  = this.#deriveBoundaries(order);
-    const extent      = this.#deriveExtent(input);
+    const length     = input.length;
+    const order      = this.#deriveOrder(input);
+    const continuity = this.#deriveContinuity(order);
+    const boundaries = this.#deriveBoundaries(order);
+    const extent     = this.#deriveExtent(input);
 
     const fingerprint = this.#fingerprint({
       length,
@@ -60,13 +60,11 @@ export class TSL_NDR {
 
   #deriveOrder(arr) {
     const order = [];
-
     for (let i = 1; i < arr.length; i++) {
       if (arr[i] > arr[i - 1]) order.push("+");
       else if (arr[i] < arr[i - 1]) order.push("-");
       else order.push("=");
     }
-
     return order;
   }
 
@@ -107,20 +105,22 @@ export class TSL_NDR {
   }
 
   /* ================= LAW 5: EXTENT ================= */
+  // مقدار التغيّر الحقيقي بين كل عنصرين متتالين
 
   #deriveExtent(arr) {
-    let min = arr[0];
-    let max = arr[0];
+    const steps = [];
+    let maxStep = 0;
 
     for (let i = 1; i < arr.length; i++) {
-      if (arr[i] < min) min = arr[i];
-      if (arr[i] > max) max = arr[i];
+      const d = Math.abs(arr[i] - arr[i - 1]);
+      steps.push(d);
+      if (d > maxStep) maxStep = d;
     }
 
     return {
-      min,
-      max,
-      span: max - min
+      steps,        // [1,0,2,1,...]
+      maxStep,     // أكبر قفزة
+      total: steps.reduce((a, b) => a + b, 0)
     };
   }
 
