@@ -36,7 +36,7 @@ export class TSL_D {
     const overlap = !identity && !contained && !diverged;
 
     const pressure    = this.#derivePressure(S0, S1);
-    const volatility  = this.#deriveVolatility(S0, S1);
+    const volatility  = this.#deriveVolatility(S1);
     const deformation = this.#deriveDeformation(S0, S1);
 
     const changeMagnitude   = this.#deriveMagnitude(changes, deformation);
@@ -50,6 +50,9 @@ export class TSL_D {
       diverged,
       changeMagnitude
     });
+
+    const directionalImbalance = this.#deriveDirectionalImbalance(S1);
+    const runVariance = this.#deriveRunVariance(S1);
 
     return {
       engine: "TSL_D",
@@ -71,7 +74,10 @@ export class TSL_D {
       changeScope,
       deltaCoherence,
       structuralTrend,
-      containmentPotential
+      containmentPotential,
+
+      directionalImbalance,
+      runVariance
     };
   }
 
@@ -141,7 +147,7 @@ export class TSL_D {
     return "HIGH";
   }
 
-  #deriveVolatility(S0, S1) {
+  #deriveVolatility(S1) {
     if (!Array.isArray(S1.relations)) return "UNKNOWN";
 
     let switches = 0;
@@ -219,5 +225,33 @@ export class TSL_D {
     if (overlap) return "PARTIAL";
     if (diverged) return "NONE";
     return "UNKNOWN";
+  }
+
+  #deriveDirectionalImbalance(S1) {
+    if (!Array.isArray(S1.relations)) return "UNKNOWN";
+
+    let up = 0, down = 0;
+    for (const r of S1.relations) {
+      if (r === "UP") up++;
+      if (r === "DOWN") down++;
+    }
+
+    if (up === down) return "BALANCED";
+    if (up > down) return "UP_DOMINANT";
+    return "DOWN_DOMINANT";
+  }
+
+  #deriveRunVariance(S1) {
+    if (!Array.isArray(S1.runs) || S1.runs.length === 0) {
+      return "UNKNOWN";
+    }
+
+    const lengths = S1.runs.map(r => r.run);
+    const max = Math.max(...lengths);
+    const min = Math.min(...lengths);
+
+    if (max === min) return "UNIFORM";
+    if (max - min <= 1) return "LOW_VARIANCE";
+    return "HIGH_VARIANCE";
   }
 }
