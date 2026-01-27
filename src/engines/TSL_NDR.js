@@ -1,15 +1,19 @@
 // diginetz-api/src/engines/TSL_NDR.js
 // ----------------------------------------------
-// TSL_NDR (PURE STRUCTURAL – FINAL)
+// TSL_NDR (FINAL — PURE STRUCTURAL)
 // ----------------------------------------------
-// Structural Laws ONLY:
+// Structural Laws (FINAL):
 // 1. LENGTH        → عدد الذرات
-// 2. ORDER         → (+ / - / =)
+// 2. ORDER         → اتجاه التغيّر (+ / - / =)
 // 3. CONTINUITY    → تتابع الاتجاهات
-// 4. BOUNDARIES    → بداية / نهاية الاتجاه
-// 5. EXTENT        → نمط التغير البنيوي (NOT numeric)
+// 4. BOUNDARIES    → بداية ونهاية الاتجاه
+// 5. STEP_SHAPE    → شكل القفزات (القيم المطلقة فقط)
 // ----------------------------------------------
-// ❗ لا أرقام، لا فروق، لا قياس
+// مبدأ حاكم:
+// - لا قيمة عددية
+// - لا مقياس
+// - لا دلالة
+// - الشكل فقط
 // ----------------------------------------------
 
 export class TSL_NDR {
@@ -32,18 +36,18 @@ export class TSL_NDR {
       }
     }
 
-    const length     = input.length;
-    const order      = this.#deriveOrder(input);
-    const continuity = this.#deriveContinuity(order);
-    const boundaries = this.#deriveBoundaries(order);
-    const extent     = this.#deriveExtent(order);
+    const length      = input.length;
+    const order       = this.#deriveOrder(input);
+    const continuity  = this.#deriveContinuity(order);
+    const boundaries  = this.#deriveBoundaries(order);
+    const stepShape   = this.#deriveStepShape(input);
 
     const fingerprint = this.#fingerprint({
       length,
       order,
       continuity,
       boundaries,
-      extent
+      stepShape
     });
 
     return {
@@ -53,29 +57,25 @@ export class TSL_NDR {
       order,
       continuity,
       boundaries,
-      extent,
+      stepShape,
 
       fingerprint
     };
   }
 
   /* ================= LAW 2: ORDER ================= */
-  // (+ / - / =)
 
   #deriveOrder(arr) {
     const order = [];
-
     for (let i = 1; i < arr.length; i++) {
       if (arr[i] > arr[i - 1]) order.push("+");
       else if (arr[i] < arr[i - 1]) order.push("-");
       else order.push("=");
     }
-
     return order;
   }
 
   /* ================= LAW 3: CONTINUITY ================= */
-  // runs of same direction
 
   #deriveContinuity(order) {
     if (order.length === 0) return [];
@@ -111,15 +111,17 @@ export class TSL_NDR {
     };
   }
 
-  /* ================= LAW 5: EXTENT ================= */
-  // EXTENT = pattern of structural change
-  // NOT numeric distance
-  // Example:
-  // 121 → [+ , -] → extent = ["Δ","Δ"]
-  // 565 → [+ , -] → extent = ["Δ","Δ"]
+  /* ================= LAW 5: STEP_SHAPE ================= */
+  // القيم المطلقة فقط — الشكل دون قيمة
 
-  #deriveExtent(order) {
-    return order.map(() => "Δ");
+  #deriveStepShape(arr) {
+    const shape = [];
+
+    for (let i = 1; i < arr.length; i++) {
+      shape.push(Math.abs(arr[i] - arr[i - 1]));
+    }
+
+    return shape;
   }
 
   /* ================= FINGERPRINT ================= */
