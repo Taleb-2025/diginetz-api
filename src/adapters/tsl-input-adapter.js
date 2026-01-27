@@ -1,13 +1,12 @@
 // diginetz-api/src/adapters/tsl-input-adapter.js
 // ----------------------------------------------------
-// DefaultTSLAdapter (STRICT)
+// DefaultTSLAdapter (STRICT + DECIMAL WRAPPING)
 // Role:
 // - Accept RAW input from Flow
 // - Convert EVERYTHING into number[]
-// - No parsing semantics
-// - No comma logic
-// - No structure
-// - No cycle awareness
+// - Decimal representation is mandatory
+// - Each decimal number is wrapped into its digits
+// - No semantics, no structure, no decisions
 // ----------------------------------------------------
 
 export class DefaultTSLAdapter {
@@ -21,14 +20,14 @@ export class DefaultTSLAdapter {
        Case 1: Uint8Array / Buffer
        =============================== */
     if (ArrayBuffer.isView(input)) {
-      return Array.from(input, v => this.#assertNumber(v));
+      return this.#wrapArray(Array.from(input));
     }
 
     /* ===============================
        Case 2: number[]
        =============================== */
     if (Array.isArray(input)) {
-      return input.map(v => this.#assertNumber(v));
+      return this.#wrapArray(input);
     }
 
     /* ===============================
@@ -40,21 +39,44 @@ export class DefaultTSLAdapter {
       }
 
       const encoder = new TextEncoder();
-      const bytes = encoder.encode(input); // UTF-8
-      return Array.from(bytes);
+      const bytes = encoder.encode(input); // UTF-8 bytes (0–255)
+      return this.#wrapArray(Array.from(bytes));
     }
 
     /* ===============================
        Case 4: single number
        =============================== */
     if (typeof input === "number") {
-      return [this.#assertNumber(input)];
+      return this.#wrapNumber(input);
     }
 
     /* ===============================
        Anything else is forbidden
        =============================== */
     throw new Error("TSL_ADAPTER_UNSUPPORTED_INPUT");
+  }
+
+  /* ===============================
+     CORE: DECIMAL WRAPPING
+     =============================== */
+
+  #wrapArray(arr) {
+    const out = [];
+    for (const v of arr) {
+      this.#assertNumber(v);
+      out.push(...this.#wrapNumber(v));
+    }
+    return out;
+  }
+
+  #wrapNumber(n) {
+    this.#assertNumber(n);
+
+    // force decimal representation
+    const str = Math.abs(Math.trunc(n)).toString(10);
+
+    // each digit becomes one element
+    return Array.from(str, ch => Number(ch));
   }
 
   /* ===============================
@@ -65,6 +87,5 @@ export class DefaultTSLAdapter {
     if (typeof v !== "number" || !Number.isFinite(v)) {
       throw new Error("TSL_ADAPTER_NON_NUMERIC_VALUE");
     }
-    return v;
   }
 }
