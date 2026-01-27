@@ -1,24 +1,25 @@
 // diginetz-api/src/interpret/TSL_Interpreter.js
 // ----------------------------------------------
-// TSL_Interpreter (Enhanced)
-// Interprets STRUCTURE + DELTA (from TSL_NDR + TSL_D)
-// Structure defines relation
-// Delta defines intensity / drift / break severity
+// TSL_Interpreter (Law-Based, Non-Temporal)
+// Interprets ONLY structural laws + delta result
+// Compatible with:
+// - TSL_NDR (length, order, continuity, boundaries)
+// - TSL_D   (identical, contained, overlap, diverged, changes)
 // ----------------------------------------------
 
 export class TSL_Interpreter {
 
-  interpret({ structure, reference, delta }) {
-    if (!structure || typeof structure !== "object") {
+  interpret({ structure, delta }) {
+    if (!structure || !delta) {
       return this.#undefined();
     }
 
-    const relation_type = this.#deriveRelation(structure, reference);
-    const stability = this.#deriveStability(structure, delta);
-    const structural_break = this.#deriveBreak(structure, reference, delta);
-    const continuity = this.#deriveContinuity(structure, delta);
+    const relation_type = this.#relation(delta);
+    const structural_break = this.#break(delta);
+    const stability = this.#stability(delta);
+    const continuity = this.#continuity(structure, delta);
     const structural_state =
-      this.#deriveState(relation_type, stability, structural_break, delta);
+      this.#state(relation_type, stability, structural_break);
 
     return {
       structural_state,
@@ -31,73 +32,52 @@ export class TSL_Interpreter {
 
   /* ================= RELATION ================= */
 
-  #deriveRelation(S1, S0) {
-    if (!S0) return "UNKNOWN";
-
-    if (S1.fingerprint === S0.fingerprint) {
-      return "STRUCTURAL_IDENTITY";
-    }
-
-    if (this.#isContained(S1.topology, S0.topology)) {
-      return "STRUCTURAL_CONTAINMENT";
-    }
-
-    return "STRUCTURAL_DIVERGENCE";
-  }
-
-  #isContained(inner, outer) {
-    if (!Array.isArray(inner) || !Array.isArray(outer)) return false;
-    if (inner.length > outer.length) return false;
-
-    let j = 0;
-    for (let i = 0; i < outer.length && j < inner.length; i++) {
-      if (outer[i] === inner[j]) j++;
-    }
-    return j === inner.length;
-  }
-
-  /* ================= STABILITY ================= */
-
-  #deriveStability(structure, delta) {
-    if (!delta) return "UNKNOWN";
-
-    if (delta.volatility === "STABLE" && delta.pressure === "LOW") {
-      return "HIGH_STABILITY";
-    }
-
-    if (delta.volatility === "MODERATE" || delta.pressure === "MEDIUM") {
-      return "MEDIUM_STABILITY";
-    }
-
-    return "LOW_STABILITY";
+  #relation(delta) {
+    if (delta.identical) return "STRUCTURAL_IDENTITY";
+    if (delta.contained) return "STRUCTURAL_CONTAINMENT";
+    if (delta.overlap)   return "STRUCTURAL_OVERLAP";
+    if (delta.diverged)  return "STRUCTURAL_DIVERGENCE";
+    return "UNKNOWN";
   }
 
   /* ================= BREAK ================= */
 
-  #deriveBreak(S1, S0, delta) {
-    if (!S0 || !delta) return "NO_BREAK";
+  #break(delta) {
+    const laws = delta.changes.map(c => c.law);
 
-    if (delta.deformation === "GLOBAL") {
+    if (laws.includes("ORDER") || laws.includes("BOUNDARIES")) {
       return "GLOBAL_BREAK";
     }
 
-    if (delta.deformation === "LOCAL") {
+    if (laws.includes("CONTINUITY")) {
       return "LOCAL_BREAK";
     }
 
     return "NO_BREAK";
   }
 
+  /* ================= STABILITY ================= */
+
+  #stability(delta) {
+    if (delta.identical) return "HIGH_STABILITY";
+
+    if (delta.contained && delta.deltaCount <= 1) {
+      return "MEDIUM_STABILITY";
+    }
+
+    return "LOW_STABILITY";
+  }
+
   /* ================= CONTINUITY ================= */
 
-  #deriveContinuity(structure, delta) {
-    if (!delta) return "UNKNOWN";
+  #continuity(structure, delta) {
+    if (!structure?.continuity) return "UNKNOWN";
 
-    if (delta.structuralTrend === "STABILIZING") {
+    if (structure.continuity.length === 1 && delta.identical) {
       return "SUSTAINABLE";
     }
 
-    if (delta.structuralTrend === "DRIFTING") {
+    if (delta.contained) {
       return "AT_RISK";
     }
 
@@ -106,9 +86,9 @@ export class TSL_Interpreter {
 
   /* ================= STATE ================= */
 
-  #deriveState(relation, stability, breakType, delta) {
+  #state(relation, stability, breakType) {
     if (breakType === "GLOBAL_BREAK") return "COLLAPSING";
-    if (breakType === "LOCAL_BREAK") return "FRACTURED";
+    if (breakType === "LOCAL_BREAK")  return "FRACTURED";
 
     if (relation === "STRUCTURAL_IDENTITY" && stability === "HIGH_STABILITY") {
       return "STABLE";
@@ -118,7 +98,7 @@ export class TSL_Interpreter {
       return "CONTAINED";
     }
 
-    if (delta?.structuralTrend === "CHAOTIC") {
+    if (stability === "LOW_STABILITY") {
       return "DRIFTING";
     }
 
