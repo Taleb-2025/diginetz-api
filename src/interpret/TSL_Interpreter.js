@@ -18,11 +18,11 @@ export class TSL_Interpreter {
       return this.#undefined();
     }
 
-    const relation_type     = this.#relation(delta);
-    const structural_break  = this.#break(delta);
-    const stability         = this.#stability(delta);
-    const continuity        = this.#continuity(delta);
-    const structural_state  =
+    const relation_type    = this.#relation(delta);
+    const structural_break = this.#break(delta);
+    const stability        = this.#stability(delta);
+    const continuity       = this.#continuity(delta);
+    const structural_state =
       this.#state(relation_type, stability, structural_break);
 
     return {
@@ -37,17 +37,17 @@ export class TSL_Interpreter {
   /* ================= RELATION ================= */
 
   #relation(delta) {
-    if (delta.identical) return "STRUCTURAL_IDENTITY";
-    if (delta.contained) return "STRUCTURAL_CONTAINMENT";
-    if (delta.overlap)   return "STRUCTURAL_OVERLAP";
-    if (delta.diverged)  return "STRUCTURAL_DIVERGENCE";
+    if (delta.identical === true) return "STRUCTURAL_IDENTITY";
+    if (delta.contained === true) return "STRUCTURAL_CONTAINMENT";
+    if (delta.overlap   === true) return "STRUCTURAL_OVERLAP";
+    if (delta.diverged  === true) return "STRUCTURAL_DIVERGENCE";
     return "UNKNOWN";
   }
 
   /* ================= BREAK ================= */
 
   #break(delta) {
-    const laws = delta.changes.map(c => c.law);
+    const laws = this.#laws(delta);
 
     if (laws.includes("ORDER") || laws.includes("BOUNDARIES")) {
       return "GLOBAL_BREAK";
@@ -63,11 +63,11 @@ export class TSL_Interpreter {
   /* ================= STABILITY ================= */
 
   #stability(delta) {
-    if (delta.identical) {
+    if (delta.identical === true) {
       return "HIGH_STABILITY";
     }
 
-    if (delta.contained) {
+    if (delta.contained === true) {
       return "MEDIUM_STABILITY";
     }
 
@@ -77,9 +77,9 @@ export class TSL_Interpreter {
   /* ================= CONTINUITY ================= */
 
   #continuity(delta) {
-    const laws = delta.changes.map(c => c.law);
+    const laws = this.#laws(delta);
 
-    if (delta.identical) {
+    if (delta.identical === true) {
       return "SUSTAINABLE";
     }
 
@@ -109,6 +109,15 @@ export class TSL_Interpreter {
     }
 
     return "EMERGING";
+  }
+
+  /* ================= INTERNAL ================= */
+
+  #laws(delta) {
+    if (!Array.isArray(delta.changes)) return [];
+    return delta.changes
+      .map(c => c?.law)
+      .filter(Boolean);
   }
 
   #undefined() {
