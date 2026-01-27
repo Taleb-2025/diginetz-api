@@ -1,4 +1,12 @@
 // diginetz-api/src/engines/TSL_NDR.js
+// ----------------------------------------------
+// TSL_NDR (Law-Based, Structural Only)
+// Structural Laws:
+// 1. LENGTH
+// 2. ORDER
+// 3. CONTINUITY
+// 4. BOUNDARIES
+// ----------------------------------------------
 
 export class TSL_NDR {
   constructor(options = {}) {
@@ -34,44 +42,54 @@ export class TSL_NDR {
 
     return {
       engine: "TSL_NDR",
+
       length,
       order,
       continuity,
       boundaries,
+
       fingerprint
     };
   }
 
+  /* ================= LAW 2: ORDER ================= */
+
   #deriveOrder(arr) {
-    const rel = [];
+    const order = [];
+
     for (let i = 1; i < arr.length; i++) {
-      if (arr[i] > arr[i - 1]) rel.push("+");
-      else if (arr[i] < arr[i - 1]) rel.push("-");
-      else rel.push("=");
+      if (arr[i] > arr[i - 1]) order.push("+");
+      else if (arr[i] < arr[i - 1]) order.push("-");
+      else order.push("=");
     }
-    return rel;
+
+    return order;
   }
+
+  /* ================= LAW 3: CONTINUITY ================= */
 
   #deriveContinuity(order) {
     if (order.length === 0) return [];
 
     const runs = [];
     let current = order[0];
-    let count = 1;
+    let len = 1;
 
     for (let i = 1; i < order.length; i++) {
       if (order[i] === current) {
-        count++;
+        len++;
       } else {
-        runs.push({ dir: current, len: count });
+        runs.push({ dir: current, len });
         current = order[i];
-        count = 1;
+        len = 1;
       }
     }
 
-    runs.push({ dir: current, len: count });
+    runs.push({ dir: current, len });
     return runs;
   }
+
+  /* ================= LAW 4: BOUNDARIES ================= */
 
   #deriveBoundaries(order) {
     if (order.length === 0) {
@@ -83,6 +101,8 @@ export class TSL_NDR {
       end: order[order.length - 1]
     };
   }
+
+  /* ================= FINGERPRINT ================= */
 
   #fingerprint(structure) {
     const stable = this.#stableStringify(structure);
