@@ -1,24 +1,28 @@
 // diginetz-api/src/interpret/TSL_Interpreter.js
 // ----------------------------------------------
-// TSL_Interpreter (Law-Based, Non-Temporal)
-// Interprets ONLY structural laws + delta result
-// Compatible with:
-// - TSL_NDR (length, order, continuity, boundaries)
-// - TSL_D   (identical, contained, overlap, diverged, changes)
+// TSL_Interpreter (STRICT LAW-BASED)
+// ----------------------------------------------
+// قواعد صارمة:
+// - لا وصف
+// - لا عدّ
+// - لا فحص شكل داخلي
+// - يعتمد فقط على:
+//   • قوانين تغيّرت (delta.changes[].law)
+//   • علاقات delta (identical / contained / overlap / diverged)
 // ----------------------------------------------
 
 export class TSL_Interpreter {
 
-  interpret({ structure, delta }) {
-    if (!structure || !delta) {
+  interpret({ delta }) {
+    if (!delta || typeof delta !== "object") {
       return this.#undefined();
     }
 
-    const relation_type = this.#relation(delta);
-    const structural_break = this.#break(delta);
-    const stability = this.#stability(delta);
-    const continuity = this.#continuity(structure, delta);
-    const structural_state =
+    const relation_type     = this.#relation(delta);
+    const structural_break  = this.#break(delta);
+    const stability         = this.#stability(delta);
+    const continuity        = this.#continuity(delta);
+    const structural_state  =
       this.#state(relation_type, stability, structural_break);
 
     return {
@@ -59,9 +63,11 @@ export class TSL_Interpreter {
   /* ================= STABILITY ================= */
 
   #stability(delta) {
-    if (delta.identical) return "HIGH_STABILITY";
+    if (delta.identical) {
+      return "HIGH_STABILITY";
+    }
 
-    if (delta.contained && delta.deltaCount <= 1) {
+    if (delta.contained) {
       return "MEDIUM_STABILITY";
     }
 
@@ -70,14 +76,14 @@ export class TSL_Interpreter {
 
   /* ================= CONTINUITY ================= */
 
-  #continuity(structure, delta) {
-    if (!structure?.continuity) return "UNKNOWN";
+  #continuity(delta) {
+    const laws = delta.changes.map(c => c.law);
 
-    if (structure.continuity.length === 1 && delta.identical) {
+    if (delta.identical) {
       return "SUSTAINABLE";
     }
 
-    if (delta.contained) {
+    if (!laws.includes("ORDER") && !laws.includes("BOUNDARIES")) {
       return "AT_RISK";
     }
 
