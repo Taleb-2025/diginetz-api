@@ -7,6 +7,7 @@
 // - ORDER
 // - CONTINUITY
 // - BOUNDARIES
+// - EXTENT
 // ----------------------------------------------
 // الاحتواء = S0 ⊆ S1 بنيويًا
 // ----------------------------------------------
@@ -21,7 +22,8 @@ export class TSL_D {
     const changes = [];
 
     /* ===== LAW 1: LENGTH ===== */
-    if (S0.length !== S1.length) {
+    const lengthChanged = S0.length !== S1.length;
+    if (lengthChanged) {
       changes.push({ law: "LENGTH" });
     }
 
@@ -39,11 +41,24 @@ export class TSL_D {
     }
 
     /* ===== LAW 4: BOUNDARIES ===== */
-    if (
-      S0.boundaries?.start !== S1.boundaries?.start ||
-      S0.boundaries?.end   !== S1.boundaries?.end
-    ) {
+    const boundariesSame =
+      S0.boundaries?.start === S1.boundaries?.start &&
+      S0.boundaries?.end   === S1.boundaries?.end;
+
+    if (!boundariesSame) {
       changes.push({ law: "BOUNDARIES" });
+    }
+
+    /* ===== LAW 5: EXTENT ===== */
+    const isExtent =
+      lengthChanged &&
+      orderContained &&
+      continuityContained &&
+      boundariesSame &&
+      this.#isPrefix(S0.order, S1.order);
+
+    if (isExtent) {
+      changes.push({ law: "EXTENT" });
     }
 
     /* ===== FINAL RELATIONS ===== */
@@ -53,7 +68,8 @@ export class TSL_D {
     const contained =
       !identical &&
       orderContained &&
-      continuityContained;
+      continuityContained &&
+      boundariesSame;
 
     const diverged =
       !contained &&
@@ -94,6 +110,14 @@ export class TSL_D {
       }
     }
     return false;
+  }
+
+  #isPrefix(a = [], b = []) {
+    if (a.length > b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!this.#equal(a[i], b[i])) return false;
+    }
+    return true;
   }
 
   #equal(a, b) {
