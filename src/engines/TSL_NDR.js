@@ -6,6 +6,7 @@
 // 2. ORDER
 // 3. CONTINUITY
 // 4. BOUNDARIES
+// 5. EXTENT
 // ----------------------------------------------
 
 export class TSL_NDR {
@@ -28,16 +29,18 @@ export class TSL_NDR {
       }
     }
 
-    const length = input.length;
-    const order = this.#deriveOrder(input);
-    const continuity = this.#deriveContinuity(order);
-    const boundaries = this.#deriveBoundaries(order);
+    const length      = input.length;
+    const order       = this.#deriveOrder(input);
+    const continuity  = this.#deriveContinuity(order);
+    const boundaries  = this.#deriveBoundaries(order);
+    const extent      = this.#deriveExtent(input);
 
     const fingerprint = this.#fingerprint({
       length,
       order,
       continuity,
-      boundaries
+      boundaries,
+      extent
     });
 
     return {
@@ -47,6 +50,7 @@ export class TSL_NDR {
       order,
       continuity,
       boundaries,
+      extent,
 
       fingerprint
     };
@@ -99,6 +103,24 @@ export class TSL_NDR {
     return {
       start: order[0],
       end: order[order.length - 1]
+    };
+  }
+
+  /* ================= LAW 5: EXTENT ================= */
+
+  #deriveExtent(arr) {
+    let min = arr[0];
+    let max = arr[0];
+
+    for (let i = 1; i < arr.length; i++) {
+      if (arr[i] < min) min = arr[i];
+      if (arr[i] > max) max = arr[i];
+    }
+
+    return {
+      min,
+      max,
+      span: max - min
     };
   }
 
