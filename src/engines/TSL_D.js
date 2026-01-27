@@ -2,14 +2,12 @@
 // ----------------------------------------------
 // TSL_D (LAW-BASED WITH STRUCTURAL CONTAINMENT)
 // ----------------------------------------------
-// قوانين معتمدة فقط:
+// Structural Laws:
 // - LENGTH
 // - ORDER
 // - CONTINUITY
 // - BOUNDARIES
-// - EXTENT
-// ----------------------------------------------
-// الاحتواء = S0 ⊆ S1 بنيويًا
+// - EXTENT (classification only)
 // ----------------------------------------------
 
 export class TSL_D {
@@ -28,15 +26,15 @@ export class TSL_D {
     }
 
     /* ===== LAW 2: ORDER ===== */
-    const orderContained = this.#isContained(S0.order, S1.order);
-    if (!orderContained) {
+    const orderSame = this.#equal(S0.order, S1.order);
+    if (!orderSame) {
       changes.push({ law: "ORDER" });
     }
 
     /* ===== LAW 3: CONTINUITY ===== */
-    const continuityContained =
-      this.#isContained(S0.continuity, S1.continuity);
-    if (!continuityContained) {
+    const continuitySame =
+      this.#equal(S0.continuity, S1.continuity);
+    if (!continuitySame) {
       changes.push({ law: "CONTINUITY" });
     }
 
@@ -49,17 +47,13 @@ export class TSL_D {
       changes.push({ law: "BOUNDARIES" });
     }
 
-    /* ===== LAW 5: EXTENT ===== */
+    /* ===== LAW 5: EXTENT (STRUCTURAL EXTENSION) ===== */
     const isExtent =
       lengthChanged &&
-      orderContained &&
-      continuityContained &&
+      orderSame &&
+      continuitySame &&
       boundariesSame &&
-      this.#isPrefix(S0.order, S1.order);
-
-    if (isExtent) {
-      changes.push({ law: "EXTENT" });
-    }
+      S1.length > S0.length;
 
     /* ===== FINAL RELATIONS ===== */
 
@@ -67,9 +61,7 @@ export class TSL_D {
 
     const contained =
       !identical &&
-      orderContained &&
-      continuityContained &&
-      boundariesSame;
+      isExtent;
 
     const diverged =
       !contained &&
@@ -89,36 +81,13 @@ export class TSL_D {
       diverged,
 
       deltaCount: changes.length,
-      changes
+      changes: isExtent
+        ? [...changes, { law: "EXTENT" }]
+        : changes
     };
   }
 
-  /* =====================================
-     INTERNAL — STRUCTURAL CONTAINMENT
-     ===================================== */
-
-  #isContained(inner = [], outer = []) {
-    if (!Array.isArray(inner) || !Array.isArray(outer)) return false;
-    if (inner.length === 0) return true;
-    if (inner.length > outer.length) return false;
-
-    let j = 0;
-    for (let i = 0; i < outer.length; i++) {
-      if (this.#equal(inner[j], outer[i])) {
-        j++;
-        if (j === inner.length) return true;
-      }
-    }
-    return false;
-  }
-
-  #isPrefix(a = [], b = []) {
-    if (a.length > b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-      if (!this.#equal(a[i], b[i])) return false;
-    }
-    return true;
-  }
+  /* ================= INTERNAL ================= */
 
   #equal(a, b) {
     return JSON.stringify(a) === JSON.stringify(b);
