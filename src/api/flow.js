@@ -56,7 +56,8 @@ router.post("/init", (req, res) => {
     return res.json({
       ok: true,
       phase: "INIT",
-      referenceId: ref.referenceId
+      referenceId: ref.referenceId,
+      referenceStructure: structure   // ← أضيفت هنا
     });
 
   } catch (err) {
@@ -100,7 +101,7 @@ router.post("/execute", (req, res) => {
 
     const interpretation = interpreter.interpret({
       structure: exec.structure,
-      reference
+      delta: exec.delta
     });
 
     const decision = TSL_Decision({
