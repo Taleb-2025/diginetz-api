@@ -1,12 +1,15 @@
 // diginetz-api/src/engines/TSL_NDR.js
 // ----------------------------------------------
-// TSL_NDR (Law-Based, Structural Only)
-// Structural Laws:
-// 1. LENGTH
-// 2. ORDER
-// 3. CONTINUITY
-// 4. BOUNDARIES
-// 5. EXTENT  ← مقدار التغيّر البنيوي
+// TSL_NDR (PURE STRUCTURAL – FINAL)
+// ----------------------------------------------
+// Structural Laws ONLY:
+// 1. LENGTH        → عدد الذرات
+// 2. ORDER         → (+ / - / =)
+// 3. CONTINUITY    → تتابع الاتجاهات
+// 4. BOUNDARIES    → بداية / نهاية الاتجاه
+// 5. EXTENT        → نمط التغير البنيوي (NOT numeric)
+// ----------------------------------------------
+// ❗ لا أرقام، لا فروق، لا قياس
 // ----------------------------------------------
 
 export class TSL_NDR {
@@ -33,7 +36,7 @@ export class TSL_NDR {
     const order      = this.#deriveOrder(input);
     const continuity = this.#deriveContinuity(order);
     const boundaries = this.#deriveBoundaries(order);
-    const extent     = this.#deriveExtent(input);
+    const extent     = this.#deriveExtent(order);
 
     const fingerprint = this.#fingerprint({
       length,
@@ -57,18 +60,22 @@ export class TSL_NDR {
   }
 
   /* ================= LAW 2: ORDER ================= */
+  // (+ / - / =)
 
   #deriveOrder(arr) {
     const order = [];
+
     for (let i = 1; i < arr.length; i++) {
       if (arr[i] > arr[i - 1]) order.push("+");
       else if (arr[i] < arr[i - 1]) order.push("-");
       else order.push("=");
     }
+
     return order;
   }
 
   /* ================= LAW 3: CONTINUITY ================= */
+  // runs of same direction
 
   #deriveContinuity(order) {
     if (order.length === 0) return [];
@@ -105,23 +112,14 @@ export class TSL_NDR {
   }
 
   /* ================= LAW 5: EXTENT ================= */
-  // مقدار التغيّر الحقيقي بين كل عنصرين متتالين
+  // EXTENT = pattern of structural change
+  // NOT numeric distance
+  // Example:
+  // 121 → [+ , -] → extent = ["Δ","Δ"]
+  // 565 → [+ , -] → extent = ["Δ","Δ"]
 
-  #deriveExtent(arr) {
-    const steps = [];
-    let maxStep = 0;
-
-    for (let i = 1; i < arr.length; i++) {
-      const d = Math.abs(arr[i] - arr[i - 1]);
-      steps.push(d);
-      if (d > maxStep) maxStep = d;
-    }
-
-    return {
-      steps,        // [1,0,2,1,...]
-      maxStep,     // أكبر قفزة
-      total: steps.reduce((a, b) => a + b, 0)
-    };
+  #deriveExtent(order) {
+    return order.map(() => "Δ");
   }
 
   /* ================= FINGERPRINT ================= */
