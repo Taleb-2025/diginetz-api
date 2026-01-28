@@ -4,49 +4,54 @@ export class TSL_D {
       throw new Error("TSL_D: invalid structures");
     }
 
-    const orderSame =
-      JSON.stringify(S0.order) === JSON.stringify(S1.order);
+    const changes = [];
+
+    const lengthSame = S0.length === S1.length;
+    if (!lengthSame) changes.push({ law: "LENGTH" });
+
+    const orderSame = JSON.stringify(S0.order) === JSON.stringify(S1.order);
+    if (!orderSame) changes.push({ law: "ORDER" });
 
     const continuitySame =
       JSON.stringify(S0.continuity) === JSON.stringify(S1.continuity);
+    if (!continuitySame) changes.push({ law: "CONTINUITY" });
 
     const boundariesSame =
       S0.boundaries?.start === S1.boundaries?.start &&
       S0.boundaries?.end === S1.boundaries?.end;
+    if (!boundariesSame) changes.push({ law: "BOUNDARIES" });
 
-    const lengthSame = S0.length === S1.length;
-
-    const STRUCTURAL_IDENTITY =
+    const identical =
       lengthSame &&
       orderSame &&
       continuitySame &&
       boundariesSame;
 
-    const STRUCTURAL_CONTAINMENT =
-      !STRUCTURAL_IDENTITY &&
+    const contained =
+      !identical &&
       orderSame &&
       continuitySame &&
-      boundariesSame;
+      boundariesSame &&
+      S1.length > S0.length;
 
-    const STRUCTURAL_ATTENTION_BREAK =
-      !STRUCTURAL_IDENTITY &&
-      !lengthSame &&
-      orderSame &&
-      continuitySame &&
-      boundariesSame;
+    const diverged =
+      !identical &&
+      !contained &&
+      (!orderSame || !boundariesSame);
 
-    const STRUCTURAL_DANGER_BREAK =
-      !STRUCTURAL_IDENTITY &&
-      (!orderSame || !continuitySame || !boundariesSame);
+    const overlap =
+      !identical &&
+      !contained &&
+      !diverged;
 
     return {
       engine: "TSL_D",
-      STRUCTURAL_IDENTITY,
-      STRUCTURAL_CONTAINMENT,
-      STRUCTURAL_ATTENTION_BREAK,
-      STRUCTURAL_DANGER_BREAK,
-      deltaCount: STRUCTURAL_IDENTITY ? 0 : 1,
-      changes: STRUCTURAL_IDENTITY ? [] : [{ law: "STRUCTURE" }]
+      identical,
+      contained,
+      overlap,
+      diverged,
+      deltaCount: changes.length,
+      changes
     };
   }
 }
