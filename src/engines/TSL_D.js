@@ -9,11 +9,10 @@ export class TSL_D {
     const lengthSame = S0.length === S1.length;
     if (!lengthSame) changes.push({ law: "LENGTH" });
 
-    const orderSame = JSON.stringify(S0.order) === JSON.stringify(S1.order);
+    const orderSame = this.#equal(S0.order, S1.order);
     if (!orderSame) changes.push({ law: "ORDER" });
 
-    const continuitySame =
-      JSON.stringify(S0.continuity) === JSON.stringify(S1.continuity);
+    const continuitySame = this.#equal(S0.continuity, S1.continuity);
     if (!continuitySame) changes.push({ law: "CONTINUITY" });
 
     const boundariesSame =
@@ -37,7 +36,7 @@ export class TSL_D {
     const diverged =
       !identical &&
       !contained &&
-      (!orderSame || !boundariesSame);
+      (!orderSame || !continuitySame || !boundariesSame);
 
     const overlap =
       !identical &&
@@ -53,5 +52,9 @@ export class TSL_D {
       deltaCount: changes.length,
       changes
     };
+  }
+
+  #equal(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
   }
 }
