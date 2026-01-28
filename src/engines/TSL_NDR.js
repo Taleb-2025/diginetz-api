@@ -54,20 +54,20 @@ export class TSL_NDR {
     if (order.length === 0) return [];
 
     const runs = [];
-    let dir = order[0];
+    let current = order[0];
     let len = 1;
 
     for (let i = 1; i < order.length; i++) {
-      if (order[i] === dir) {
+      if (order[i] === current) {
         len++;
       } else {
-        runs.push({ dir, len });
-        dir = order[i];
+        runs.push({ dir: current, len });
+        current = order[i];
         len = 1;
       }
     }
 
-    runs.push({ dir, len });
+    runs.push({ dir: current, len });
     return runs;
   }
 
