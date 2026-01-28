@@ -1,11 +1,4 @@
 // diginetz-api/src/execution/TSL_EG.js
-// ----------------------------------------------
-// TSL_EG (STRICT STRUCTURAL GATE)
-// - No interpretation
-// - No policy
-// - No AE / STS / Dropper
-// - Enforces S0 as structural anchor
-// ----------------------------------------------
 
 export class TSL_EG {
   constructor({ ndr, d }) {
@@ -18,7 +11,7 @@ export class TSL_EG {
   }
 
   executeWithReference(referenceStructure, numericInput) {
-    /* ===== VALIDATION ===== */
+    /* ===== BASIC VALIDATION ===== */
 
     if (!referenceStructure || typeof referenceStructure !== "object") {
       return {
@@ -46,25 +39,20 @@ export class TSL_EG {
       }
     }
 
-    /* ===== STRUCTURAL EXTRACTION (S1) ===== */
+    /* ===== STRUCTURE EXTRACTION (S1) ===== */
 
-    const structure = this.ndr.extract(numericInput);
-
-    /* ===== STRUCTURAL ANCHOR ENFORCEMENT ===== */
-
-    // enforce same atom domain implicitly via adapter
-    // enforce same minimum length
-    if (structure.length < referenceStructure.length) {
+    let structure;
+    try {
+      structure = this.ndr.extract(numericInput);
+    } catch (err) {
       return {
         ok: false,
         phase: "STRUCTURE",
-        reason: "STRUCTURE_SHORTER_THAN_REFERENCE",
-        reference: referenceStructure,
-        structure
+        reason: err.message
       };
     }
 
-    /* ===== DELTA ===== */
+    /* ===== STRUCTURAL COMPARISON ===== */
 
     const delta = this.d.derive(referenceStructure, structure);
 
@@ -73,7 +61,7 @@ export class TSL_EG {
     return {
       ok: true,
       phase: "STRUCTURE",
-      reference: referenceStructure, // S0 (ANCHOR)
+      reference: referenceStructure, // S0
       structure,                     // S1
       delta
     };
