@@ -7,15 +7,15 @@
 // 2. ORDER
 // 3. CONTINUITY
 // 4. BOUNDARIES
-// 5. STEP_PATTERN   ← شكل القفزات (العلاقة فقط)
+// 5. EXTENT (STRUCTURAL, NON-NUMERIC)
 // ----------------------------------------------
 // Principles:
 // - No numeric comparison
 // - No magnitude
 // - No thresholds
-// - STEP_PATTERN is structural, decisive for identity
-// - Identity = all laws identical
-// - Containment = same structure, longer length only
+// - EXTENT is descriptive, never decisive
+// - Identity = all core laws identical
+// - Containment = same structure, extended length only
 // ----------------------------------------------
 
 export class TSL_D {
@@ -54,12 +54,11 @@ export class TSL_D {
       changes.push({ law: "BOUNDARIES" });
     }
 
-    /* ===== LAW 5: STEP_PATTERN ===== */
-    const stepPatternSame =
-      this.#equal(S0.stepPattern, S1.stepPattern);
-
-    if (!stepPatternSame) {
-      changes.push({ law: "STEP_PATTERN" });
+    /* ===== LAW 5: EXTENT ===== */
+    // EXTENT is structural annotation only
+    const extentSame = this.#equal(S0.extent, S1.extent);
+    if (!extentSame) {
+      changes.push({ law: "EXTENT" });
     }
 
     /* ===== FINAL RELATIONS ===== */
@@ -69,22 +68,20 @@ export class TSL_D {
       orderSame &&
       continuitySame &&
       boundariesSame &&
-      stepPatternSame;
+      extentSame;
 
     const contained =
       !identical &&
-      orderSame &&
-      continuitySame &&
-      boundariesSame &&
-      stepPatternSame &&
+      !orderSame === false &&
+      !continuitySame === false &&
+      !boundariesSame === false &&
       S1.length > S0.length;
 
     const diverged =
       !contained &&
       (
         !orderSame ||
-        !boundariesSame ||
-        !stepPatternSame
+        !boundariesSame
       );
 
     const overlap =
