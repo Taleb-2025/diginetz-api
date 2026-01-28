@@ -9,7 +9,13 @@ export function TSL_StructuralDecision({
   aeReport
 }) {
 
-  /* ========= HARD DENY FIRST ========= */
+  /* ========= ABSOLUTE IDENTITY ========= */
+
+  if (relation_type === "STRUCTURAL_IDENTITY") {
+    return allow("STRUCTURAL_IDENTITY");
+  }
+
+  /* ========= HARD DENY ========= */
 
   if (aeReport?.securityFlag === "ALERT") {
     return deny("ABSENCE_EXECUTION_ALERT");
@@ -27,24 +33,18 @@ export function TSL_StructuralDecision({
     return deny("UNSUSTAINABLE_STRUCTURE");
   }
 
-  /* ========= STRICT STRUCTURAL LOGIC ========= */
+  /* ========= STRUCTURAL LOGIC ========= */
 
-  // الهوية: مسموحة فقط
-  if (relation_type === "STRUCTURAL_IDENTITY") {
-    return allow("STRUCTURAL_IDENTITY");
-  }
-
-  // الاحتواء: مسموح فقط إذا كان مستقرًا
   if (
     relation_type === "STRUCTURAL_CONTAINMENT" &&
     stability !== "LOW_STABILITY"
   ) {
-    return allow("STRUCTURAL_CONTAINMENT_OK");
+    return allow("STRUCTURAL_CONTAINMENT");
   }
 
-  /* ========= EVERYTHING ELSE = DENY ========= */
+  /* ========= DEFAULT ========= */
 
-  return deny("NOT_CONTAINED");
+  return deny("STRUCTURAL_BREAK");
 }
 
 /* ========= HELPERS ========= */
