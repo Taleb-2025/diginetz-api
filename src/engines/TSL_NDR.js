@@ -1,13 +1,3 @@
-// diginetz-api/src/engines/TSL_NDR.js
-// ----------------------------------------------
-// TSL_NDR (STRICT STRUCTURAL)
-// Structural Laws:
-// 1. LENGTH
-// 2. ORDER
-// 3. CONTINUITY (ORDER + EXTENT)
-// 4. BOUNDARIES
-// ----------------------------------------------
-
 export class TSL_NDR {
   constructor(options = {}) {
     this.minLength = options.minLength ?? 2;
@@ -30,8 +20,7 @@ export class TSL_NDR {
 
     const length     = input.length;
     const order      = this.#deriveOrder(input);
-    const extent     = this.#deriveExtent(input);
-    const continuity = this.#deriveContinuity(order, extent);
+    const continuity = this.#deriveContinuity(order);
     const boundaries = this.#deriveBoundaries(order);
 
     const fingerprint = this.#fingerprint({
@@ -51,8 +40,6 @@ export class TSL_NDR {
     };
   }
 
-  /* ================= LAW 2: ORDER ================= */
-
   #deriveOrder(arr) {
     const order = [];
     for (let i = 1; i < arr.length; i++) {
@@ -63,53 +50,26 @@ export class TSL_NDR {
     return order;
   }
 
-  /* ================= EXTENT ================= */
-
-  #deriveExtent(arr) {
-    const steps = [];
-    for (let i = 1; i < arr.length; i++) {
-      steps.push(Math.abs(arr[i] - arr[i - 1]));
-    }
-    return steps;
-  }
-
-  /* ================= LAW 3: CONTINUITY ================= */
-  // الاستمرار = (dir + len + extent-pattern)
-
-  #deriveContinuity(order, extent) {
+  #deriveContinuity(order) {
     if (order.length === 0) return [];
 
     const runs = [];
-    let currentDir = order[0];
+    let dir = order[0];
     let len = 1;
-    let stepPattern = [extent[0]];
 
     for (let i = 1; i < order.length; i++) {
-      if (order[i] === currentDir) {
+      if (order[i] === dir) {
         len++;
-        stepPattern.push(extent[i]);
       } else {
-        runs.push({
-          dir: currentDir,
-          len,
-          extent: stepPattern.slice()
-        });
-        currentDir = order[i];
+        runs.push({ dir, len });
+        dir = order[i];
         len = 1;
-        stepPattern = [extent[i]];
       }
     }
 
-    runs.push({
-      dir: currentDir,
-      len,
-      extent: stepPattern.slice()
-    });
-
+    runs.push({ dir, len });
     return runs;
   }
-
-  /* ================= LAW 4: BOUNDARIES ================= */
 
   #deriveBoundaries(order) {
     if (order.length === 0) {
@@ -121,8 +81,6 @@ export class TSL_NDR {
       end: order[order.length - 1]
     };
   }
-
-  /* ================= FINGERPRINT ================= */
 
   #fingerprint(structure) {
     const stable = this.#stableStringify(structure);
