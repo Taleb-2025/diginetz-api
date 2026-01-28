@@ -4,41 +4,30 @@ export class TSL_D {
       throw new Error("TSL_D: invalid structures");
     }
 
-    const changes = [];
+    const orderSame =
+      JSON.stringify(S0.order) === JSON.stringify(S1.order);
 
-    const lengthSame = S0.length === S1.length;
-    if (!lengthSame) changes.push({ law: "LENGTH" });
-
-    const orderSame = this.#equal(S0.order, S1.order);
-    if (!orderSame) changes.push({ law: "ORDER" });
-
-    const continuitySame = this.#equal(S0.continuity, S1.continuity);
-    if (!continuitySame) changes.push({ law: "CONTINUITY" });
+    const continuitySame =
+      JSON.stringify(S0.continuity) === JSON.stringify(S1.continuity);
 
     const boundariesSame =
       S0.boundaries?.start === S1.boundaries?.start &&
       S0.boundaries?.end === S1.boundaries?.end;
 
-    if (!boundariesSame) changes.push({ law: "BOUNDARIES" });
+    const lengthSame = S0.length === S1.length;
 
-    /* ================= الحالات البنيوية ================= */
-
-    // 1️⃣ تطابق بنيوي كامل
     const STRUCTURAL_IDENTITY =
       lengthSame &&
       orderSame &&
       continuitySame &&
       boundariesSame;
 
-    // 2️⃣ احتواء نسقي (نفس الشكل – مجال عددي مختلف)
     const STRUCTURAL_CONTAINMENT =
       !STRUCTURAL_IDENTITY &&
-      lengthSame &&
       orderSame &&
       continuitySame &&
       boundariesSame;
 
-    // 3️⃣ كسر انتباه (امتداد / نقص طولي فقط)
     const STRUCTURAL_ATTENTION_BREAK =
       !STRUCTURAL_IDENTITY &&
       !lengthSame &&
@@ -46,25 +35,18 @@ export class TSL_D {
       continuitySame &&
       boundariesSame;
 
-    // 4️⃣ كسر خطر (أي تغيير في النسق)
     const STRUCTURAL_DANGER_BREAK =
       !STRUCTURAL_IDENTITY &&
       (!orderSame || !continuitySame || !boundariesSame);
 
     return {
       engine: "TSL_D",
-
       STRUCTURAL_IDENTITY,
       STRUCTURAL_CONTAINMENT,
       STRUCTURAL_ATTENTION_BREAK,
       STRUCTURAL_DANGER_BREAK,
-
-      deltaCount: changes.length,
-      changes
+      deltaCount: STRUCTURAL_IDENTITY ? 0 : 1,
+      changes: STRUCTURAL_IDENTITY ? [] : [{ law: "STRUCTURE" }]
     };
-  }
-
-  #equal(a, b) {
-    return JSON.stringify(a) === JSON.stringify(b);
   }
 }
