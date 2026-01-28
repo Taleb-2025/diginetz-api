@@ -1,19 +1,11 @@
 // diginetz-api/src/engines/TSL_NDR.js
 // ----------------------------------------------
-// TSL_NDR (FINAL — PURE STRUCTURAL)
-// ----------------------------------------------
-// Structural Laws (FINAL):
-// 1. LENGTH        → عدد الذرات
-// 2. ORDER         → اتجاه التغيّر (+ / - / =)
-// 3. CONTINUITY    → تتابع الاتجاهات
-// 4. BOUNDARIES    → بداية ونهاية الاتجاه
-// 5. STEP_SHAPE    → شكل القفزات (القيم المطلقة فقط)
-// ----------------------------------------------
-// مبدأ حاكم:
-// - لا قيمة عددية
-// - لا مقياس
-// - لا دلالة
-// - الشكل فقط
+// TSL_NDR (STRICT STRUCTURAL)
+// Structural Laws:
+// 1. LENGTH
+// 2. ORDER
+// 3. CONTINUITY (ORDER + EXTENT)
+// 4. BOUNDARIES
 // ----------------------------------------------
 
 export class TSL_NDR {
@@ -36,29 +28,25 @@ export class TSL_NDR {
       }
     }
 
-    const length      = input.length;
-    const order       = this.#deriveOrder(input);
-    const continuity  = this.#deriveContinuity(order);
-    const boundaries  = this.#deriveBoundaries(order);
-    const stepShape   = this.#deriveStepShape(input);
+    const length     = input.length;
+    const order      = this.#deriveOrder(input);
+    const extent     = this.#deriveExtent(input);
+    const continuity = this.#deriveContinuity(order, extent);
+    const boundaries = this.#deriveBoundaries(order);
 
     const fingerprint = this.#fingerprint({
       length,
       order,
       continuity,
-      boundaries,
-      stepShape
+      boundaries
     });
 
     return {
       engine: "TSL_NDR",
-
       length,
       order,
       continuity,
       boundaries,
-      stepShape,
-
       fingerprint
     };
   }
@@ -75,26 +63,49 @@ export class TSL_NDR {
     return order;
   }
 
-  /* ================= LAW 3: CONTINUITY ================= */
+  /* ================= EXTENT ================= */
 
-  #deriveContinuity(order) {
+  #deriveExtent(arr) {
+    const steps = [];
+    for (let i = 1; i < arr.length; i++) {
+      steps.push(Math.abs(arr[i] - arr[i - 1]));
+    }
+    return steps;
+  }
+
+  /* ================= LAW 3: CONTINUITY ================= */
+  // الاستمرار = (dir + len + extent-pattern)
+
+  #deriveContinuity(order, extent) {
     if (order.length === 0) return [];
 
     const runs = [];
-    let current = order[0];
+    let currentDir = order[0];
     let len = 1;
+    let stepPattern = [extent[0]];
 
     for (let i = 1; i < order.length; i++) {
-      if (order[i] === current) {
+      if (order[i] === currentDir) {
         len++;
+        stepPattern.push(extent[i]);
       } else {
-        runs.push({ dir: current, len });
-        current = order[i];
+        runs.push({
+          dir: currentDir,
+          len,
+          extent: stepPattern.slice()
+        });
+        currentDir = order[i];
         len = 1;
+        stepPattern = [extent[i]];
       }
     }
 
-    runs.push({ dir: current, len });
+    runs.push({
+      dir: currentDir,
+      len,
+      extent: stepPattern.slice()
+    });
+
     return runs;
   }
 
@@ -109,19 +120,6 @@ export class TSL_NDR {
       start: order[0],
       end: order[order.length - 1]
     };
-  }
-
-  /* ================= LAW 5: STEP_SHAPE ================= */
-  // القيم المطلقة فقط — الشكل دون قيمة
-
-  #deriveStepShape(arr) {
-    const shape = [];
-
-    for (let i = 1; i < arr.length; i++) {
-      shape.push(Math.abs(arr[i] - arr[i - 1]));
-    }
-
-    return shape;
   }
 
   /* ================= FINGERPRINT ================= */
