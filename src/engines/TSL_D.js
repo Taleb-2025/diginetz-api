@@ -21,35 +21,44 @@ export class TSL_D {
 
     if (!boundariesSame) changes.push({ law: "BOUNDARIES" });
 
-    const identical =
+    /* ================= الحالات البنيوية ================= */
+
+    // 1️⃣ تطابق بنيوي كامل
+    const STRUCTURAL_IDENTITY =
       lengthSame &&
       orderSame &&
       continuitySame &&
       boundariesSame;
 
-    const contained =
-      !identical &&
+    // 2️⃣ احتواء نسقي (نفس الشكل – مجال عددي مختلف)
+    const STRUCTURAL_CONTAINMENT =
+      !STRUCTURAL_IDENTITY &&
+      lengthSame &&
       orderSame &&
       continuitySame &&
-      boundariesSame &&
-      S1.length > S0.length;
+      boundariesSame;
 
-    const diverged =
-      !identical &&
-      !contained &&
-      (!orderSame || !boundariesSame);
+    // 3️⃣ كسر انتباه (امتداد / نقص طولي فقط)
+    const STRUCTURAL_ATTENTION_BREAK =
+      !STRUCTURAL_IDENTITY &&
+      !lengthSame &&
+      orderSame &&
+      continuitySame &&
+      boundariesSame;
 
-    const overlap =
-      !identical &&
-      !contained &&
-      !diverged;
+    // 4️⃣ كسر خطر (أي تغيير في النسق)
+    const STRUCTURAL_DANGER_BREAK =
+      !STRUCTURAL_IDENTITY &&
+      (!orderSame || !continuitySame || !boundariesSame);
 
     return {
       engine: "TSL_D",
-      identical,
-      contained,
-      overlap,
-      diverged,
+
+      STRUCTURAL_IDENTITY,
+      STRUCTURAL_CONTAINMENT,
+      STRUCTURAL_ATTENTION_BREAK,
+      STRUCTURAL_DANGER_BREAK,
+
       deltaCount: changes.length,
       changes
     };
