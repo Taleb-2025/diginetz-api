@@ -1,69 +1,96 @@
 // diginetz-api/src/execution/TSL_EG.js
+// ----------------------------------------------
+// TSL_EG (STREAMING EFFECT GRAPH – NEW)
+// ----------------------------------------------
+// Principles:
+// - No reference storage
+// - No history
+// - No decision
+// - No policy
+// - One-step memory (last effect only)
+// - Forget immediately after interpretation
+// ----------------------------------------------
 
 export class TSL_EG {
-  constructor({ ndr, d }) {
-    if (!ndr || !d) {
+  constructor({ adapter, ndr, d, interpreter }) {
+    if (!adapter || !ndr || !d || !interpreter) {
       throw new Error("TSL_EG_MISSING_CORE");
     }
 
+    this.adapter = adapter;
     this.ndr = ndr;
-    this.d   = d;
+    this.d = d;
+    this.interpreter = interpreter;
+
+    // الأثر الوحيد
+    this._lastStructure = null;
   }
 
-  executeWithReference(referenceStructure, numericInput) {
-    /* ===== BASIC VALIDATION ===== */
-
-    if (!referenceStructure || typeof referenceStructure !== "object") {
-      return {
-        ok: false,
-        phase: "ACCESS",
-        reason: "INVALID_REFERENCE_STRUCTURE"
-      };
-    }
-
-    if (!Array.isArray(numericInput)) {
-      return {
-        ok: false,
-        phase: "ACCESS",
-        reason: "INVALID_INPUT_TYPE"
-      };
-    }
-
-    for (const v of numericInput) {
-      if (typeof v !== "number" || Number.isNaN(v)) {
-        return {
-          ok: false,
-          phase: "ACCESS",
-          reason: "NON_NUMERIC_INPUT"
-        };
-      }
-    }
-
-    /* ===== STRUCTURE EXTRACTION (S1) ===== */
-
+  /**
+   * Observe one event in the stream
+   * @param {*} input raw input (any supported type)
+   * @returns {Object} structural signal
+   */
+  observe(input) {
+    let adapted;
     let structure;
+
     try {
-      structure = this.ndr.extract(numericInput);
+      adapted = this.adapter.adapt(input);
+      structure = this.ndr.extract(adapted);
     } catch (err) {
       return {
         ok: false,
-        phase: "STRUCTURE",
-        reason: err.message
+        phase: "ADAPT_OR_EXTRACT",
+        error: err.message
       };
     }
 
-    /* ===== STRUCTURAL COMPARISON ===== */
+    // أول حدث — لا مقارنة
+    if (!this._lastStructure) {
+      this._lastStructure = structure;
+      return {
+        ok: true,
+        type: "FIRST_EVENT",
+        structure
+      };
+    }
 
-    const delta = this.d.derive(referenceStructure, structure);
+    // دلتا بنيوية فقط
+    const delta = this.d.derive(this._lastStructure, structure);
 
-    /* ===== RESULT ===== */
+    // تفسير بنيوي (إشارة فقط)
+    const signal = this.interpreter.interpret({ delta });
+
+    // النسيان — هذا هو القانون
+    this._lastStructure = structure;
 
     return {
       ok: true,
-      phase: "STRUCTURE",
-      reference: referenceStructure, // S0
-      structure,                     // S1
-      delta
+      type: "STRUCTURAL_SIGNAL",
+      signal
+    };
+  }
+
+  /**
+   * Explicit forget
+   */
+  reset() {
+    this._lastStructure = null;
+    return { ok: true, state: "RESET" };
+  }
+
+  /**
+   * Introspection
+   */
+  meta() {
+    return {
+      engine: "TSL_EG",
+      mode: "STREAMING",
+      memory: "LAST_EFFECT_ONLY",
+      reference: false,
+      decision: false,
+      policy: false
     };
   }
 }
