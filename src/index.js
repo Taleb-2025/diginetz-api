@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 
-/* ---------- Routers ---------- */
 import flowRouter from "./api/flow.js";
 
 const app = express();
@@ -20,14 +19,11 @@ app.use(cors({
   ]
 }));
 
-/* ---------- Body ---------- */
-app.use(express.json());
-
 /* ---------- API ROUTES ---------- */
 app.use("/api/flow", flowRouter);
 
 /* ---------- ROOT ---------- */
-app.get("/", (req, res) => {
+app.get("/", (_req, res) => {
   res.json({
     service: "DigiNetz TSL Core",
     engine: "TSL",
@@ -36,7 +32,7 @@ app.get("/", (req, res) => {
 });
 
 /* ---------- HEALTH ---------- */
-app.get("/health", (req, res) => {
+app.get("/health", (_req, res) => {
   res.status(200).json({ ok: true });
 });
 
