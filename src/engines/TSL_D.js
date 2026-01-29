@@ -1,60 +1,98 @@
+// diginetz-api/src/engines/TSL_D.js
+// ----------------------------------------------
+// TSL_D — Structural Delta Engine (Stateless)
+// ----------------------------------------------
+// Role:
+// - Compares TWO structural states only
+// - No memory, no history
+// - No numeric comparison
+// - Decides structural relation
+//
+// Structural Laws:
+// 1. LENGTH
+// 2. ORDER
+// 3. CONTINUITY
+// 4. BOUNDARIES
+//
+// Structural States:
+// - STRUCTURAL_IDENTITY
+// - STRUCTURAL_CONTAINMENT
+// - STRUCTURAL_ATTENTION_BREAK
+// - STRUCTURAL_DANGER_BREAK
+// ----------------------------------------------
+
 export class TSL_D {
+
   derive(S0, S1) {
     if (!S0 || !S1) {
       throw new Error("TSL_D: invalid structures");
     }
 
-    const changes = [];
+    /* ===== LAW CHECKS ===== */
 
     const lengthSame = S0.length === S1.length;
-    if (!lengthSame) changes.push({ law: "LENGTH" });
 
-    const orderSame = this.#equal(S0.order, S1.order);
-    if (!orderSame) changes.push({ law: "ORDER" });
+    const orderSame =
+      JSON.stringify(S0.order) === JSON.stringify(S1.order);
 
-    const continuitySame = this.#equal(S0.continuity, S1.continuity);
-    if (!continuitySame) changes.push({ law: "CONTINUITY" });
+    const continuitySame =
+      JSON.stringify(S0.continuity) === JSON.stringify(S1.continuity);
 
     const boundariesSame =
       S0.boundaries?.start === S1.boundaries?.start &&
-      S0.boundaries?.end === S1.boundaries?.end;
-    if (!boundariesSame) changes.push({ law: "BOUNDARIES" });
+      S0.boundaries?.end   === S1.boundaries?.end;
 
-    const identical =
+    /* ===== STRUCTURAL STATES ===== */
+
+    // 1️⃣ تطابق بنيوي كامل
+    const STRUCTURAL_IDENTITY =
       lengthSame &&
       orderSame &&
       continuitySame &&
       boundariesSame;
 
-    const contained =
-      !identical &&
+    // 2️⃣ احتواء نسقي (نفس الشكل – طول مختلف)
+    const STRUCTURAL_CONTAINMENT =
+      !STRUCTURAL_IDENTITY &&
       orderSame &&
       continuitySame &&
-      boundariesSame &&
-      S1.length > S0.length;
+      boundariesSame;
 
-    const diverged =
-      !identical &&
-      !contained &&
-      (!orderSame || !continuitySame || !boundariesSame);
+    // 3️⃣ كسر انتباه (زيادة أو نقص طولي فقط)
+    const STRUCTURAL_ATTENTION_BREAK =
+      !STRUCTURAL_IDENTITY &&
+      !lengthSame &&
+      orderSame &&
+      continuitySame &&
+      boundariesSame;
 
-    const overlap =
-      !identical &&
-      !contained &&
-      !diverged;
+    // 4️⃣ كسر خطر (تحول بنيوي)
+    const STRUCTURAL_DANGER_BREAK =
+      !STRUCTURAL_IDENTITY &&
+      (
+        !orderSame ||
+        !continuitySame ||
+        !boundariesSame
+      );
+
+    /* ===== RESULT ===== */
 
     return {
       engine: "TSL_D",
-      identical,
-      contained,
-      overlap,
-      diverged,
-      deltaCount: changes.length,
-      changes
-    };
-  }
 
-  #equal(a, b) {
-    return JSON.stringify(a) === JSON.stringify(b);
+      STRUCTURAL_IDENTITY,
+      STRUCTURAL_CONTAINMENT,
+      STRUCTURAL_ATTENTION_BREAK,
+      STRUCTURAL_DANGER_BREAK,
+
+      // Minimal delta signal (no magnitude, no history)
+      deltaCount: STRUCTURAL_IDENTITY ? 0 : 1,
+      deltaType:
+        STRUCTURAL_IDENTITY ? "NONE" :
+        STRUCTURAL_DANGER_BREAK ? "DANGER" :
+        STRUCTURAL_ATTENTION_BREAK ? "ATTENTION" :
+        STRUCTURAL_CONTAINMENT ? "CONTAINMENT" :
+        "UNKNOWN"
+    };
   }
 }
