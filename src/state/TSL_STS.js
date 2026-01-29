@@ -8,71 +8,61 @@ export class TSL_STS {
     };
 
     this.expected = config.expected ?? {
-      density: 0,
-      drift: 0
+      attention: 0,
+      danger: 0
     };
 
     this.state = {
-      current: { density: 0, drift: 0 },
-      short:   { density: 0, drift: 0 },
-      mid:     { density: 0, drift: 0 },
-      long:    { density: 0, drift: 0 }
+      current: { attention: 0, danger: 0 },
+      short:   { attention: 0, danger: 0 },
+      mid:     { attention: 0, danger: 0 },
+      long:    { attention: 0, danger: 0 }
     };
   }
 
-  snapshot(bits) {
-    return this._derive(bits);
+  observe(delta) {
+    const signal = this._derive(delta);
+    this._integrate(signal);
+    return this._evaluate();
   }
 
-  _derive(bits) {
-    let ones = 0;
-    let last = -1;
-    let drift = 0;
-
-    for (let i = 0; i < bits.length; i++) {
-      if (bits[i] === 1) {
-        ones++;
-        if (last !== -1) drift += (i - last);
-        last = i;
-      }
-    }
-
+  _derive(delta) {
     return {
-      density: bits.length === 0 ? 0 : ones / bits.length,
-      drift
+      attention: delta.deltaType === "ATTENTION" ? 1 : 0,
+      danger:    delta.deltaType === "DANGER"    ? 1 : 0
     };
   }
 
-  integrate(structure) {
-    this.state.current = structure;
+  _integrate(signal) {
+    this.state.current = signal;
 
     this.state.short = this._smooth(
       this.state.short,
-      structure,
+      signal,
       this.alpha.short
     );
 
     this.state.mid = this._smooth(
       this.state.mid,
-      structure,
+      signal,
       this.alpha.mid
     );
 
     this.state.long = this._smooth(
       this.state.long,
-      structure,
+      signal,
       this.alpha.long
     );
   }
 
   _smooth(prev, curr, alpha) {
     return {
-      density: prev.density * (1 - alpha) + curr.density * alpha,
-      drift:   prev.drift   * (1 - alpha) + curr.drift   * alpha
+      attention: prev.attention * (1 - alpha) + curr.attention * alpha,
+      danger:    prev.danger    * (1 - alpha) + curr.danger    * alpha
     };
   }
 
-  evaluate() {
+  _evaluate() {
     return {
       short: this._compare(this.state.short),
       mid:   this._compare(this.state.mid),
@@ -81,22 +71,26 @@ export class TSL_STS {
   }
 
   _compare(state) {
-    const dDensity = state.density - this.expected.density;
-    const dDrift   = state.drift   - this.expected.drift;
+    const dAttention = state.attention - this.expected.attention;
+    const dDanger    = state.danger    - this.expected.danger;
+
+    let flag = "CLEAR";
+    let level = "NORMAL";
+
+    if (state.danger > 0) {
+      flag = "DANGER_PATTERN";
+      level = "CRITICAL";
+    } else if (state.attention > 0) {
+      flag = "ATTENTION_PATTERN";
+      level = "WARNING";
+    }
 
     return {
-      deltaDensity: dDensity,
-      deltaDrift: dDrift,
-      aligned:
-        Math.abs(dDensity) < 1e-6 &&
-        Math.abs(dDrift)   < 1e-6
+      deltaAttention: dAttention,
+      deltaDanger: dDanger,
+      flag,
+      level
     };
-  }
-
-  observe(bits) {
-    const structure = this.snapshot(bits);
-    this.integrate(structure);
-    return this.evaluate();
   }
 
   getMemory() {
@@ -107,4 +101,3 @@ export class TSL_STS {
     };
   }
 }
-
