@@ -33,7 +33,8 @@ let prevStructure = null;
 
 router.post("/observe", (req, res) => {
   try {
-    if (!Buffer.isBuffer(req.body)) {
+    // ✅ التعديل هنا فقط
+    if (!req.body || typeof req.body.length !== "number") {
       return res.status(400).json({
         ok: false,
         error: "RAW_BYTES_REQUIRED"
