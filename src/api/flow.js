@@ -1,7 +1,15 @@
 import express from "express";
-import { createTSL } from "../tsl.observe.js";
+import { createTSL } from "../runtime/tsl.observe.js";
 
 const router = express.Router();
+
+/* ========= RAW BYTES ONLY ========= */
+router.use(
+  express.raw({
+    type: "application/octet-stream",
+    limit: "1mb"
+  })
+);
 
 /* ========= TSL RUNTIME (واحد فقط) ========= */
 const tsl = createTSL();
@@ -10,7 +18,9 @@ const tsl = createTSL();
 router.post("/observe", (req, res) => {
   try {
     if (!Buffer.isBuffer(req.body)) {
-      return res.status(400).json({ error: "RAW_BYTES_REQUIRED" });
+      return res.status(400).json({
+        error: "RAW_BYTES_REQUIRED"
+      });
     }
 
     const bytes = Uint8Array.from(req.body);
@@ -19,7 +29,9 @@ router.post("/observe", (req, res) => {
     return res.json(result);
 
   } catch (err) {
-    return res.status(400).json({ error: err.message });
+    return res.status(400).json({
+      error: err.message
+    });
   }
 });
 
