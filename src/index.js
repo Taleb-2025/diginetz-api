@@ -19,6 +19,12 @@ app.use(cors({
   ]
 }));
 
+/* ---------- RAW BYTES SUPPORT (مهم جدا) ---------- */
+app.use(express.raw({
+  type: "application/octet-stream",
+  limit: "1mb"
+}));
+
 /* ---------- STATIC FILES ---------- */
 app.use(express.static("public"));
 
