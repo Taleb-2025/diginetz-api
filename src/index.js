@@ -2,7 +2,6 @@ import express from "express";
 import cors from "cors";
 
 /* ---------- Routers ---------- */
-
 import flowRouter from "./api/flow.js";
 
 const app = express();
@@ -25,7 +24,6 @@ app.use(cors({
 app.use(express.json());
 
 /* ---------- API ROUTES ---------- */
-app.use("/api/tsl", tslRouter);
 app.use("/api/flow", flowRouter);
 
 /* ---------- ROOT ---------- */
