@@ -11,11 +11,11 @@ export function createTSL() {
   const d = new TSL_D();
   const interpreter = new TSL_Interpreter();
 
-  let lastStructure = null; // الأثر الوحيد
+  let lastStructure = null; // ← الأثر الوحيد
 
   return {
     observe(value) {
-      const adapted = adapter.adapt(value);
+      const adapted   = adapter.adapt(value);
       const structure = ndr.extract(adapted);
 
       if (!lastStructure) {
@@ -32,10 +32,7 @@ export function createTSL() {
       // النسيان
       lastStructure = structure;
 
-      return {
-        type: "STRUCTURAL_SIGNAL",
-        signal
-      };
+      return signal;
     },
 
     reset() {
