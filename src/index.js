@@ -19,6 +19,9 @@ app.use(cors({
   ]
 }));
 
+/* ---------- STATIC FILES ---------- */
+app.use(express.static("public"));
+
 /* ---------- API ROUTES ---------- */
 app.use("/api/flow", flowRouter);
 
