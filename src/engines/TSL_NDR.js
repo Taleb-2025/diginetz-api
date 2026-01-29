@@ -1,4 +1,23 @@
+// diginetz-api/src/engines/TSL_NDR.js
+// ----------------------------------------------
+// TSL_NDR — Temporal-Structural Law Engine
+// ----------------------------------------------
+// Role:
+// - Stateless
+// - Non-temporal
+// - No comparison
+// - No memory
+// - Extracts ONLY current structural state
+//
+// Structural Laws:
+// 1. LENGTH      → number of atoms
+// 2. ORDER       → relative direction (+ - =)
+// 3. CONTINUITY  → run-lengths of same order
+// 4. BOUNDARIES  → first & last direction
+// ----------------------------------------------
+
 export class TSL_NDR {
+
   constructor(options = {}) {
     this.minLength = options.minLength ?? 2;
   }
@@ -32,14 +51,21 @@ export class TSL_NDR {
 
     return {
       engine: "TSL_NDR",
+
+      // Structural laws
       length,
       order,
       continuity,
       boundaries,
+
+      // Deterministic identity of the current structure
       fingerprint
     };
   }
 
+  /* ================= INTERNAL ================= */
+
+  // LAW 2: ORDER
   #deriveOrder(arr) {
     const order = [];
     for (let i = 1; i < arr.length; i++) {
@@ -50,6 +76,7 @@ export class TSL_NDR {
     return order;
   }
 
+  // LAW 3: CONTINUITY
   #deriveContinuity(order) {
     if (order.length === 0) return [];
 
@@ -71,6 +98,7 @@ export class TSL_NDR {
     return runs;
   }
 
+  // LAW 4: BOUNDARIES
   #deriveBoundaries(order) {
     if (order.length === 0) {
       return { start: null, end: null };
@@ -82,6 +110,9 @@ export class TSL_NDR {
     };
   }
 
+  /* ================= FINGERPRINT ================= */
+
+  // Deterministic — same structure → same fingerprint
   #fingerprint(structure) {
     const stable = this.#stableStringify(structure);
     let h = 2166136261;
