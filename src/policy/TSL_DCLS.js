@@ -1,63 +1,60 @@
+// diginetz-api/src/engines/TSL_DCLS.js
+// ----------------------------------------------
+// TSL_DCLS (PURE STRUCTURAL)
+// Deterministic Constraint Learning by Exclusion
+// ----------------------------------------------
+// - No numbers
+// - No thresholds
+// - No magnitude
+// - Learns ONLY by forbidding transitions
+// ----------------------------------------------
+
 export class TSL_DCLS {
-  constructor(config = {}) {
-    this.config = {
-      tightenOnCritical: config.tightenOnCritical ?? true,
-      tightenFactor: config.tightenFactor ?? 0.9,
 
-      lockOnRepeatedAnomaly: config.lockOnRepeatedAnomaly ?? true,
-      anomalyThreshold: config.anomalyThreshold ?? 2,
-
-      forbidTypeChangeOnAlert: config.forbidTypeChangeOnAlert ?? true
-    };
-
-    this._anomalyCount = 0;
+  constructor() {
+    this.forbiddenTransitions = new Set();
   }
 
-  adapt(report, constraints) {
+  /**
+   * @param {object} delta - structural delta from TSL_D
+   * @returns {object|null} updated constraints or null
+   */
+  adapt(delta) {
     let mutated = false;
-    const next = { ...constraints };
 
-    if (
-      this.config.tightenOnCritical &&
-      report.state === "CRITICAL"
-    ) {
-      next.maxDelta *= this.config.tightenFactor;
-      next.maxAcceleration *= this.config.tightenFactor;
-      mutated = true;
+    /* ===== RULE 1: DANGER BREAK FORBIDS CONTAINMENT ===== */
+    if (delta.STRUCTURAL_DANGER_BREAK) {
+      mutated ||= this.#forbid("ALLOW_CONTAINMENT_AFTER_DANGER");
     }
 
-    if (report.state === "ANOMALOUS") {
-      this._anomalyCount++;
-    } else {
-      this._anomalyCount = 0;
+    /* ===== RULE 2: REPEATED ATTENTION FORBIDS EXTENSION ===== */
+    if (delta.STRUCTURAL_ATTENTION_BREAK) {
+      mutated ||= this.#forbid("ALLOW_EXTENSION");
     }
 
-    if (
-      this.config.lockOnRepeatedAnomaly &&
-      this._anomalyCount >= this.config.anomalyThreshold
-    ) {
-      next.maxDelta *= this.config.tightenFactor;
-      mutated = true;
-    }
+    /* ===== RULE 3: IDENTITY RESTORES NOTHING ===== */
+    // Identity does NOT unlock anything
+    // TSL never goes backward
 
-    if (
-      this.config.forbidTypeChangeOnAlert &&
-      report.signals?.some(s => s.source === "ae")
-    ) {
-      const set = new Set(next.forbiddenChangeTypes ?? []);
-      set.add("TYPE_CHANGE");
-      next.forbiddenChangeTypes = Array.from(set);
-      mutated = true;
-    }
-
-    return mutated ? this.#sanitize(next) : null;
+    /* ===== RESULT ===== */
+    return mutated
+      ? this.#snapshot()
+      : null;
   }
 
-  #sanitize(c) {
+  /* ================= INTERNAL ================= */
+
+  #forbid(rule) {
+    if (this.forbiddenTransitions.has(rule)) {
+      return false;
+    }
+    this.forbiddenTransitions.add(rule);
+    return true;
+  }
+
+  #snapshot() {
     return {
-      ...c,
-      maxDelta: Math.max(c.maxDelta ?? 0, 1e-6),
-      maxAcceleration: Math.max(c.maxAcceleration ?? 0, 1e-6)
+      forbiddenTransitions: Array.from(this.forbiddenTransitions)
     };
   }
 }
