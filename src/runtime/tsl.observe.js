@@ -1,9 +1,9 @@
-// tsl.observe.js
+// src/runtime/tsl.observe.js
 
-import { DefaultTSLAdapter } from "./adapters/tsl-input-adapter.js";
-import { TSL_NDR } from "./engines/TSL_NDR.js";
-import { TSL_D } from "./engines/TSL_D.js";
-import { TSL_Interpreter } from "./interpret/TSL_Interpreter.js";
+import { DefaultTSLAdapter } from "../adapters/tsl-input-adapter.js";
+import { TSL_NDR } from "../engines/TSL_NDR.js";
+import { TSL_D } from "../engines/TSL_D.js";
+import { TSL_Interpreter } from "../interpret/TSL_Interpreter.js";
 
 export function createTSL() {
   const adapter = new DefaultTSLAdapter();
@@ -11,11 +11,11 @@ export function createTSL() {
   const d = new TSL_D();
   const interpreter = new TSL_Interpreter();
 
-  let lastStructure = null; // ← الأثر الوحيد
+  let lastStructure = null; // الأثر الوحيد
 
   return {
     observe(value) {
-      const adapted   = adapter.adapt(value);
+      const adapted = adapter.adapt(value);
       const structure = ndr.extract(adapted);
 
       if (!lastStructure) {
@@ -29,10 +29,12 @@ export function createTSL() {
       const delta = d.derive(lastStructure, structure);
       const signal = interpreter.interpret({ delta });
 
-      // النسيان
-      lastStructure = structure;
+      lastStructure = structure; // النسيان
 
-      return signal;
+      return {
+        type: "STRUCTURAL_SIGNAL",
+        signal
+      };
     },
 
     reset() {
