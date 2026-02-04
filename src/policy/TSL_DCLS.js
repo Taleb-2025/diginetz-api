@@ -1,60 +1,49 @@
-// diginetz-api/src/engines/TSL_DCLS.js
-// ----------------------------------------------
-// TSL_DCLS (PURE STRUCTURAL)
-// Deterministic Constraint Learning by Exclusion
-// ----------------------------------------------
-// - No numbers
-// - No thresholds
-// - No magnitude
-// - Learns ONLY by forbidding transitions
-// ----------------------------------------------
-
 export class TSL_DCLS {
-
   constructor() {
-    this.forbiddenTransitions = new Set();
+    this.reset();
   }
 
-  /**
-   * @param {object} delta - structural delta from TSL_D
-   * @returns {object|null} updated constraints or null
-   */
-  adapt(delta) {
-    let mutated = false;
-
-    /* ===== RULE 1: DANGER BREAK FORBIDS CONTAINMENT ===== */
-    if (delta.STRUCTURAL_DANGER_BREAK) {
-      mutated ||= this.#forbid("ALLOW_CONTAINMENT_AFTER_DANGER");
+  observe({ sts, ae }) {
+    if (sts) {
+      this.#eliminateBySTS(sts);
     }
 
-    /* ===== RULE 2: REPEATED ATTENTION FORBIDS EXTENSION ===== */
-    if (delta.STRUCTURAL_ATTENTION_BREAK) {
-      mutated ||= this.#forbid("ALLOW_EXTENSION");
+    if (ae) {
+      this.#eliminateByAE(ae);
     }
 
-    /* ===== RULE 3: IDENTITY RESTORES NOTHING ===== */
-    // Identity does NOT unlock anything
-    // TSL never goes backward
-
-    /* ===== RESULT ===== */
-    return mutated
-      ? this.#snapshot()
-      : null;
+    return this.constraints();
   }
 
-  /* ================= INTERNAL ================= */
-
-  #forbid(rule) {
-    if (this.forbiddenTransitions.has(rule)) {
-      return false;
+  #eliminateBySTS(sts) {
+    if (sts.level === "DEVIATION") {
+      this._constraints.allowContainment = false;
     }
-    this.forbiddenTransitions.add(rule);
-    return true;
+
+    if (sts.level === "PRESSURE") {
+      this._constraints.allowContainment = false;
+    }
   }
 
-  #snapshot() {
-    return {
-      forbiddenTransitions: Array.from(this.forbiddenTransitions)
+  #eliminateByAE(ae) {
+    if (ae.reason === "EXPECTED_EVENT_ABSENT") {
+      this._constraints.allowContainment = false;
+    }
+
+    if (ae.reason === "CORRECTION_ABSENT") {
+      this._constraints.allowPressure = false;
+    }
+  }
+
+  constraints() {
+    return { ...this._constraints };
+  }
+
+  reset() {
+    this._constraints = {
+      allowContainment: true,
+      allowPressure: true,
+      allowRupture: true
     };
   }
 }
