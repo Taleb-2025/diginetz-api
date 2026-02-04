@@ -4,8 +4,8 @@ import { DefaultTSLAdapter } from "../adapters/tsl-input-adapter.js";
 import { TSL_NDR } from "../engines/TSL_NDR.js";
 import { TSL_D } from "../engines/TSL_D.js";
 import { TSL_Interpreter } from "../interpret/TSL_Interpreter.js";
-import { TSL_STS } from "../analysis/TSL_STS.js";
-import { TSL_AE } from "../analysis/TSL_AE.js";
+import { TSL_STS } from "../state/TSL_STS.js";
+import { TSL_AE } from "../state/TSL_AE.js";
 import { TSL_DCLS } from "../analysis/TSL_DCLS.js";
 
 export function createTSL() {
