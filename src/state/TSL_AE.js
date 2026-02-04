@@ -1,68 +1,52 @@
 export class TSL_AE {
   constructor() {
-    this._expected = null;
+    this._lastEffect = null;
   }
 
-  observe(signal) {
-    if (!signal || typeof signal !== "object") {
+  observe(currentEffect) {
+    if (!currentEffect) {
       return null;
     }
 
-    const aeSignal = this._detectAbsence(signal);
-    this._expected = this._deriveExpectation(signal);
+    if (!this._lastEffect) {
+      this._lastEffect = currentEffect;
+      return null;
+    }
 
-    return aeSignal;
+    const ae = this.#detectAbsence(this._lastEffect, currentEffect);
+
+    this._lastEffect = currentEffect;
+
+    return ae;
   }
 
-  _deriveExpectation(signal) {
-    const { relation_type, structural_state } = signal;
-
-    if (relation_type === "STRUCTURAL_CONTAINMENT") {
-      return "CONTAINMENT_CONTINUATION";
+  #detectAbsence(previous, current) {
+    if (
+      previous.status === "CONTAINED" &&
+      current.status === "BROKEN"
+    ) {
+      return this.#absence("CONTAINMENT_ABSENT");
     }
 
-    if (structural_state === "STABLE") {
-      return "NO_CHANGE_REQUIRED";
-    }
-
-    if (structural_state === "DRIFTING") {
-      return "CORRECTION_EXPECTED";
+    if (
+      previous.status === "FULL" &&
+      current.status === "BROKEN"
+    ) {
+      return this.#absence("SATURATION_RESOLUTION_ABSENT");
     }
 
     return null;
   }
 
-  _detectAbsence(signal) {
-    if (!this._expected) return null;
-
-    const { relation_type, structural_state } = signal;
-
-    if (
-      this._expected === "CONTAINMENT_CONTINUATION" &&
-      relation_type !== "STRUCTURAL_CONTAINMENT"
-    ) {
-      return this._absence("CONTAINMENT_BROKEN");
-    }
-
-    if (
-      this._expected === "CORRECTION_EXPECTED" &&
-      structural_state === "DRIFTING"
-    ) {
-      return this._absence("CORRECTION_ABSENT");
-    }
-
-    return null;
-  }
-
-  _absence(reason) {
+  #absence(reason) {
     return {
+      layer: "AE",
       type: "ABSENT_EXECUTION",
-      reason,
-      effect: "STRUCTURAL_GAP"
+      reason
     };
   }
 
   reset() {
-    this._expected = null;
+    this._lastEffect = null;
   }
 }
