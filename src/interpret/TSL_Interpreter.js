@@ -1,132 +1,33 @@
-// diginetz-api/src/interpret/TSL_Interpreter.js
-// ----------------------------------------------
-// TSL_Interpreter (STRICT LAW-BASED)
-// ----------------------------------------------
-// قواعد صارمة:
-// - لا وصف
-// - لا عدّ
-// - لا فحص شكل داخلي
-// - يعتمد فقط على:
-//   • قوانين تغيّرت (delta.changes[].law)
-//   • علاقات delta (identical / contained / overlap / diverged)
-// ----------------------------------------------
-
 export class TSL_Interpreter {
 
-  interpret({ delta }) {
-    if (!delta || typeof delta !== "object") {
+  interpret(effect) {
+    if (!effect || typeof effect !== "object") {
       return this.#undefined();
     }
 
-    const relation_type    = this.#relation(delta);
-    const structural_break = this.#break(delta);
-    const stability        = this.#stability(delta);
-    const continuity       = this.#continuity(delta);
-    const structural_state =
-      this.#state(relation_type, stability, structural_break);
+    const { container, extension, status } = effect;
 
     return {
-      structural_state,
-      relation_type,
-      stability,
-      structural_break,
-      continuity
+      structural_state: this.#state(status),
+      containment: status,
+      container,
+      extension
     };
   }
 
-  /* ================= RELATION ================= */
-
-  #relation(delta) {
-    if (delta.identical === true) return "STRUCTURAL_IDENTITY";
-    if (delta.contained === true) return "STRUCTURAL_CONTAINMENT";
-    if (delta.overlap   === true) return "STRUCTURAL_OVERLAP";
-    if (delta.diverged  === true) return "STRUCTURAL_DIVERGENCE";
+  #state(status) {
+    if (status === "CONTAINED") return "STABLE";
+    if (status === "FULL")      return "PRESSURE";
+    if (status === "BROKEN")    return "RUPTURE";
     return "UNKNOWN";
-  }
-
-  /* ================= BREAK ================= */
-
-  #break(delta) {
-    const laws = this.#laws(delta);
-
-    if (laws.includes("ORDER") || laws.includes("BOUNDARIES")) {
-      return "GLOBAL_BREAK";
-    }
-
-    if (laws.includes("CONTINUITY")) {
-      return "LOCAL_BREAK";
-    }
-
-    return "NO_BREAK";
-  }
-
-  /* ================= STABILITY ================= */
-
-  #stability(delta) {
-    if (delta.identical === true) {
-      return "HIGH_STABILITY";
-    }
-
-    if (delta.contained === true) {
-      return "MEDIUM_STABILITY";
-    }
-
-    return "LOW_STABILITY";
-  }
-
-  /* ================= CONTINUITY ================= */
-
-  #continuity(delta) {
-    const laws = this.#laws(delta);
-
-    if (delta.identical === true) {
-      return "SUSTAINABLE";
-    }
-
-    if (!laws.includes("ORDER") && !laws.includes("BOUNDARIES")) {
-      return "AT_RISK";
-    }
-
-    return "UNSUSTAINABLE";
-  }
-
-  /* ================= STATE ================= */
-
-  #state(relation, stability, breakType) {
-    if (breakType === "GLOBAL_BREAK") return "COLLAPSING";
-    if (breakType === "LOCAL_BREAK")  return "FRACTURED";
-
-    if (relation === "STRUCTURAL_IDENTITY" && stability === "HIGH_STABILITY") {
-      return "STABLE";
-    }
-
-    if (relation === "STRUCTURAL_CONTAINMENT" && stability !== "LOW_STABILITY") {
-      return "CONTAINED";
-    }
-
-    if (stability === "LOW_STABILITY") {
-      return "DRIFTING";
-    }
-
-    return "EMERGING";
-  }
-
-  /* ================= INTERNAL ================= */
-
-  #laws(delta) {
-    if (!Array.isArray(delta.changes)) return [];
-    return delta.changes
-      .map(c => c?.law)
-      .filter(Boolean);
   }
 
   #undefined() {
     return {
       structural_state: "UNDEFINED",
-      relation_type: "UNKNOWN",
-      stability: "UNKNOWN",
-      structural_break: "UNKNOWN",
-      continuity: "UNKNOWN"
+      containment: "UNKNOWN",
+      container: null,
+      extension: null
     };
   }
 }
