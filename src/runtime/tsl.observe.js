@@ -1,54 +1,73 @@
 // src/runtime/tsl.observe.js
 
+import { DefaultTSLAdapter } from "../adapters/tsl-input-adapter.js";
 import { TSL_NDR } from "../engines/TSL_NDR.js";
 import { TSL_D } from "../engines/TSL_D.js";
 import { TSL_Interpreter } from "../interpret/TSL_Interpreter.js";
+import { TSL_STS } from "../analysis/TSL_STS.js";
+import { TSL_AE } from "../analysis/TSL_AE.js";
+import { TSL_DCLS } from "../analysis/TSL_DCLS.js";
 
 export function createTSL() {
+  const adapter = new DefaultTSLAdapter();
   const ndr = new TSL_NDR();
   const d = new TSL_D();
   const interpreter = new TSL_Interpreter();
+  const sts = new TSL_STS();
+  const ae = new TSL_AE();
+  const dcls = new TSL_DCLS();
 
-  // الأثر الوحيد (آخر بنية فقط)
-  let lastStructure = null;
+  let lastEffect = null;
 
   return {
-    observe(value) {
-      // 🔴 لا Adapter — القيم الخام كما هي
-      if (!Array.isArray(value) && !(value instanceof Uint8Array)) {
-        throw new Error("INVALID_INPUT");
-      }
+    observe(input) {
+      const event = adapter.adapt(input);
+      const currentEffect = ndr.extract(event);
 
-      const numeric =
-        value instanceof Uint8Array ? Array.from(value) : value;
-
-      // استخراج البنية مباشرة من القيم الزمنية
-      const structure = ndr.extract(numeric);
-
-      // أول حدث
-      if (!lastStructure) {
-        lastStructure = structure;
+      if (!lastEffect) {
+        lastEffect = currentEffect;
         return {
           type: "FIRST_EVENT",
-          structure
+          effect: currentEffect
         };
       }
 
-      // دلتا بنيوية حقيقية
-      const delta = d.derive(lastStructure, structure);
-      const signal = interpreter.interpret({ delta });
+      const delta = d.derive(lastEffect, currentEffect);
 
-      // النسيان (استبدال الأثر)
-      lastStructure = structure;
+      const signal = interpreter.interpret({
+        previous: lastEffect,
+        current: currentEffect,
+        delta
+      });
+
+      const stsSignal = sts.scan(lastEffect, currentEffect);
+      const aeSignal = ae.observe(currentEffect);
+
+      const constraints = dcls.observe({
+        sts: stsSignal,
+        ae: aeSignal
+      });
+
+      lastEffect = currentEffect;
 
       return {
-        type: "STRUCTURAL_SIGNAL",
-        signal
+        type: "STRUCTURAL_EVENT",
+        event,
+        effect: currentEffect,
+        delta,
+        signal,
+        sts: stsSignal,
+        ae: aeSignal,
+        constraints
       };
     },
 
     reset() {
-      lastStructure = null;
+      lastEffect = null;
+      sts.reset();
+      ae.reset();
+      dcls.reset();
+      return { ok: true };
     }
   };
 }
