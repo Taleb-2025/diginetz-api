@@ -1,76 +1,68 @@
 export class TSL_AE {
-
-  constructor(opts = {}) {
-    this.onAlert = opts.onAlert;
+  constructor() {
+    this._expected = null;
   }
 
-  guard(operation, contract, context = {}) {
-    let executed = false;
-
-    try {
-      const result = operation();
-      executed = true;
-
-      const hasEffect = safeBool(contract.expectEffect);
-
-      if (!hasEffect) {
-        const report = this._alert("NO_EFFECT", contract, context);
-        return { report };
-      }
-
-      return {
-        result,
-        report: this._ok(contract, context)
-      };
-
-    } catch (e) {
-      const report = this._alert("EXCEPTION", contract, {
-        ...context,
-        error: String(e)
-      });
-      return { report };
-    } finally {
-      void executed;
+  observe(signal) {
+    if (!signal || typeof signal !== "object") {
+      return null;
     }
+
+    const aeSignal = this._detectAbsence(signal);
+    this._expected = this._deriveExpectation(signal);
+
+    return aeSignal;
   }
 
-  _ok(contract, context) {
+  _deriveExpectation(signal) {
+    const { relation_type, structural_state } = signal;
+
+    if (relation_type === "STRUCTURAL_CONTAINMENT") {
+      return "CONTAINMENT_CONTINUATION";
+    }
+
+    if (structural_state === "STABLE") {
+      return "NO_CHANGE_REQUIRED";
+    }
+
+    if (structural_state === "DRIFTING") {
+      return "CORRECTION_EXPECTED";
+    }
+
+    return null;
+  }
+
+  _detectAbsence(signal) {
+    if (!this._expected) return null;
+
+    const { relation_type, structural_state } = signal;
+
+    if (
+      this._expected === "CONTAINMENT_CONTINUATION" &&
+      relation_type !== "STRUCTURAL_CONTAINMENT"
+    ) {
+      return this._absence("CONTAINMENT_BROKEN");
+    }
+
+    if (
+      this._expected === "CORRECTION_EXPECTED" &&
+      structural_state === "DRIFTING"
+    ) {
+      return this._absence("CORRECTION_ABSENT");
+    }
+
+    return null;
+  }
+
+  _absence(reason) {
     return {
-      executionState: "EXECUTED",
-      securityFlag: "OK",
-      reason: "UNKNOWN",
-      timestamp: Date.now(),
-      context: {
-        contract: contract?.name,
-        ...context
-      }
-    };
-  }
-
-  _alert(reason, contract, context) {
-    const report = {
-      executionState: "ABSENT",
-      securityFlag: "ALERT",
+      type: "ABSENT_EXECUTION",
       reason,
-      timestamp: Date.now(),
-      context: {
-        contract: contract?.name,
-        ...context
-      }
+      effect: "STRUCTURAL_GAP"
     };
-
-    if (this.onAlert) {
-      this.onAlert(report);
-    }
-
-    return report;
   }
-}
 
-function safeBool(fn) {
-  try {
-    return Boolean(fn());
-  } catch {
-    return false;
+  reset() {
+    this._expected = null;
   }
 }
