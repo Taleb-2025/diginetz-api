@@ -1,7 +1,6 @@
 export class TSL_AE {
   constructor() {
-    this._activeContainer = null;
-    this._expectingCompletion = false;
+    this._expecting = null;
   }
 
   observe(effect) {
@@ -9,54 +8,33 @@ export class TSL_AE {
       return null;
     }
 
-    const { container, containment } = effect;
+    const { containment } = effect;
 
-    // أول دخول لحاوية
-    if (this._activeContainer === null) {
-      if (containment === "CONTAINED") {
-        this._activeContainer = container;
-        this._expectingCompletion = true;
-      }
+    // 1) بناء التوقع البنيوي من الحاضر فقط
+    // CONTAINED أو PRESSURE ⇒ المسار يجب أن يكتمل
+    if (containment === "CONTAINED" || containment === "PRESSURE") {
+      this._expecting = "COMPLETION";
       return null;
     }
 
-    // نفس الحاوية
-    if (container === this._activeContainer) {
-
-      // اكتمال طبيعي
-      if (containment === "FULL") {
-        this._reset();
-        return null;
-      }
-
-      // كسر قبل الاكتمال → غياب
-      if (containment === "BROKEN" && this._expectingCompletion) {
-        this._reset();
-        return this._absence("MISSING_INTERNAL_EVENT");
-      }
-
+    // 2) اكتمال طبيعي ⇒ مسح التوقع
+    if (containment === "FULL") {
+      this._expecting = null;
       return null;
     }
 
-    // الانتقال لحاوية جديدة
-    // إذا غادرنا الحاوية السابقة دون اكتمال → غياب
-    if (this._expectingCompletion) {
-      const ae = this._absence("UNEXPECTED_CONTAINER_SHIFT");
-      this._reset();
-
-      // إعادة التهيئة للحاوية الجديدة إن كانت صالحة
-      if (containment === "CONTAINED") {
-        this._activeContainer = container;
-        this._expectingCompletion = true;
-      }
-
-      return ae;
+    // 3) كسر أثناء وجود توقع ⇒ غياب بنيوي
+    if (containment === "BROKEN" && this._expecting === "COMPLETION") {
+      this._expecting = null;
+      return this._absence("EXPECTED_COMPLETION_ABSENT");
     }
 
-    // لا شيء غير متوقع
-    this._activeContainer = null;
-    this._expectingCompletion = false;
+    // 4) أي حالة أخرى لا تعني غيابًا
     return null;
+  }
+
+  reset() {
+    this._expecting = null;
   }
 
   _absence(reason) {
@@ -66,14 +44,5 @@ export class TSL_AE {
       reason,
       effect: "STRUCTURAL_GAP"
     };
-  }
-
-  _reset() {
-    this._activeContainer = null;
-    this._expectingCompletion = false;
-  }
-
-  reset() {
-    this._reset();
   }
 }
