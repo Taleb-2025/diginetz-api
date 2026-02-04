@@ -6,7 +6,7 @@ import { TSL_D } from "../engines/TSL_D.js";
 import { TSL_Interpreter } from "../interpret/TSL_Interpreter.js";
 import { TSL_STS } from "../state/TSL_STS.js";
 import { TSL_AE } from "../state/TSL_AE.js";
-import { TSL_DCLS } from "../analysis/TSL_DCLS.js";
+import { TSL_DCLS } from "../policy/TSL_DCLS.js";
 
 export function createTSL() {
   const adapter = new DefaultTSLAdapter();
