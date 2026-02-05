@@ -1,29 +1,27 @@
 export class TSL_AE {
-  constructor() {
-    this._expectingDrain = false;
-  }
+  observe(previousEffect, currentEffect) {
+    if (!previousEffect || !currentEffect) return null;
 
-  observe(effect) {
-    if (!effect || typeof effect !== "object") return null;
+    const prev = previousEffect;
+    const curr = currentEffect;
 
-    const { containment } = effect;
-
-    if (containment === "DRAINING" && !this._expectingDrain) {
-      this._expectingDrain = true;
-      return null;
-    }
-
-    if (containment === "LAST_TRACE") {
-      this._expectingDrain = false;
-      return null;
-    }
-
-    if (containment === "ILLEGAL_TRACE" && this._expectingDrain) {
-      this._expectingDrain = false;
+    if (
+      curr.container > prev.container &&
+      prev.containment !== "LAST_TRACE"
+    ) {
       return {
         layer: "AE",
         type: "ABSENT_EXECUTION",
-        reason: "PATH_INTERRUPTED",
+        reason: "IMPOSSIBLE_ARRIVAL",
+        effect: "STRUCTURAL_GAP"
+      };
+    }
+
+    if (curr.containment === "ILLEGAL_TRACE") {
+      return {
+        layer: "AE",
+        type: "ABSENT_EXECUTION",
+        reason: "PATH_IMPOSSIBLE",
         effect: "STRUCTURAL_GAP"
       };
     }
@@ -31,7 +29,5 @@ export class TSL_AE {
     return null;
   }
 
-  reset() {
-    this._expectingDrain = false;
-  }
+  reset() {}
 }
