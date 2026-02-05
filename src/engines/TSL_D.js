@@ -1,37 +1,42 @@
-// diginetz-api/src/engines/TSL_D.js
-
 export class TSL_D {
   derive(previous, current) {
     if (!previous || !current) {
       throw new Error("TSL_D_MISSING_STATE");
     }
 
-    if (!previous.containment || !current.containment) {
+    const prev = previous.containment;
+    const curr = current.containment;
+
+    if (!prev || !curr) {
       throw new Error("TSL_D_INVALID_STATE");
     }
 
     return {
-      from: previous.containment,
-      to: current.containment,
-      effect: this.#effect(previous, current)
+      from: prev,
+      to: curr,
+      effect: this.#effect(prev, curr)
     };
   }
 
   #effect(prev, curr) {
-    if (prev.containment === "CONTAINED" && curr.containment === "CONTAINED") {
-      return "STABLE";
+    if (prev === "DRAINING" && curr === "DRAINING") {
+      return "CONTINUITY";
     }
 
-    if (prev.containment === "CONTAINED" && curr.containment === "SATURATED") {
-      return "PRESSURE";
+    if (prev === "DRAINING" && curr === "LAST_TRACE") {
+      return "COMPLETION";
     }
 
-    if (curr.containment === "BROKEN") {
+    if (prev === "LAST_TRACE" && curr === "ILLEGAL_TRACE") {
+      return "ILLEGAL_TRANSITION";
+    }
+
+    if (curr === "ILLEGAL_TRACE") {
       return "RUPTURE";
     }
 
-    if (prev.containment === "SATURATED" && curr.containment === "CONTAINED") {
-      return "RELEASE";
+    if (prev === "LAST_TRACE" && curr === "DRAINING") {
+      return "RESET_FLOW";
     }
 
     return "TRANSITION";
