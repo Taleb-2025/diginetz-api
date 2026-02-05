@@ -64,9 +64,19 @@ export function createTSL() {
 
     reset() {
       lastEffect = null;
-      sts.reset();
-      ae.reset();
-      dcls.reset();
+
+      if (sts && typeof sts.reset === "function") {
+        sts.reset();
+      }
+
+      if (ae && typeof ae.reset === "function") {
+        ae.reset();
+      }
+
+      if (dcls && typeof dcls.reset === "function") {
+        dcls.reset();
+      }
+
       return { ok: true };
     }
   };
