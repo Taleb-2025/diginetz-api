@@ -19,19 +19,11 @@ export class TSL_DCLS {
     if (sts.level === "DEVIATION") {
       this._constraints.allowContainment = false;
     }
-
-    if (sts.level === "PRESSURE") {
-      this._constraints.allowContainment = false;
-    }
   }
 
   #eliminateByAE(ae) {
-    if (ae.reason === "EXPECTED_EVENT_ABSENT") {
+    if (ae.reason === "PATH_INTERRUPTED") {
       this._constraints.allowContainment = false;
-    }
-
-    if (ae.reason === "CORRECTION_ABSENT") {
-      this._constraints.allowPressure = false;
     }
   }
 
