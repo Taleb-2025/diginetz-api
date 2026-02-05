@@ -1,35 +1,37 @@
+// src/analysis/TSL_STS.js
+
 export class TSL_STS {
   scan(previousEffect, currentEffect) {
-    if (!currentEffect) return null;
-    if (!previousEffect) return null;
+    if (!previousEffect || !currentEffect) {
+      return null;
+    }
 
     const prev = previousEffect;
     const curr = currentEffect;
 
-    if (prev.container === curr.container) {
-      if (curr.extension < curr.container) {
-        return this.#state("STABLE", "CONTAINMENT_OK");
-      }
-
-      if (curr.extension === curr.container) {
-        return this.#state("PRESSURE", "CONTAINER_FULL");
-      }
-
-      return this.#state("DEVIATION", "OVERFLOW");
+    // 1) نفس الحاوية → المسار سليم دائمًا
+    if (curr.container === prev.container) {
+      return this.#state("STABLE", "CONTAINER_CONTINUITY");
     }
 
+    // 2) انتقال حاوية بعد إغلاق صحيح
     if (
-      curr.container > prev.container &&
-      prev.extension !== prev.container
+      curr.container !== prev.container &&
+      prev.containment === "LAST_TRACE"
+    ) {
+      return this.#state("STABLE", "CLOSED_CONTAINER_TRANSITION");
+    }
+
+    // 3) انتقال حاوية بدون إغلاق → انحراف
+    if (
+      curr.container !== prev.container &&
+      prev.containment !== "LAST_TRACE"
     ) {
       return this.#state("DEVIATION", "JUMP_WITHOUT_COMPLETION");
     }
 
-    if (curr.container < prev.container) {
-      return this.#state("DEVIATION", "REGRESSION");
-    }
-
-    return this.#state("DEVIATION", "UNEXPLAINED_SHIFT");
+    // 4) حالة احتياطية (لا يجب الوصول لها)
+    return this.#state("DEVIATION", "UNCLASSIFIED_SHIFT");
   }
 
   #state(level, reason) {
@@ -39,4 +41,6 @@ export class TSL_STS {
       reason
     };
   }
+
+  reset() {}
 }
