@@ -1,34 +1,27 @@
-// diginetz-api/src/engines/TSL_NDR.js
-
 export class TSL_NDR {
   extract(event) {
-    if (event == null) {
-      throw new Error("TSL_NDR_NULL_EVENT");
-    }
-
-    if (typeof event !== "number" || !Number.isFinite(event)) {
+    const value = Number(event);
+    if (!Number.isFinite(value)) {
       throw new Error("TSL_NDR_NON_NUMERIC_EVENT");
     }
 
-    const container = Math.floor(event / 10);
-    const extension = event % 10;
+    const container = Math.floor(value / 10);
+    const extension = value % 10;
+
+    let containment;
+
+    if (extension < container) {
+      containment = "DRAINING";
+    } else if (extension === container) {
+      containment = "LAST_TRACE";
+    } else {
+      containment = "ILLEGAL_TRACE";
+    }
 
     return {
       container,
       extension,
-      containment: this.#containment(container, extension)
+      containment
     };
-  }
-
-  #containment(container, extension) {
-    if (extension < container) {
-      return "CONTAINED";
-    }
-
-    if (extension === container) {
-      return "SATURATED";
-    }
-
-    return "BROKEN";
   }
 }
