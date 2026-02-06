@@ -11,11 +11,11 @@ export class TSL_NDR {
     let containment;
 
     if (extension < container) {
-      containment = "DRAINING";
+      containment = "DRAINING";       // المسار يتلاشى
     } else if (extension === container) {
-      containment = "LAST_TRACE";
+      containment = "LAST_TRACE";     // الأثر الأخير
     } else {
-      containment = "ILLEGAL_TRACE";
+      containment = "ILLEGAL_TRACE";  // وصول بلا طريق
     }
 
     return {
