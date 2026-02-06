@@ -1,33 +1,32 @@
 export class TSL_Interpreter {
-
-  interpret(effect) {
-    if (!effect || typeof effect !== "object") {
-      return this.#undefined();
+  interpret({ effect, sts, ae }) {
+    // غياب وجودي → استحالة
+    if (ae && ae.type === "ABSENT_EXECUTION") {
+      return this.#state(
+        "IMPOSSIBLE",
+        "STRUCTURAL_GAP_DETECTED"
+      );
     }
 
-    const { container, extension, status } = effect;
+    // انحراف بنيوي بدون غياب
+    if (sts && sts.level === "DEVIATION") {
+      return this.#state(
+        "DRIFTING",
+        sts.reason
+      );
+    }
 
-    return {
-      structural_state: this.#state(status),
-      containment: status,
-      container,
-      extension
-    };
+    // مسار سليم
+    return this.#state(
+      "STABLE",
+      "PATH_VALID"
+    );
   }
 
-  #state(status) {
-    if (status === "CONTAINED") return "STABLE";
-    if (status === "FULL")      return "PRESSURE";
-    if (status === "BROKEN")    return "RUPTURE";
-    return "UNKNOWN";
-  }
-
-  #undefined() {
+  #state(structural_state, reason) {
     return {
-      structural_state: "UNDEFINED",
-      containment: "UNKNOWN",
-      container: null,
-      extension: null
+      structural_state,
+      reason
     };
   }
 }
