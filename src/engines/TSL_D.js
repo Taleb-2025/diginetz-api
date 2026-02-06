@@ -7,10 +7,6 @@ export class TSL_D {
     const prev = previous.containment;
     const curr = current.containment;
 
-    if (!prev || !curr) {
-      throw new Error("TSL_D_INVALID_STATE");
-    }
-
     return {
       from: prev,
       to: curr,
@@ -20,23 +16,19 @@ export class TSL_D {
 
   #effect(prev, curr) {
     if (prev === "DRAINING" && curr === "DRAINING") {
-      return "CONTINUITY";
+      return "CONTINUITY";        // السير على الطريق
     }
 
     if (prev === "DRAINING" && curr === "LAST_TRACE") {
-      return "COMPLETION";
-    }
-
-    if (prev === "LAST_TRACE" && curr === "ILLEGAL_TRACE") {
-      return "ILLEGAL_TRANSITION";
-    }
-
-    if (curr === "ILLEGAL_TRACE") {
-      return "RUPTURE";
+      return "COMPLETION";        // وصول للأثر الأخير
     }
 
     if (prev === "LAST_TRACE" && curr === "DRAINING") {
-      return "RESET_FLOW";
+      return "RESET_FLOW";        // عودة غير طبيعية
+    }
+
+    if (curr === "ILLEGAL_TRACE") {
+      return "RUPTURE";           // انقطاع المسار
     }
 
     return "TRANSITION";
