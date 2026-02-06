@@ -4,27 +4,17 @@ export class TSL_DCLS {
   }
 
   observe({ sts, ae }) {
-    if (sts) {
-      this.#eliminateBySTS(sts);
+    // لا AE → لا إقصاء
+    if (!ae) {
+      return this.constraints();
     }
 
-    if (ae) {
-      this.#eliminateByAE(ae);
+    // AE يعني: المسار لم يعد ممكنًا وجوديًا
+    if (ae.type === "ABSENT_EXECUTION") {
+      this._constraints.allowContainment = false;
     }
 
     return this.constraints();
-  }
-
-  #eliminateBySTS(sts) {
-    if (sts.level === "DEVIATION") {
-      this._constraints.allowContainment = false;
-    }
-  }
-
-  #eliminateByAE(ae) {
-    if (ae.reason === "PATH_INTERRUPTED") {
-      this._constraints.allowContainment = false;
-    }
   }
 
   constraints() {
@@ -33,9 +23,7 @@ export class TSL_DCLS {
 
   reset() {
     this._constraints = {
-      allowContainment: true,
-      allowPressure: true,
-      allowRupture: true
+      allowContainment: true
     };
   }
 }
