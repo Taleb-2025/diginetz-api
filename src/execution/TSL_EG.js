@@ -1,27 +1,26 @@
 export class TSL_EG {
-  constructor({ adapter, ndr, interpreter }) {
-    if (!adapter || !ndr || !interpreter) {
+  constructor({ adapter, ndr, d, sts, ae, interpreter }) {
+    if (!adapter || !ndr || !d || !sts || !ae || !interpreter) {
       throw new Error("TSL_EG_MISSING_CORE");
     }
 
     this.adapter = adapter;
     this.ndr = ndr;
+    this.d = d;
+    this.sts = sts;
+    this.ae = ae;
     this.interpreter = interpreter;
 
-    // الأثر الوحيد المسموح
     this._lastEffect = null;
   }
 
   observe(input) {
     let event;
-    let effect;
+    let currentEffect;
 
     try {
-      // 1) Adapter → نبضة واحدة
       event = this.adapter.adapt(input);
-
-      // 2) NDR → أثر احتواء (container / extension / status)
-      effect = this.ndr.extract(event);
+      currentEffect = this.ndr.extract(event);
     } catch (err) {
       return {
         ok: false,
@@ -30,26 +29,35 @@ export class TSL_EG {
       };
     }
 
-    // أول حدث — لا مقارنة
     if (!this._lastEffect) {
-      this._lastEffect = effect;
+      this._lastEffect = currentEffect;
       return {
         ok: true,
         type: "FIRST_EVENT",
-        effect
+        effect: currentEffect
       };
     }
 
-    // 3) Interpreter → توصيف بنيوي للحالة الحاضرة فقط
-    const signal = this.interpreter.interpret(effect);
+    const delta = this.d.derive(this._lastEffect, currentEffect);
+    const stsSignal = this.sts.scan(delta);
+    const aeSignal = this.ae.observe(delta);
 
-    // 4) النسيان (استبدال الأثر)
-    this._lastEffect = effect;
+    const signal = this.interpreter.interpret({
+      effect: currentEffect,
+      sts: stsSignal,
+      ae: aeSignal
+    });
+
+    this._lastEffect = currentEffect;
 
     return {
       ok: true,
       type: "STRUCTURAL_EVENT",
-      effect,
+      event,
+      effect: currentEffect,
+      delta,
+      sts: stsSignal,
+      ae: aeSignal,
       signal
     };
   }
@@ -62,11 +70,12 @@ export class TSL_EG {
   meta() {
     return {
       engine: "TSL_EG",
-      logic: "CONTAINMENT",
+      logic: "RETRO_CONTAINMENT",
       mode: "STREAMING",
       memory: "LAST_EFFECT_ONLY",
-      delta: false,
+      delta: true,
       decision: false,
+      policy: false,
       reference: false
     };
   }
