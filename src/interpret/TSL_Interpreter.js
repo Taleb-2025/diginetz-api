@@ -1,27 +1,22 @@
 export class TSL_Interpreter {
-  interpret({ effect, sts, ae }) {
-    const results = {};
+  interpret({ delta, sts, ae }) {
+    if (ae && ae.type === "ABSENT_EXECUTION") {
+      return {
+        status: "IMPOSSIBLE",
+        reason: ae.reason
+      };
+    }
 
-    // Show each layer's result
-    results.ndrResult = effect;
-    results.stsResult = {
-      level: sts.level,
-      reason: sts.reason
+    if (delta && delta.retro_status === "ANOMALY") {
+      return {
+        status: "ANOMALOUS",
+        reason: delta.retro_reason
+      };
+    }
+
+    return {
+      status: "STABLE",
+      reason: "STRUCTURALLY_COMPATIBLE"
     };
-    results.aeResult = ae ? {
-      type: ae.type,
-      reason: ae.reason
-    } : { type: "NONE" };
-
-    // Show final combined result
-    results.finalResult = ae && ae.type === "ABSENT_EXECUTION" ? {
-      status: "IMPOSSIBLE",
-      message: "Containment not possible: " + (ae.reason || "Structural impossibility.")
-    } : {
-      status: "POSSIBLE",
-      message: "Containment is structurally valid and stable."
-    };
-
-    return results;
   }
 }
