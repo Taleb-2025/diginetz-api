@@ -4,47 +4,78 @@ export class TSL_D {
       throw new Error("TSL_D_MISSING_STATE");
     }
 
-    const retro = this.#retroValidate(previous, current);
+    const retro = this.#retroEvaluate(previous, current);
 
     return {
-      from: previous.placement,
-      to: current.placement,
-      retro_valid: retro.valid,
+      from: previous.containment,
+      to: current.containment,
+      retro_status: retro.status,   // COMPATIBLE | ANOMALY | IMPOSSIBLE
       retro_reason: retro.reason
     };
   }
 
-  #retroValidate(prev, curr) {
-    if (curr.placement === "INSIDE") {
+  #retroEvaluate(prev, curr) {
+
+    // 1) Non-monotonic flow inside same container → ANOMALY (not impossible)
+    if (prev.container === curr.container) {
       if (
-        prev.placement === "EDGE" ||
-        prev.placement === "OUTSIDE"
+        prev.containment === "DRAINING" &&
+        curr.containment === "DRAINING"
+      ) {
+        if (curr.extension > prev.extension) {
+          return {
+            status: "ANOMALY",
+            reason: "NON_MONOTONIC_FLOW_WITHIN_CONTAINER"
+          };
+        }
+      }
+    }
+
+    // 2) Container change without completion → ANOMALY (reported but not blocked)
+    if (prev.container !== curr.container) {
+      if (prev.containment !== "LAST_TRACE") {
+        return {
+          status: "ANOMALY",
+          reason: "CONTAINER_CHANGE_WITHOUT_COMPLETION"
+        };
+      }
+    }
+
+    // 3) Logical boundary violations → IMPOSSIBLE (true structural break)
+
+    if (curr.containment === "DRAINING") {
+      if (
+        prev.containment === "LAST_TRACE" ||
+        prev.containment === "ILLEGAL_TRACE"
       ) {
         return {
-          valid: false,
-          reason: "CURRENT_INSIDE_INVALIDATES_PREVIOUS_BOUNDARY"
+          status: "IMPOSSIBLE",
+          reason: "DRAINING_NOT_ALLOWED_AFTER_BOUNDARY"
         };
       }
     }
 
-    if (curr.placement === "EDGE") {
-      if (prev.placement !== "INSIDE") {
+    if (curr.containment === "LAST_TRACE") {
+      if (prev.containment !== "DRAINING") {
         return {
-          valid: false,
-          reason: "EDGE_REQUIRES_PREVIOUS_INSIDE"
+          status: "IMPOSSIBLE",
+          reason: "LAST_TRACE_REQUIRES_PREVIOUS_DRAINING"
         };
       }
     }
 
-    if (curr.placement === "OUTSIDE") {
-      if (prev.placement !== "EDGE") {
+    if (curr.containment === "ILLEGAL_TRACE") {
+      if (prev.containment !== "LAST_TRACE") {
         return {
-          valid: false,
-          reason: "OUTSIDE_REQUIRES_PREVIOUS_EDGE"
+          status: "IMPOSSIBLE",
+          reason: "ILLEGAL_TRACE_REQUIRES_PREVIOUS_LAST_TRACE"
         };
       }
     }
 
-    return { valid: true, reason: "RETRO_COMPATIBLE" };
+    return {
+      status: "COMPATIBLE",
+      reason: "RETRO_COMPATIBLE"
+    };
   }
 }
