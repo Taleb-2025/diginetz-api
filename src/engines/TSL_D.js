@@ -4,33 +4,47 @@ export class TSL_D {
       throw new Error("TSL_D_MISSING_STATE");
     }
 
-    const prev = previous.containment;
-    const curr = current.containment;
+    const retro = this.#retroValidate(previous, current);
 
     return {
-      from: prev,
-      to: curr,
-      effect: this.#effect(prev, curr)
+      from: previous.placement,
+      to: current.placement,
+      retro_valid: retro.valid,
+      retro_reason: retro.reason
     };
   }
 
-  #effect(prev, curr) {
-    if (prev === "DRAINING" && curr === "DRAINING") {
-      return "CONTINUITY";        // السير على الطريق
+  #retroValidate(prev, curr) {
+    if (curr.placement === "INSIDE") {
+      if (
+        prev.placement === "EDGE" ||
+        prev.placement === "OUTSIDE"
+      ) {
+        return {
+          valid: false,
+          reason: "CURRENT_INSIDE_INVALIDATES_PREVIOUS_BOUNDARY"
+        };
+      }
     }
 
-    if (prev === "DRAINING" && curr === "LAST_TRACE") {
-      return "COMPLETION";        // وصول للأثر الأخير
+    if (curr.placement === "EDGE") {
+      if (prev.placement !== "INSIDE") {
+        return {
+          valid: false,
+          reason: "EDGE_REQUIRES_PREVIOUS_INSIDE"
+        };
+      }
     }
 
-    if (prev === "LAST_TRACE" && curr === "DRAINING") {
-      return "RESET_FLOW";        // عودة غير طبيعية
+    if (curr.placement === "OUTSIDE") {
+      if (prev.placement !== "EDGE") {
+        return {
+          valid: false,
+          reason: "OUTSIDE_REQUIRES_PREVIOUS_EDGE"
+        };
+      }
     }
 
-    if (curr === "ILLEGAL_TRACE") {
-      return "RUPTURE";           // انقطاع المسار
-    }
-
-    return "TRANSITION";
+    return { valid: true, reason: "RETRO_COMPATIBLE" };
   }
 }
