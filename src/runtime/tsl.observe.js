@@ -57,11 +57,11 @@ export function createTSL() {
         ae: aeSignal
       });
 
-      const signal = interpreter.interpret({
-        effect: currentEffect,
-        sts: stsSignal,
-        ae: aeSignal
-      });
+     const signal = interpreter.interpret({
+  delta,
+  sts: stsSignal,
+  ae: aeSignal
+});
 
       lastEffect = currentEffect;
 
