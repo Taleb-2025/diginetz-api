@@ -4,8 +4,14 @@ export class TSL_STS {
       return this.#state("STABLE", "NO_DELTA");
     }
 
-    if (retroDelta.retro_valid === false) {
-      return this.#state("DEVIATION", retroDelta.retro_reason);
+    const { retro_status, retro_reason } = retroDelta;
+
+    if (retro_status === "IMPOSSIBLE") {
+      return this.#state("CRITICAL", retro_reason);
+    }
+
+    if (retro_status === "ANOMALY") {
+      return this.#state("TENSION", retro_reason);
     }
 
     return this.#state("STABLE", "STRUCTURALLY_COMPATIBLE");
