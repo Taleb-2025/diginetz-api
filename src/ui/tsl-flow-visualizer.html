@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TSL Flow Visualizer</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 16px; }
+      header { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+      button { padding: 10px 14px; border: 1px solid #ccc; border-radius: 10px; background: #fff; cursor: pointer; }
+      button:hover { background: #f6f6f6; }
+      .grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 12px; }
+      .card { border: 1px solid #e6e6e6; border-radius: 14px; padding: 12px; }
+      #chart { width: 100%; height: 420px; }
+      .kpis { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 10px; }
+      .kpi { border: 1px solid #eee; border-radius: 12px; padding: 10px; }
+      .kpi .label { font-size: 12px; opacity: 0.75; }
+      .kpi .value { font-size: 18px; font-weight: 700; margin-top: 4px; }
+      .row { display:flex; gap:10px; flex-wrap: wrap; align-items:center; }
+      input[type="text"] { padding: 10px 12px; border: 1px solid #ccc; border-radius: 10px; min-width: 260px; }
+      .muted { opacity: 0.75; font-size: 12px; }
+      pre { background: #0b0b0b; color: #eaeaea; padding: 10px; border-radius: 12px; overflow:auto; max-height: 260px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div style="font-weight:800;font-size:18px;">TSL Flow Visualizer</div>
+      <div class="muted">Timeline + anomaly/break markers + layer summary</div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <div class="row">
+          <input id="historyUrl" type="text" value="/api/flow/history" />
+          <button id="btnRefresh">Refresh</button>
+          <button id="btnReset">Reset Flow</button>
+          <span id="status" class="muted"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="kpis" id="kpis"></div>
+      </div>
+
+      <div class="card">
+        <div id="chart"></div>
+      </div>
+
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:8px;">Last Event (raw)</div>
+        <pre id="lastRaw">{}</pre>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+    <script>
+      const CONTAINMENT_Y = {
+        "DRAINING": 0,
+        "LAST_TRACE": 1,
+        "ILLEGAL_TRACE": 2
+      };
+
+      const CONTAINMENT_LABELS = ["DRAINING", "LAST_TRACE", "ILLEGAL_TRACE"];
+
+      let chartInstance = null;
+
+      function safeGet(obj, path, fallback = null) {
+        try {
+          return path.split('.').reduce((o, k) => (o && o[k] !== undefined ? o[k] : undefined), obj) ?? fallback;
+        } catch {
+          return fallback;
+        }
+      }
+
+      function levelFromResult(r) {
+        const stsLevel = safeGet(r, "sts.level", null);
+        const aeType = safeGet(r, "ae.type", null);
+
+        if (aeType === "ABSENT_EXECUTION") return "CRITICAL";
+        if (stsLevel === "TENSION") return "TENSION";
+        return "STABLE";
+      }
+
+      function colorForLevel(level) {
+        if (level === "CRITICAL") return "#d81b60";
+        if (level === "TENSION") return "#ff8f00";
+        return "#2e7d32";
+      }
+
+      function buildKPIs(history) {
+        const total = history.length;
+        let stable = 0, tension = 0, critical = 0, anomalies = 0, breaks = 0;
+        let firstCriticalIndex = null;
+
+        for (let i = 0; i < history.length; i++) {
+          const r = history[i];
+          const lvl = levelFromResult(r);
+          if (lvl === "STABLE") stable++;
+          if (lvl === "TENSION") tension++;
+          if (lvl === "CRITICAL") {
+            critical++;
+            if (firstCriticalIndex === null) firstCriticalIndex = i;
+          }
+
+          const rs = safeGet(r, "delta.retro_status", null);
+          if (rs === "ANOMALY") anomalies++;
+          if (rs === "IMPOSSIBLE") breaks++;
+        }
+
+        const stablePct = total ? Math.round((stable / total) * 100) : 0;
+
+        return [
+          { label: "Total Events", value: String(total) },
+          { label: "Stable %", value: stablePct + "%" },
+          { label: "Tension Count", value: String(tension) },
+          { label: "Critical Count", value: String(critical) },
+          { label: "Anomalies", value: String(anomalies) },
+          { label: "First Critical Index", value: firstCriticalIndex === null ? "-" : String(firstCriticalIndex) }
+        ];
+      }
+
+      function renderKPIs(kpis) {
+        const el = document.getElementById("kpis");
+        el.innerHTML = "";
+        for (const k of kpis) {
+          const div = document.createElement("div");
+          div.className = "kpi";
+          div.innerHTML = `<div class="label">${k.label}</div><div class="value">${k.value}</div>`;
+          el.appendChild(div);
+        }
+      }
+
+      function buildSeries(history) {
+        const points = history.map((r, idx) => {
+          const containment = safeGet(r, "effect.containment", null);
+          const y = CONTAINMENT_Y[containment] ?? null;
+          const level = levelFromResult(r);
+          const color = colorForLevel(level);
+
+          const payload = {
+            idx,
+            event: safeGet(r, "event", null),
+            container: safeGet(r, "effect.container", null),
+            extension: safeGet(r, "effect.extension", null),
+            containment,
+            retro_status: safeGet(r, "delta.retro_status", null),
+            retro_reason: safeGet(r, "delta.retro_reason", null),
+            sts_level: safeGet(r, "sts.level", null),
+            sts_reason: safeGet(r, "sts.reason", null),
+            ae_type: safeGet(r, "ae.type", null),
+            ae_reason: safeGet(r, "ae.reason", null),
+            signal_status: safeGet(r, "signal.status", null),
+            signal_reason: safeGet(r, "signal.reason", null),
+          };
+
+          return {
+            value: [idx, y],
+            itemStyle: { color },
+            symbolSize: level === "CRITICAL" ? 14 : (level === "TENSION" ? 10 : 8),
+            payload
+          };
+        }).filter(p => p.value[1] !== null);
+
+        const criticalIndices = history
+          .map((r, idx) => ({ idx, lvl: levelFromResult(r) }))
+          .filter(x => x.lvl === "CRITICAL")
+          .map(x => x.idx);
+
+        const markLines = criticalIndices.map(i => ({
+          xAxis: i,
+          lineStyle: { color: "#d81b60", width: 1.5, type: "solid" },
+          label: { formatter: "CRITICAL", position: "insideEndTop" }
+        }));
+
+        return { points, markLines };
+      }
+
+      function renderChart(history) {
+        const dom = document.getElementById("chart");
+        
+        if (chartInstance) {
+          chartInstance.dispose();
+        }
+        
+        chartInstance = echarts.init(dom);
+
+        const { points, markLines } = buildSeries(history);
+
+        const option = {
+          grid: { left: 60, right: 20, top: 20, bottom: 60 },
+          tooltip: {
+            trigger: "item",
+            formatter: (params) => {
+              const p = params.data?.payload;
+              if (!p) return "";
+              const lines = [
+                `<b>Index:</b> ${p.idx}`,
+                `<b>Event:</b> ${p.event}`,
+                `<b>Container/Extension:</b> ${p.container}/${p.extension}`,
+                `<b>Containment:</b> ${p.containment}`,
+                `<b>Retro:</b> ${p.retro_status || "-"} (${p.retro_reason || "-"})`,
+                `<b>STS:</b> ${p.sts_level || "-"} (${p.sts_reason || "-"})`,
+                `<b>AE:</b> ${p.ae_type || "NONE"} (${p.ae_reason || "-"})`,
+                `<b>Signal:</b> ${p.signal_status || "-"} (${p.signal_reason || "-"})`
+              ];
+              return lines.join("<br/>");
+            }
+          },
+          xAxis: {
+            type: "value",
+            name: "Pulse Index",
+            nameLocation: "middle",
+            nameGap: 35,
+            minInterval: 1,
+            axisLabel: { 
+              interval: Math.max(0, Math.ceil(history.length / 30) - 1)
+            }
+          },
+          yAxis: {
+            type: "category",
+            name: "Containment",
+            nameLocation: "middle",
+            nameGap: 45,
+            data: CONTAINMENT_LABELS
+          },
+          series: [
+            {
+              name: "TSL Timeline",
+              type: "scatter",
+              data: points,
+              markLine: {
+                symbol: "none",
+                silent: true,
+                data: markLines
+              }
+            }
+          ]
+        };
+
+        chartInstance.setOption(option);
+        
+        const resizeHandler = () => {
+          if (chartInstance) {
+            chartInstance.resize();
+          }
+        };
+        
+        window.removeEventListener("resize", resizeHandler);
+        window.addEventListener("resize", resizeHandler);
+      }
+
+      async function fetchHistory(url) {
+        const res = await fetch(url, { method: "GET" });
+        if (!res.ok) throw new Error("HISTORY_FETCH_FAILED_" + res.status);
+        
+        const data = await res.json().catch(() => {
+          throw new Error("INVALID_JSON_RESPONSE");
+        });
+
+        if (Array.isArray(data)) return data;
+        if (data && Array.isArray(data.history)) return data.history;
+        throw new Error("HISTORY_UNEXPECTED_SHAPE");
+      }
+
+      async function callReset() {
+        const historyUrl = document.getElementById("historyUrl").value.trim();
+        const resetUrl = historyUrl.replace('/history', '/reset');
+        
+        const res = await fetch(resetUrl, { method: "POST" });
+        if (!res.ok) throw new Error("RESET_FAILED_" + res.status);
+        
+        return res.json().catch(() => ({}));
+      }
+
+      function setStatus(msg) {
+        document.getElementById("status").textContent = msg;
+      }
+
+      function renderLastRaw(history) {
+        const last = history.length ? history[history.length - 1] : {};
+        document.getElementById("lastRaw").textContent = JSON.stringify(last, null, 2);
+      }
+
+      async function refresh() {
+        const url = document.getElementById("historyUrl").value.trim();
+        if (!url) {
+          setStatus("URL is required");
+          return;
+        }
+        
+        setStatus("Loading...");
+        try {
+          const history = await fetchHistory(url);
+          renderKPIs(buildKPIs(history));
+          renderChart(history);
+          renderLastRaw(history);
+          setStatus("OK (" + history.length + " events)");
+        } catch (e) {
+          setStatus(String(e.message || e));
+          renderKPIs(buildKPIs([]));
+          renderChart([]);
+          renderLastRaw([]);
+        }
+      }
+
+      document.getElementById("btnRefresh").addEventListener("click", refresh);
+      document.getElementById("btnReset").addEventListener("click", async () => {
+        setStatus("Resetting...");
+        try {
+          await callReset();
+          await refresh();
+        } catch (e) {
+          setStatus(String(e.message || e));
+        }
+      });
+
+      refresh();
+    </script>
+  </body>
+</html>
