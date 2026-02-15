@@ -7,12 +7,25 @@ export class TSL_StructuralAnalyzer {
     const effect = result.effect;
     const delta = result.delta;
 
+    const structure = this.#analyzeStructure(effect);
+    const transition = this.#analyzeTransition(delta);
+    const boundaries = this.#analyzeBoundaries(effect);
+    const properties = this.#analyzeProperties(effect, delta);
+    const classification = this.#classify(result);
+
     return {
-      structure: this.#analyzeStructure(effect),
-      transition: this.#analyzeTransition(delta),
-      boundaries: this.#analyzeBoundaries(effect),
-      properties: this.#analyzeProperties(effect, delta),
-      classification: this.#classify(result),
+      structure,
+      transition,
+      boundaries,
+      properties,
+      classification,
+      narrative: this.#buildNarrative({
+        structure,
+        transition,
+        boundaries,
+        properties,
+        classification
+      }),
       raw: result
     };
   }
@@ -129,6 +142,38 @@ export class TSL_StructuralAnalyzer {
     };
   }
 
+  #buildNarrative({ structure, transition, boundaries, properties, classification }) {
+    if (classification.state === "STRUCTURAL_BREAK") {
+      return `The structure was previously outside or beyond its valid boundary and suddenly returned inside the container. 
+This transition violates structural continuity. 
+A closed or exceeded structure cannot re-enter without a new structural cycle. 
+This indicates a structural break in causality.`;
+    }
+
+    if (classification.state === "STRUCTURAL_TENSION") {
+      return `The structure remains within its container but shows a non-monotonic transition. 
+The flow does not strictly follow the expected forward containment logic. 
+This represents structural tension without full collapse.`;
+    }
+
+    if (classification.state === "OUTSIDE_CONTAINER") {
+      return `The extension has exceeded the container capacity. 
+The structure is now beyond its defined boundary and cannot be considered structurally contained.`;
+    }
+
+    if (classification.state === "STRUCTURAL_COMPLETION") {
+      return `The extension has reached the upper boundary of the container. 
+The structural cycle is complete and no further forward progression is structurally valid.`;
+    }
+
+    if (classification.state === "STRUCTURE_STABLE") {
+      return `The extension remains within the container. 
+The transition preserves structural continuity and containment integrity.`;
+    }
+
+    return `The structural condition cannot be determined due to insufficient or undefined state information.`;
+  }
+
   #unknownStructure() {
     return {
       structure: null,
@@ -139,6 +184,7 @@ export class TSL_StructuralAnalyzer {
         state: "UNKNOWN_STRUCTURE",
         severity: "UNKNOWN"
       },
+      narrative: "No structural data available.",
       raw: null
     };
   }
