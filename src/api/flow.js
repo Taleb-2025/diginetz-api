@@ -31,7 +31,8 @@ router.post("/observe", (req, res) => {
     const bytes = Uint8Array.from(req.body);
     const result = tsl.observe(bytes);
 
-    flowHistory.push(result);
+   flowHistory.push(result);
+if (flowHistory.length > 1000) flowHistory.shift();
 
     return res.json(result);
 
