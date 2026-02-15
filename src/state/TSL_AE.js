@@ -1,12 +1,12 @@
 export class TSL_AE {
-  observe(retroDelta) {
-    if (!retroDelta) return null;
+  observe(delta) {
+    if (!delta) return null;
 
-    if (retroDelta.retro_valid === false) {
+    if (delta.retro_status === "IMPOSSIBLE") {
       return {
         layer: "AE",
         type: "ABSENT_EXECUTION",
-        reason: retroDelta.retro_reason,
+        reason: delta.retro_reason,
         effect: "STRUCTURAL_IMPOSSIBILITY"
       };
     }
