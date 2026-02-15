@@ -1,6 +1,6 @@
 export class TSL_NDR {
 extract(event) {
-if (event == null || typeof event === ‘object’) {
+if (event == null || typeof event === "object") {
 throw new Error(“TSL_NDR_INVALID_INPUT”);
 }
 
