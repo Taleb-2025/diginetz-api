@@ -156,7 +156,7 @@
           return {
             value: [idx, y],
             itemStyle: { color },
-            symbolSize: level === "CRITICAL" ? 14 : (level === "TENSION" ? 10 : 8),
+           symbolSize: level === "CRITICAL" ? 5 : (level === "TENSION" ? 3 : 2),
             payload
           };
         }).filter(p => p.value[1] !== null);
