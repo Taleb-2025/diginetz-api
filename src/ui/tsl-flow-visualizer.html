@@ -104,7 +104,7 @@
 
           const rs = safeGet(r, "delta.retro_status", null);
           if (rs === "ANOMALY") anomalies++;
-          if (rs === "IMPOSSIBLE") breaks++;
+          if (rs === "IMP") breaks++;
         }
 
         const stablePct = total ? Math.round((stable / total) * 100) : 0;
