@@ -153,13 +153,13 @@
             signal_reason: safeGet(r, "signal.reason", null),
           };
 
-         return {
-  value: [idx, y],
-  itemStyle: { color },
-  symbol: "circle",
-  symbolSize: 2,
-  payload
-};
+          return {
+            value: [idx, y],
+            itemStyle: { color },
+            symbol: "circle",
+            symbolSize: 2,
+            payload
+          };
         }).filter(p => p.value[1] !== null);
 
         const criticalIndices = history
@@ -169,8 +169,7 @@
 
         const markLines = criticalIndices.map(i => ({
           xAxis: i,
-          lineStyle: { color: "#d81b60", width: 0.5, type: "solid" },
-          label: { formatter: "CRITICAL", position: "insideEndTop" }
+          lineStyle: { color: "#d81b60", width: 0.3, type: "solid" }
         }));
 
         return { points, markLines };
@@ -258,14 +257,14 @@
           throw new Error("INVALID_JSON_RESPONSE");
         });
 
-        if (Array.isArray(data.history)) return data.history; // تعديل 1
-        if (Array.isArray(data.analysis)) return data.history; // تعديل 2
+        if (Array.isArray(data.history)) return data.history;
+        if (Array.isArray(data.analysis)) return data.history;
         throw new Error("HISTORY_UNEXPECTED_SHAPE");
       }
 
       async function callReset() {
         const historyUrl = document.getElementById("historyUrl").value.trim();
-        const resetUrl = "/api/flow/reset"; // تعديل 3
+        const resetUrl = "/api/flow/reset";
         
         const res = await fetch(resetUrl, { method: "POST" });
         if (!res.ok) throw new Error("RESET_FAILED_" + res.status);
