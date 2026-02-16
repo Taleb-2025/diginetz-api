@@ -169,8 +169,7 @@
 
         const markLines = criticalIndices.map(i => ({
           xAxis: i,
-          lineStyle: { color: "#d81b60", width: 0.3, type: "solid" },
-          label: { formatter: "IMPOSSIBLE", position: "insideEndTop" }
+          lineStyle: { color: "#d81b60", width: 0.3, type: "solid" }
         }));
 
         return { points, markLines };
@@ -189,9 +188,41 @@
 
         const option = {
           grid: { left: 60, right: 20, top: 20, bottom: 60 },
-          tooltip: { trigger: "item" },
-          xAxis: { type: "value" },
-          yAxis: { type: "category", data: CONTAINMENT_LABELS },
+          tooltip: {
+            trigger: "item",
+            formatter: (params) => {
+              const p = params.data?.payload;
+              if (!p) return "";
+              const lines = [
+                `<b>Index:</b> ${p.idx}`,
+                `<b>Event:</b> ${p.event}`,
+                `<b>Container/Extension:</b> ${p.container}/${p.extension}`,
+                `<b>Containment:</b> ${p.containment}`,
+                `<b>Retro:</b> ${p.retro_status || "-"} (${p.retro_reason || "-"})`,
+                `<b>STS:</b> ${p.sts_level || "-"} (${p.sts_reason || "-"})`,
+                `<b>AE:</b> ${p.ae_type || "NONE"} (${p.ae_reason || "-"})`,
+                `<b>Signal:</b> ${p.signal_status || "-"} (${p.signal_reason || "-"})`
+              ];
+              return lines.join("<br/>");
+            }
+          },
+          xAxis: {
+            type: "value",
+            name: "Pulse Index",
+            nameLocation: "middle",
+            nameGap: 35,
+            minInterval: 1,
+            axisLabel: { 
+              interval: Math.max(0, Math.ceil(history.length / 30) - 1)
+            }
+          },
+          yAxis: {
+            type: "category",
+            name: "Containment",
+            nameLocation: "middle",
+            nameGap: 45,
+            data: CONTAINMENT_LABELS
+          },
           series: [
             {
               name: "TSL Timeline",
@@ -207,32 +238,38 @@
         };
 
         chartInstance.setOption(option);
-
-        // ✅ الإضافة الوحيدة: إخفاء IMPOSSIBLE بعد ثانية
-        setTimeout(() => {
-          chartInstance.setOption({
-            series: [
-              {
-                markLine: { data: [] }
-              }
-            ]
-          });
-        }, 1000);
+        
+        const resizeHandler = () => {
+          if (chartInstance) {
+            chartInstance.resize();
+          }
+        };
+        
+        window.removeEventListener("resize", resizeHandler);
+        window.addEventListener("resize", resizeHandler);
       }
 
       async function fetchHistory(url) {
         const res = await fetch(url, { method: "GET" });
         if (!res.ok) throw new Error("HISTORY_FETCH_FAILED_" + res.status);
-        const data = await res.json();
+        
+        const data = await res.json().catch(() => {
+          throw new Error("INVALID_JSON_RESPONSE");
+        });
+
         if (Array.isArray(data.history)) return data.history;
         if (Array.isArray(data.analysis)) return data.history;
         throw new Error("HISTORY_UNEXPECTED_SHAPE");
       }
 
       async function callReset() {
-        const res = await fetch("/api/flow/reset", { method: "POST" });
+        const historyUrl = document.getElementById("historyUrl").value.trim();
+        const resetUrl = "/api/flow/reset";
+        
+        const res = await fetch(resetUrl, { method: "POST" });
         if (!res.ok) throw new Error("RESET_FAILED_" + res.status);
-        return res.json();
+        
+        return res.json().catch(() => ({}));
       }
 
       function setStatus(msg) {
@@ -246,6 +283,11 @@
 
       async function refresh() {
         const url = document.getElementById("historyUrl").value.trim();
+        if (!url) {
+          setStatus("URL is required");
+          return;
+        }
+        
         setStatus("Loading...");
         try {
           const history = await fetchHistory(url);
@@ -264,8 +306,12 @@
       document.getElementById("btnRefresh").addEventListener("click", refresh);
       document.getElementById("btnReset").addEventListener("click", async () => {
         setStatus("Resetting...");
-        await callReset();
-        await refresh();
+        try {
+          await callReset();
+          await refresh();
+        } catch (e) {
+          setStatus(String(e.message || e));
+        }
       });
 
       refresh();
