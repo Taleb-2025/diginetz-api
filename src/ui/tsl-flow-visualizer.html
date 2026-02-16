@@ -165,11 +165,23 @@
           .map((r, idx) => ({ idx, lvl: levelFromResult(r) }))
           .filter(x => x.lvl === "CRITICAL")
           .map(x => x.idx);
-const markLines = criticalIndices.map(i => ({
+
+
+
+        
+
+         const markLines = criticalIndices.map((i, idx) => ({
   xAxis: i,
   lineStyle: { color: "#d81b60", width: 0.5, type: "solid" },
-  label: { show: false }
+  label: idx === criticalIndices.length - 1
+    ? { formatter: "IMP", position: "insideEndTop" }
+    : { show: false }
 }));
+
+
+
+
+        
 
         return { points, markLines };
       }
