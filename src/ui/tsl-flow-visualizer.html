@@ -153,12 +153,13 @@
             signal_reason: safeGet(r, "signal.reason", null),
           };
 
-          return {
-            value: [idx, y],
-            itemStyle: { color },
-           symbolSize: level === "CRITICAL" ? 5 : (level === "TENSION" ? 3 : 2),
-            payload
-          };
+         return {
+  value: [idx, y],
+  itemStyle: { color },
+  symbol: "circle",
+  symbolSize: 2,
+  payload
+};
         }).filter(p => p.value[1] !== null);
 
         const criticalIndices = history
