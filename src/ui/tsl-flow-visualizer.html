@@ -54,13 +54,13 @@
 
     <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
     <script>
-      const CONTAINMENT_Y = {
-        "DRAINING": 0,
-        "LAST_TRACE": 1,
-        "ILLEGAL_TRACE": 2
+      const PHASE_Y = {
+        "BUILDING": 0,
+        "PEAK": 1,
+        "DISINTEGRATION": 2
       };
 
-      const CONTAINMENT_LABELS = ["DRAINING", "LAST_TRACE", "ILLEGAL_TRACE"];
+      const PHASE_LABELS = ["BUILDING", "PEAK", "DISINTEGRATION"];
 
       let chartInstance = null;
 
@@ -95,6 +95,7 @@
         for (let i = 0; i < history.length; i++) {
           const r = history[i];
           const lvl = levelFromResult(r);
+
           if (lvl === "STABLE") stable++;
           if (lvl === "TENSION") tension++;
           if (lvl === "CRITICAL") {
@@ -104,7 +105,7 @@
 
           const rs = safeGet(r, "delta.retro_status", null);
           if (rs === "ANOMALY") anomalies++;
-          if (rs === "IMP") breaks++;
+          if (rs === "IMPOSSIBLE") breaks++;
         }
 
         const stablePct = total ? Math.round((stable / total) * 100) : 0;
@@ -132,17 +133,17 @@
 
       function buildSeries(history) {
         const points = history.map((r, idx) => {
-          const containment = safeGet(r, "effect.containment", null);
-          const y = CONTAINMENT_Y[containment] ?? null;
+          const phase = safeGet(r, "effect.phase", null);
+          const y = PHASE_Y[phase] ?? null;
           const level = levelFromResult(r);
           const color = colorForLevel(level);
 
           const payload = {
             idx,
             event: safeGet(r, "event", null),
-            container: safeGet(r, "effect.container", null),
+            symbol: safeGet(r, "effect.symbol", null),
             extension: safeGet(r, "effect.extension", null),
-            containment,
+            phase,
             retro_status: safeGet(r, "delta.retro_status", null),
             retro_reason: safeGet(r, "delta.retro_reason", null),
             sts_level: safeGet(r, "sts.level", null),
@@ -166,33 +167,24 @@
           .filter(x => x.lvl === "CRITICAL")
           .map(x => x.idx);
 
-
-
-        
-
-         const markLines = criticalIndices.map((i, idx) => ({
-  xAxis: i,
-  lineStyle: { color: "#d81b60", width: 0.2, type: "solid" },
-  label: idx === criticalIndices.length - 1
-    ? { formatter: "IMP", position: "insideEndTop" }
-    : { show: false }
-}));
-
-
-
-
-        
+        const markLines = criticalIndices.map((i, idx) => ({
+          xAxis: i,
+          lineStyle: { color: "#d81b60", width: 0.8, type: "solid" },
+          label: idx === criticalIndices.length - 1
+            ? { formatter: "IMPOSSIBLE", position: "insideEndTop" }
+            : { show: false }
+        }));
 
         return { points, markLines };
       }
 
       function renderChart(history) {
         const dom = document.getElementById("chart");
-        
+
         if (chartInstance) {
           chartInstance.dispose();
         }
-        
+
         chartInstance = echarts.init(dom);
 
         const { points, markLines } = buildSeries(history);
@@ -207,8 +199,8 @@
               const lines = [
                 `<b>Index:</b> ${p.idx}`,
                 `<b>Event:</b> ${p.event}`,
-                `<b>Container/Extension:</b> ${p.container}/${p.extension}`,
-                `<b>Containment:</b> ${p.containment}`,
+                `<b>Symbol/Extension:</b> ${p.symbol}/${p.extension}`,
+                `<b>Phase:</b> ${p.phase}`,
                 `<b>Retro:</b> ${p.retro_status || "-"} (${p.retro_reason || "-"})`,
                 `<b>STS:</b> ${p.sts_level || "-"} (${p.sts_reason || "-"})`,
                 `<b>AE:</b> ${p.ae_type || "NONE"} (${p.ae_reason || "-"})`,
@@ -222,17 +214,14 @@
             name: "Pulse Index",
             nameLocation: "middle",
             nameGap: 35,
-            minInterval: 1,
-            axisLabel: { 
-              interval: Math.max(0, Math.ceil(history.length / 30) - 1)
-            }
+            minInterval: 1
           },
           yAxis: {
             type: "category",
-            name: "Containment",
+            name: "Phase",
             nameLocation: "middle",
             nameGap: 45,
-            data: CONTAINMENT_LABELS
+            data: PHASE_LABELS
           },
           series: [
             {
@@ -249,37 +238,26 @@
         };
 
         chartInstance.setOption(option);
-        
-        const resizeHandler = () => {
-          if (chartInstance) {
-            chartInstance.resize();
-          }
-        };
-        
-        window.removeEventListener("resize", resizeHandler);
-        window.addEventListener("resize", resizeHandler);
       }
 
       async function fetchHistory(url) {
         const res = await fetch(url, { method: "GET" });
         if (!res.ok) throw new Error("HISTORY_FETCH_FAILED_" + res.status);
-        
+
         const data = await res.json().catch(() => {
           throw new Error("INVALID_JSON_RESPONSE");
         });
 
-        if (Array.isArray(data.history)) return data.history; // تعديل 1
-        if (Array.isArray(data.analysis)) return data.history; // تعديل 2
+        if (Array.isArray(data.history)) return data.history;
+        if (Array.isArray(data.analysis)) return data.analysis;
+
         throw new Error("HISTORY_UNEXPECTED_SHAPE");
       }
 
       async function callReset() {
-        const historyUrl = document.getElementById("historyUrl").value.trim();
-        const resetUrl = "/api/flow/reset"; // تعديل 3
-        
+        const resetUrl = "/api/flow/reset";
         const res = await fetch(resetUrl, { method: "POST" });
         if (!res.ok) throw new Error("RESET_FAILED_" + res.status);
-        
         return res.json().catch(() => ({}));
       }
 
@@ -298,7 +276,7 @@
           setStatus("URL is required");
           return;
         }
-        
+
         setStatus("Loading...");
         try {
           const history = await fetchHistory(url);
