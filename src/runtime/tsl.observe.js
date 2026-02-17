@@ -49,19 +49,31 @@ export function createTSL() {
         };
       }
 
-      const delta = d.derive(lastEffect, currentEffect);
+      let delta;
+
+      try {
+        delta = d.derive(lastEffect, currentEffect);
+      } catch (err) {
+        return {
+          ok: false,
+          phase: "DERIVE",
+          error: err.message
+        };
+      }
+
       const stsSignal = sts.scan(delta);
       const aeSignal = ae.observe(delta);
 
       const constraints = dcls.observe({
+        delta,
         ae: aeSignal
       });
 
-     const signal = interpreter.interpret({
-  delta,
-  sts: stsSignal,
-  ae: aeSignal
-});
+      const signal = interpreter.interpret({
+        delta,
+        sts: stsSignal,
+        ae: aeSignal
+      });
 
       lastEffect = currentEffect;
 
