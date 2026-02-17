@@ -26,7 +26,6 @@ export class TSL_NDR {
     const phase = this.#resolvePhase(symbol, extension);
 
     return {
-      value,
       symbol,
       extension,
       phase,
