@@ -1,81 +1,90 @@
 export class TSL_D {
+
   derive(previous, current) {
     if (!previous || !current) {
       throw new Error("TSL_D_MISSING_STATE");
     }
 
-    const retro = this.#retroEvaluate(previous, current);
+    this.#assertPhaseIntegrity(previous);
+    this.#assertPhaseIntegrity(current);
+
+    const result = this.#evaluate(previous, current);
 
     return {
-      from: previous.containment,
-      to: current.containment,
-      retro_status: retro.status,   // COMPATIBLE | ANOMALY | IMPOSSIBLE
-      retro_reason: retro.reason
+      from: previous.phase,
+      to: current.phase,
+      retro_status: result.status,
+      retro_reason: result.reason
     };
   }
 
-  #retroEvaluate(prev, curr) {
+  #assertPhaseIntegrity(state) {
+    const { symbol, extension, phase } = state;
+    const expected = this.#resolvePhase(symbol, extension);
 
-    // 1) Non-monotonic flow inside same container → ANOMALY (not impossible)
-    if (prev.container === curr.container) {
+    if (expected !== phase) {
+      throw new Error(
+        `TSL_D_PHASE_INTEGRITY_VIOLATION: expected ${expected}, got ${phase}`
+      );
+    }
+  }
+
+  #resolvePhase(symbol, extension) {
+    if (extension < symbol) return "BUILDING";
+    if (extension === symbol) return "PEAK";
+    return "DISINTEGRATION";
+  }
+
+  #evaluate(prev, curr) {
+
+    if (prev.symbol === curr.symbol) {
+
+      const allowed = this.#allowedWithinSymbol(curr.phase);
+
+      if (!allowed.has(prev.phase)) {
+        return {
+          status: "IMPOSSIBLE",
+          reason: "PREVIOUS_NOT_ALLOWED_FOR_CURRENT_STATE"
+        };
+      }
+
+      return {
+        status: "COMPATIBLE",
+        reason: "STRUCTURAL_CONTAINMENT_CONFIRMED"
+      };
+    }
+
+    if (curr.symbol === prev.symbol + 1) {
+
       if (
-        prev.containment === "DRAINING" &&
-        curr.containment === "DRAINING"
-      ) {
-        if (curr.extension > prev.extension) {
-          return {
-            status: "ANOMALY",
-            reason: "NON_MONOTONIC_FLOW_WITHIN_CONTAINER"
-          };
-        }
-      }
-    }
-
-    // 2) Container change without completion → ANOMALY (reported but not blocked)
-    if (prev.container !== curr.container) {
-      if (prev.containment !== "LAST_TRACE") {
-        return {
-          status: "ANOMALY",
-          reason: "CONTAINER_CHANGE_WITHOUT_COMPLETION"
-        };
-      }
-    }
-
-    // 3) Logical boundary violations → IMPOSSIBLE (true structural break)
-
-    if (curr.containment === "DRAINING") {
-      if (
-        prev.containment === "LAST_TRACE" ||
-        prev.containment === "ILLEGAL_TRACE"
+        (prev.phase === "PEAK" || prev.phase === "DISINTEGRATION") &&
+        curr.phase === "BUILDING"
       ) {
         return {
-          status: "IMPOSSIBLE",
-          reason: "DRAINING_NOT_ALLOWED_AFTER_BOUNDARY"
+          status: "COMPATIBLE",
+          reason: "VALID_STRUCTURAL_TRANSFORMATION"
         };
       }
-    }
 
-    if (curr.containment === "LAST_TRACE") {
-      if (prev.containment !== "DRAINING") {
-        return {
-          status: "IMPOSSIBLE",
-          reason: "LAST_TRACE_REQUIRES_PREVIOUS_DRAINING"
-        };
-      }
-    }
-
-    if (curr.containment === "ILLEGAL_TRACE") {
-      if (prev.containment !== "LAST_TRACE") {
-        return {
-          status: "IMPOSSIBLE",
-          reason: "ILLEGAL_TRACE_REQUIRES_PREVIOUS_LAST_TRACE"
-        };
-      }
+      return {
+        status: "IMPOSSIBLE",
+        reason: "INVALID_STRUCTURAL_TRANSFORMATION"
+      };
     }
 
     return {
-      status: "COMPATIBLE",
-      reason: "RETRO_COMPATIBLE"
+      status: "IMPOSSIBLE",
+      reason: "NON_ADJACENT_SYMBOL_TRANSITION"
     };
+  }
+
+  #allowedWithinSymbol(phase) {
+    const map = {
+      BUILDING: new Set(["BUILDING"]),
+      PEAK: new Set(["BUILDING"]),
+      DISINTEGRATION: new Set(["PEAK", "DISINTEGRATION"])
+    };
+
+    return map[phase] || new Set();
   }
 }
