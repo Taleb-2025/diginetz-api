@@ -1,32 +1,43 @@
 export class TSL_NDR {
+
   extract(event) {
-    if (event == null || typeof event === "object") {
-      throw new Error("TSL_NDR_INVALID_INPUT");
+
+    if (event == null) {
+      throw new Error("TSL_NDR_NULL_INPUT");
     }
 
     const value = Number(event);
 
-    if (!Number.isFinite(value)) {
-      throw new Error("TSL_NDR_INVALID_EVENT");
+    if (!Number.isInteger(value)) {
+      throw new Error("TSL_NDR_NON_INTEGER");
     }
 
-    const container = Math.floor(value / 10);
+    if (value < 0) {
+      throw new Error("TSL_NDR_NEGATIVE_NOT_ALLOWED");
+    }
+
+    const symbol = Math.floor(value / 10);
     const extension = value % 10;
 
-    let containment;
-
-    if (extension < container) {
-      containment = "DRAINING";
-    } else if (extension === container) {
-      containment = "LAST_TRACE";
-    } else {
-      containment = "ILLEGAL_TRACE";
+    if (symbol === 0) {
+      throw new Error("TSL_NDR_INVALID_SYMBOL");
     }
 
+    const phase = this.#resolvePhase(symbol, extension);
+
     return {
-      container,
+      value,
+      symbol,
       extension,
-      containment
+      phase,
+      isBoundary: extension === symbol,
+      isContained: extension <= symbol
     };
+  }
+
+  #resolvePhase(symbol, extension) {
+    if (extension < symbol) return "BUILDING";
+    if (extension === symbol) return "PEAK";
+    return "DISINTEGRATION";
   }
 }
