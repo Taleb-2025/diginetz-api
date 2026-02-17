@@ -1,17 +1,26 @@
 export class TSL_DCLS {
-  observe({ ae }) {
+  observe({ delta, ae }) {
+
     if (ae && ae.type === "ABSENT_EXECUTION") {
       return {
         excluded: true,
-        reason: ae.reason || "STRUCTURAL_IMPOSSIBILITY",
-        message: "Detected an impossible event: " + (ae.reason || "Structural impossibility.")
+        severity: "CRITICAL",
+        reason: ae.reason || "STRUCTURAL_IMPOSSIBILITY"
+      };
+    }
+
+    if (delta && delta.retro_status === "ANOMALY") {
+      return {
+        excluded: false,
+        severity: "WARNING",
+        reason: delta.retro_reason
       };
     }
 
     return {
       excluded: false,
-      reason: null,
-      message: "No impossibilities detected, structure is stable."
+      severity: "NONE",
+      reason: null
     };
   }
 
