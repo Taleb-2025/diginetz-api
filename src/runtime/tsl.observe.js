@@ -62,7 +62,7 @@ export function createTSL() {
       }
 
       const stsSignal = sts.scan(delta);
-      const aeSignal = ae.observe(delta);
+      const aeSignal = ae.observe(lastEffect, currentEffect);
 
       const constraints = dcls.observe({
         delta,
