@@ -1,26 +1,35 @@
 export class TSL_DCLS {
-  observe({ delta, ae }) {
 
+  observe({ current, delta, ae }) {
+
+    const eliminated = [];
+    if (delta && delta.retro_status === "IMPOSSIBLE") {
+      return {
+        layer: "DCLS",
+        allowed: null,
+        eliminated: ["STRUCTURAL_IMPOSSIBILITY"]
+      };
+    }
+
+    // 2. 
     if (ae && ae.type === "ABSENT_EXECUTION") {
-      return {
-        excluded: true,
-        severity: "CRITICAL",
-        reason: ae.reason || "STRUCTURAL_IMPOSSIBILITY"
-      };
+      eliminated.push(ae.reason);
     }
 
+    // 3. 
     if (delta && delta.retro_status === "ANOMALY") {
-      return {
-        excluded: false,
-        severity: "WARNING",
-        reason: delta.retro_reason
-      };
+      eliminated.push(delta.retro_reason);
     }
 
+    // 4. 
     return {
-      excluded: false,
-      severity: "NONE",
-      reason: null
+      layer: "DCLS",
+      allowed: current ? {
+        level: current.level,
+        position: current.position,
+        phase: current.phase
+      } : null,
+      eliminated
     };
   }
 
