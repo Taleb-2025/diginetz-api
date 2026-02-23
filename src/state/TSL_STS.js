@@ -1,17 +1,21 @@
 export class TSL_STS {
-  scan(retroDelta) {
-    if (!retroDelta) {
+
+  scan(delta, ae) {
+
+    if (!delta) {
       return this.#state("STABLE", "NO_DELTA");
     }
 
-    const { retro_status, retro_reason } = retroDelta;
-
-    if (retro_status === "IMPOSSIBLE") {
-      return this.#state("CRITICAL", retro_reason);
+    if (delta.retro_status === "IMPOSSIBLE") {
+      return this.#state("CRITICAL", delta.retro_reason);
     }
 
-    if (retro_status === "ANOMALY") {
-      return this.#state("TENSION", retro_reason);
+    if (ae && ae.type === "ABSENT_EXECUTION") {
+      return this.#state("TENSION", ae.reason);
+    }
+
+    if (delta.retro_status === "ANOMALY") {
+      return this.#state("TENSION", delta.retro_reason);
     }
 
     return this.#state("STABLE", "STRUCTURALLY_COMPATIBLE");
