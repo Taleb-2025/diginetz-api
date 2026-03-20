@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 
 import flowRouter from "./api/flow.js";
+import visionageRoute from "./api/visionage.route.js"; // 👈 أضفنا هذا فقط
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -30,6 +31,7 @@ app.use(express.static("public"));
 
 /* ---------- API ROUTES ---------- */
 app.use("/api/flow", flowRouter);
+app.use("/api/visionage", visionageRoute); // 👈 هذا هو المهم
 
 /* ---------- ROOT ---------- */
 app.get("/", (_req, res) => {
