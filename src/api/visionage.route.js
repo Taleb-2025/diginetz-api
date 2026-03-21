@@ -1,49 +1,49 @@
-import express from “express”
-import { VisionageEngine } from “../engines/visionage.engine.js”
+import express from "express"
+import { VisionageEngine } from "../engines/visionage.engine.js"
 
 const router = express.Router()
 const vision = new VisionageEngine()
 
-router.post(”/visionage”, (req, res) => {
+router.post("/", (req, res) => {
 
-const { angle } = req.body
+  const { angle } = req.body
 
-if (typeof angle !== “number”) {
-return res.status(400).json({ error: “angle required” })
-}
+  if (typeof angle !== "number") {
+    return res.status(400).json({ error: "angle required" })
+  }
 
-const result = vision.update(angle)
+  const result = vision.update(angle)
 
-const absVelocity = Math.abs(result.velocity ?? 0)
-const absStep     = Math.abs(result.step ?? 0)
+  const absVelocity = Math.abs(result.velocity ?? 0)
+  const absStep     = Math.abs(result.step ?? 0)
 
-let level, message, danger
+  let level, message, danger
 
-if (absVelocity > 0.4 || absStep > 90) {
-level   = “critical”
-message = “عائق أمامك — توقف”
-danger  = true
-} else if (absVelocity > 0.2 || absStep > 45) {
-level   = “warning”
-message = “جسم أمامك — انتبه”
-danger  = false
-} else if (absStep > 10) {
-level   = “notice”
-message = “جسم بعيد”
-danger  = false
-} else {
-level   = “clear”
-message = “مراقبة نشطة”
-danger  = false
-}
+  if (absVelocity > 0.4 || absStep > 90) {
+    level   = "critical"
+    message = "عائق أمامك — توقف"
+    danger  = true
+  } else if (absVelocity > 0.2 || absStep > 45) {
+    level   = "warning"
+    message = "جسم أمامك — انتبه"
+    danger  = false
+  } else if (absStep > 10) {
+    level   = "notice"
+    message = "جسم بعيد"
+    danger  = false
+  } else {
+    level   = "clear"
+    message = "مراقبة نشطة"
+    danger  = false
+  }
 
-res.json({
-…result,
-level,
-message,
-danger,
-angle: result.state
-})
+  res.json({
+    ...result,
+    level,
+    message,
+    danger,
+    angle: result.state
+  })
 
 })
 
