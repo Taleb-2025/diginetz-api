@@ -6,9 +6,17 @@ import { TSL_AE } from "../state/TSL_AE.js";
 import { TSL_DCLS } from "../policy/TSL_DCLS.js";
 import { TSL_Interpreter } from "../interpret/TSL_Interpreter.js";
 
-export function createTSL() {
+export function createTSL(config = {}) {
+
   const adapter = new DefaultTSLAdapter();
-  const ndr = new TSL_NDR();
+
+  const ndr = new TSL_NDR({
+    structure: config.structure || {
+      type: "flow",
+      constraints: []
+    }
+  });
+
   const d = new TSL_D();
   const sts = new TSL_STS();
   const ae = new TSL_AE();
