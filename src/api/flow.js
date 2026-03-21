@@ -13,7 +13,12 @@ router.use(
 );
 
 /* ========= TSL RUNTIME ========= */
-const tsl = createTSL();
+const tsl = createTSL({
+  structure: {
+    type: "flow",
+    constraints: []
+  }
+});
 const analyzer = new TSL_StructuralAnalyzer();
 
 /* ========= HISTORY BUFFER ========= */
@@ -31,8 +36,8 @@ router.post("/observe", (req, res) => {
     const bytes = Uint8Array.from(req.body);
     const result = tsl.observe(bytes);
 
-   flowHistory.push(result);
-if (flowHistory.length > 1000) flowHistory.shift();
+    flowHistory.push(result);
+    if (flowHistory.length > 1000) flowHistory.shift();
 
     return res.json(result);
 
