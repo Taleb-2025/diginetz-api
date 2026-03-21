@@ -10,8 +10,8 @@ export function createTSL(config = {}) {
 
   const adapter = new DefaultTSLAdapter();
 
-  const ndr = new TSL_NDR({
-    structure: config.structure || [
+  const ndr = new TSL_NDR(
+    config.structure || [
       {
         building: [
           {
@@ -21,7 +21,7 @@ export function createTSL(config = {}) {
         ]
       }
     ]
-  });
+  );
 
   const d = new TSL_D();
   const sts = new TSL_STS();
