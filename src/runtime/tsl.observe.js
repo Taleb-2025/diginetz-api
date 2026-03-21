@@ -15,8 +15,12 @@ export function createTSL(config = {}) {
       {
         building: [
           {
-            type: "flow",
-            constraints: []
+            building: [
+              {
+                type: "flow",
+                constraints: []
+              }
+            ]
           }
         ]
       }
