@@ -13,8 +13,12 @@ export function createTSL(config = {}) {
   const ndr = new TSL_NDR({
     structure: config.structure || [
       {
-        type: "flow",
-        constraints: []
+        building: [
+          {
+            type: "flow",
+            constraints: []
+          }
+        ]
       }
     ]
   });
