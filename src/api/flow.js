@@ -15,15 +15,30 @@ const tsl = createTSL({
   structure: [
     {
       building: [
-        {
-          building: [
-            {
-              type: ["flow"],   // ✅ هنا كان الخطأ
-              constraints: []
-            }
-          ]
-        }
-      ]
+        "FLOW_INIT",
+        "FLOW_ACTIVE",
+        "FLOW_STABLE",
+        "FLOW_RISING",
+        "FLOW_FALLING",
+        "FLOW_SPIKE",
+        "FLOW_PATTERN",
+        "FLOW_ANOMALY",
+        "FLOW_IDLE"
+      ],
+      boundary: "FLOW_PEAK",
+      stair: [],
+      transitions: {
+        "FLOW_INIT":    { next: "FLOW_ACTIVE",  type: ["start"]    },
+        "FLOW_ACTIVE":  { next: "FLOW_STABLE",  type: ["normal"]   },
+        "FLOW_STABLE":  { next: "FLOW_STABLE",  type: ["normal"]   },
+        "FLOW_RISING":  { next: "FLOW_SPIKE",   type: ["increase"] },
+        "FLOW_FALLING": { next: "FLOW_STABLE",  type: ["decrease"] },
+        "FLOW_SPIKE":   { next: "FLOW_PEAK",    type: ["critical"] },
+        "FLOW_PATTERN": { next: "FLOW_ACTIVE",  type: ["pattern"]  },
+        "FLOW_ANOMALY": { next: "FLOW_PEAK",    type: ["anomaly"]  },
+        "FLOW_IDLE":    { next: "FLOW_INIT",    type: ["reset"]    },
+        "FLOW_PEAK":    { next: "FLOW_INIT",    type: ["boundary"] }
+      }
     }
   ]
 });
