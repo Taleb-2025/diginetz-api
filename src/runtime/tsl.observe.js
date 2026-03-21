@@ -11,10 +11,12 @@ export function createTSL(config = {}) {
   const adapter = new DefaultTSLAdapter();
 
   const ndr = new TSL_NDR({
-    structure: config.structure || {
-      type: "flow",
-      constraints: []
-    }
+    structure: config.structure || [
+      {
+        type: "flow",
+        constraints: []
+      }
+    ]
   });
 
   const d = new TSL_D();
