@@ -14,7 +14,6 @@ return res.status(400).json({ error: “angle required” })
 
 const result = vision.update(angle)
 
-
 const absVelocity = Math.abs(result.velocity ?? 0)
 const absStep     = Math.abs(result.step ?? 0)
 
@@ -22,19 +21,19 @@ let level, message, danger
 
 if (absVelocity > 0.4 || absStep > 90) {
 level   = “critical”
-message = 
+message = “عائق أمامك — توقف”
 danger  = true
 } else if (absVelocity > 0.2 || absStep > 45) {
 level   = “warning”
-message = 
+message = “جسم أمامك — انتبه”
 danger  = false
 } else if (absStep > 10) {
 level   = “notice”
-message = 
+message = “جسم بعيد”
 danger  = false
 } else {
 level   = “clear”
-message = 
+message = “مراقبة نشطة”
 danger  = false
 }
 
