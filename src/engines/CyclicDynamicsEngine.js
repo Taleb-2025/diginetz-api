@@ -13,7 +13,6 @@ export class CyclicDynamicsEngine {
 constructor(options = {}) {
 const cycle = Number.isFinite(options.cycle) ? Number(options.cycle) : 360
 
-```
 if (cycle <= 0) {
   throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_CYCLE")
 }
@@ -56,7 +55,6 @@ if (Array.isArray(options.plugins)) {
     this.use(plugin)
   }
 }
-```
 
 }
 
@@ -65,7 +63,7 @@ return this.#state
 }
 
 getHistory() {
-return this.#history.map((entry) => ({ …entry }))
+return this.#history.map((entry) => ({ ...entry }))
 }
 
 getStep() {
@@ -82,34 +80,27 @@ return this.#maxVelocity
 
 setStep(step) {
 if (!Number.isFinite(step) || step === 0) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_STEP”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_STEP")
 }
 
-```
 this.#step = step
 return this
-```
-
 }
 
 setMaxVelocity(maxVelocity) {
 if (!Number.isFinite(maxVelocity) || maxVelocity <= 0) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_MAX_VELOCITY”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_MAX_VELOCITY")
 }
 
-```
 this.#maxVelocity = maxVelocity
 return this
-```
-
 }
 
 reset(state = 0) {
 if (!Number.isFinite(state)) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_RESET_STATE”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_RESET_STATE")
 }
 
-```
 const previous = this.#state
 this.#state = this.#normalize(state)
 this.#history = []
@@ -123,16 +114,13 @@ this.#emit("reset", {
 })
 
 return this
-```
-
 }
 
 transition(step = this.#step) {
 if (!Number.isFinite(step) || step === 0) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_TRANSITION_STEP”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_TRANSITION_STEP")
 }
 
-```
 const now       = this.#clock()
 const Δt        = Math.max(now - this.#lastTimestamp, 1)
 const velocity  = Math.abs(step) / Δt
@@ -170,16 +158,13 @@ const transition = this.#record({
 this.#emit("transition", transition)
 
 return { ...transition }
-```
-
 }
 
 transitionTo(target, options = {}) {
 if (!Number.isFinite(target)) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_TARGET”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_TARGET")
 }
 
-```
 if (options.mode !== undefined && !["shortest", "backward", "forward"].includes(options.mode)) {
   throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_MODE")
 }
@@ -245,16 +230,13 @@ const transition = this.#record({
 this.#emit("transition", transition)
 
 return { ...transition }
-```
-
 }
 
 evolve(steps = 1, stepValue = this.#step, options = {}) {
 if (!Number.isInteger(steps) || steps < 0) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_EVOLUTION_STEPS”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_EVOLUTION_STEPS")
 }
 
-```
 if (!Number.isFinite(stepValue) || stepValue === 0) {
   throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_EVOLUTION_STEP_VALUE")
 }
@@ -285,45 +267,36 @@ for (let i = 0; i < steps; i++) {
 }
 
 return results
-```
-
 }
 
 project(steps = 1, stepValue = this.#step) {
 if (!Number.isInteger(steps) || steps < 0) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_PROJECTION_STEPS”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_PROJECTION_STEPS")
 }
 
-```
 if (!Number.isFinite(stepValue)) {
   throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_PROJECTION_STEP_VALUE")
 }
 
 return this.#normalize(this.#state + steps * stepValue)
-```
-
 }
 
 distance(from, to) {
 if (!Number.isFinite(from) || !Number.isFinite(to)) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_DISTANCE_VALUES”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_DISTANCE_VALUES")
 }
 
-```
 const a = this.#normalize(from)
 const b = this.#normalize(to)
 
 return (b - a + this.#cycle) % this.#cycle
-```
-
 }
 
 signedDistance(from, to, options = {}) {
 if (!Number.isFinite(from) || !Number.isFinite(to)) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_SIGNED_DISTANCE_VALUES”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_SIGNED_DISTANCE_VALUES")
 }
 
-```
 const forward = this.distance(from, to)
 
 if (forward === 0) return 0
@@ -336,19 +309,14 @@ if (Math.abs(backward) === Math.abs(forward)) {
 }
 
 return Math.abs(backward) < Math.abs(forward) ? backward : forward
-```
-
 }
 
 isAligned(value) {
 if (!Number.isFinite(value)) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_ALIGNMENT_VALUE”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_ALIGNMENT_VALUE")
 }
 
-```
 return this.#normalize(value) === this.#state
-```
-
 }
 
 snapshot() {
@@ -361,12 +329,9 @@ history:     this.getHistory(),
 timestamp:   this.#clock()
 }
 
-```
 this.#emit("snapshot", snap)
 
 return snap
-```
-
 }
 
 restore(snapshot) {
@@ -376,10 +341,9 @@ if (
 !Number.isFinite(snapshot.step) ||
 !Array.isArray(snapshot.history)
 ) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_SNAPSHOT”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_SNAPSHOT")
 }
 
-```
 if (Number.isFinite(snapshot.cycle) && snapshot.cycle !== this.#cycle) {
   throw new Error("CYCLIC_DYNAMICS_ENGINE_CYCLE_MISMATCH")
 }
@@ -412,16 +376,13 @@ const payload = {
 this.#emit("restore", payload)
 
 return this
-```
-
 }
 
 rewind(steps = 1) {
 if (!Number.isInteger(steps) || steps <= 0) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_REWIND_STEPS”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_REWIND_STEPS")
 }
 
-```
 if (steps > this.#history.length) {
   throw new Error("CYCLIC_DYNAMICS_ENGINE_REWIND_OUT_OF_RANGE")
 }
@@ -445,16 +406,13 @@ const payload = {
 this.#emit("rewind", payload)
 
 return { ...payload }
-```
-
 }
 
 travelTo(index) {
 if (!Number.isInteger(index) || index < 0) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_TRAVEL_INDEX”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_TRAVEL_INDEX")
 }
 
-```
 if (index >= this.#history.length) {
   throw new Error("CYCLIC_DYNAMICS_ENGINE_TRAVEL_OUT_OF_RANGE")
 }
@@ -477,16 +435,13 @@ const payload = {
 this.#emit("travel", payload)
 
 return { ...payload }
-```
-
 }
 
 on(event, listener) {
 if (!this.#listeners[event]) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_EVENT”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_EVENT")
 }
 
-```
 if (typeof listener !== "function") {
   throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_LISTENER")
 }
@@ -494,16 +449,13 @@ if (typeof listener !== "function") {
 this.#listeners[event].add(listener)
 
 return () => this.off(event, listener)
-```
-
 }
 
 once(event, listener) {
 if (!this.#listeners[event]) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_EVENT”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_EVENT")
 }
 
-```
 if (typeof listener !== "function") {
   throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_LISTENER")
 }
@@ -514,28 +466,22 @@ const wrapper = (payload, engine) => {
 }
 
 return this.on(event, wrapper)
-```
-
 }
 
 off(event, listener) {
 if (!this.#listeners[event]) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_EVENT”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_EVENT")
 }
 
-```
 this.#listeners[event].delete(listener)
 return this
-```
-
 }
 
 use(plugin) {
-if (typeof plugin !== “function” && (!plugin || typeof plugin.install !== “function”)) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_PLUGIN”)
+if (typeof plugin !== "function" && (!plugin || typeof plugin.install !== "function")) {
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_PLUGIN")
 }
 
-```
 if (this.#plugins.has(plugin)) {
   return this
 }
@@ -549,8 +495,6 @@ if (typeof plugin === "function") {
 }
 
 return this
-```
-
 }
 
 unuse(plugin) {
@@ -569,11 +513,10 @@ return ((Number(value) % this.#cycle) + this.#cycle) % this.#cycle
 
 #record(payload) {
 const entry = Object.freeze({
-…payload,
+...payload,
 timestamp: this.#clock()
 })
 
-```
 this.#history.push(entry)
 
 if (this.#history.length > this.#maxHistory) {
@@ -581,29 +524,23 @@ if (this.#history.length > this.#maxHistory) {
 }
 
 return entry
-```
-
 }
 
 #emit(event, payload) {
 const listeners = this.#listeners[event]
 
-```
 if (!listeners || listeners.size === 0) return
 
 for (const listener of listeners) {
   listener({ ...payload }, this)
 }
-```
-
 }
 
 #sanitizeHistoryEntry(entry) {
 if (!entry || !Number.isFinite(entry.previous) || !Number.isFinite(entry.next)) {
-throw new Error(“CYCLIC_DYNAMICS_ENGINE_INVALID_HISTORY_ENTRY”)
+throw new Error("CYCLIC_DYNAMICS_ENGINE_INVALID_HISTORY_ENTRY")
 }
 
-```
 return Object.freeze({
   type:      typeof entry.type === "string" ? entry.type : "transition",
   previous:  this.#normalize(entry.previous),
@@ -614,7 +551,5 @@ return Object.freeze({
   timestamp: Number.isFinite(entry.timestamp) ? Number(entry.timestamp) : this.#clock(),
   mode:      typeof entry.mode === "string" ? entry.mode : undefined
 })
-```
-
 }
 }
