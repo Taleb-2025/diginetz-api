@@ -1,61 +1,116 @@
-import express from "express";
-import { createTSL } from "../runtime/tsl.observe.js";
-import { TSL_StructuralAnalyzer } from "../analysis/TSL_StructuralAnalyzer.js";
-
-const router = express.Router();
-
-router.use(
-  express.raw({
-    type: "application/octet-stream",
-    limit: "1mb"
-  })
-);
-
-const tsl = createTSL({
-  structure: {
-    "0": ["FLOW_INIT"],
-    "1": ["FLOW_INIT", "FLOW_ACTIVE"],
-    "2": ["FLOW_INIT", "FLOW_ACTIVE", "FLOW_STABLE"],
-    "3": ["FLOW_INIT", "FLOW_ACTIVE", "FLOW_STABLE", "FLOW_RISING"],
-    "4": ["FLOW_INIT", "FLOW_ACTIVE", "FLOW_STABLE", "FLOW_RISING", "FLOW_SPIKE"]
-  }
-});
-
-const analyzer = new TSL_StructuralAnalyzer();
-const flowHistory = [];
-
-router.post("/observe", (req, res) => {
-  try {
-    if (!Buffer.isBuffer(req.body)) {
-      return res.status(400).json({ error: "RAW_BYTES_REQUIRED" });
+export class TSL_NDR {
+  constructor(definition = {}) {
+    if (!definition || typeof definition !== "object") {
+      throw new Error("TSL_INVALID_DEFINITION");
     }
 
-    const bytes = Uint8Array.from(req.body);
-    const result = tsl.observe(bytes);
+    this.levels = Object.keys(definition)
+      .map(String)
+      .sort((a, b) => Number(a) - Number(b));
 
-    flowHistory.push(result);
-    if (flowHistory.length > 1000) flowHistory.shift();
+    this.structure = this.#buildStructure(definition);
 
-    return res.json(result);
-
-  } catch (err) {
-    return res.status(400).json({ error: err.message });
+    Object.freeze(this.structure);
+    Object.freeze(this.levels);
   }
-});
 
-router.get("/history", (_req, res) => {
-  res.json({ ok: true, history: flowHistory });
-});
+  #buildStructure(definition) {
+    const result = {};
 
-router.get("/analysis", (_req, res) => {
-  const analysis = flowHistory.map(r => analyzer.analyze(r));
-  res.json({ ok: true, history: flowHistory, analysis });
-});
+    for (const level of this.levels) {
+      const elements = definition[level];
 
-router.post("/reset", (_req, res) => {
-  tsl.reset();
-  flowHistory.length = 0;
-  res.json({ ok: true });
-});
+      if (!Array.isArray(elements)) {
+        throw new Error(`TSL_INVALID_LEVEL_ELEMENTS: ${level}`);
+      }
 
-export default router;
+      result[level] = new Set(elements.map(String));
+    }
+
+    for (let i = 0; i < this.levels.length - 1; i++) {
+      const current = result[this.levels[i]];
+      const next = result[this.levels[i + 1]];
+
+      if (!this.#isStrictSubset(current, next)) {
+        throw new Error(
+          `TSL_NON_HIERARCHICAL_CHAIN: S(${this.levels[i]}) must be strictly contained in S(${this.levels[i + 1]})`
+        );
+      }
+    }
+
+    return result;
+  }
+
+  normalize(H) {
+    if (!(H instanceof Set)) {
+      throw new Error("TSL_INVALID_EFFECT_H");
+    }
+    return new Set([...H].map(String));
+  }
+
+  #contains(A, B) {
+    for (const x of B) {
+      if (!A.has(x)) return false;
+    }
+    return true;
+  }
+
+  #equals(A, B) {
+    return this.#contains(A, B) && this.#contains(B, A);
+  }
+
+  #isStrictSubset(A, B) {
+    return this.#contains(B, A) && !this.#equals(A, B);
+  }
+
+  levelOf(H) {
+    const space = this.normalize(H);
+    let maxLevel = null;
+
+    for (const level of this.levels) {
+      const current = this.structure[level];
+      if (this.#contains(space, current)) {
+        maxLevel = level;
+      } else {
+        break;
+      }
+    }
+
+    return maxLevel;
+  }
+
+  describe(H) {
+    const space = this.normalize(H);
+    const n = this.levelOf(space);
+
+    if (n === null) {
+      return { relation: "BELOW_FIRST_LEVEL" };
+    }
+
+    const current = this.structure[n];
+    const nextIndex = this.levels.indexOf(n) + 1;
+    const next = this.structure[this.levels[nextIndex]];
+
+    if (this.#equals(space, current)) {
+      return { level: n, relation: "COMPLETE" };
+    }
+
+    if (next && this.#equals(space, next)) {
+      return { level: this.levels[nextIndex], relation: "COMPLETE" };
+    }
+
+    if (next && this.#contains(next, space) && this.#contains(space, current)) {
+      return { level: n, relation: "TRANSITION" };
+    }
+
+    return { relation: "OUTSIDE_DEFINED_SERIES" };
+  }
+
+  getStructure() {
+    const clone = {};
+    for (const level of this.levels) {
+      clone[level] = new Set(this.structure[level]);
+    }
+    return clone;
+  }
+}
