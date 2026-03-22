@@ -8,88 +8,63 @@ import { TSL_Interpreter } from "../interpret/TSL_Interpreter.js";
 
 export function createTSL(config = {}) {
 
-  const adapter     = new DefaultTSLAdapter();
-  const ndr         = new TSL_NDR(config.structure || {});
-  const d           = new TSL_D(ndr);
-  const sts         = new TSL_STS(ndr);
-  const ae          = new TSL_AE(ndr);
-  const dcls        = new TSL_DCLS(ndr);
+  const adapter = new DefaultTSLAdapter();
+
+  const structure = config.structure || {
+    "0": ["A"],
+    "1": ["A", "B"]
+  };
+
+  const ndr = new TSL_NDR(structure);
+  const d = new TSL_D(ndr);
+  const sts = new TSL_STS(ndr);
+  const ae = new TSL_AE(ndr);
+  const dcls = new TSL_DCLS(ndr);
   const interpreter = new TSL_Interpreter();
 
   let lastEffect = null;
 
   return {
     observe(input) {
-
-      let event;
-      let currentEffect;
-
       try {
-        event = adapter.adapt(input);
-        currentEffect = ndr.extract(event);
-      } catch (err) {
-        return {
-          ok: false,
-          phase: "ADAPT_OR_EXTRACT",
-          error: err.message
-        };
-      }
+        const event = adapter.adapt(input);
+        const effect = new Set([String(event)]);
 
-      if (!lastEffect) {
-        lastEffect = currentEffect;
+        if (!lastEffect) {
+          lastEffect = effect;
+          return { ok: true, type: "FIRST_EVENT" };
+        }
+
+        const delta = d.derive(lastEffect, effect);
+
+        const stsSignal = sts.scan(delta);
+        const aeSignal = ae.observe(lastEffect, effect);
+
+        const constraints = dcls.observe({
+          delta,
+          ae: aeSignal
+        });
+
+        const signal = interpreter.interpret({
+          delta,
+          sts: stsSignal,
+          ae: aeSignal
+        });
+
+        lastEffect = effect;
 
         return {
           ok: true,
-          type: "FIRST_EVENT",
-          event,
-          effect: currentEffect,
-          delta: null,
-          sts: null,
-          ae: null,
-          constraints: null,
-          signal: null
+          delta,
+          sts: stsSignal,
+          ae: aeSignal,
+          constraints,
+          signal
         };
-      }
 
-      let delta;
-
-      try {
-        delta = d.derive(lastEffect, currentEffect);
       } catch (err) {
-        return {
-          ok: false,
-          phase: "DERIVE",
-          error: err.message
-        };
+        return { ok: false, error: err.message };
       }
-
-      const stsSignal = sts.scan(delta);
-      const aeSignal  = ae.observe(lastEffect, currentEffect);
-
-      const constraints = dcls.observe({
-        delta,
-        ae: aeSignal
-      });
-
-      const signal = interpreter.interpret({
-        delta,
-        sts: stsSignal,
-        ae: aeSignal
-      });
-
-      lastEffect = currentEffect;
-
-      return {
-        ok: true,
-        type: "STRUCTURAL_EVENT",
-        event,
-        effect: currentEffect,
-        delta,
-        sts: stsSignal,
-        ae: aeSignal,
-        constraints,
-        signal
-      };
     },
 
     reset() {
