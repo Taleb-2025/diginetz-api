@@ -1,33 +1,92 @@
 export class TSL_STS {
-
-  scan(delta, ae) {
-
-    if (!delta) {
-      return this.#state("STABLE", "NO_DELTA");
+  constructor(tslNDR, options = {}) {
+    if (!tslNDR || typeof tslNDR.levelOf !== "function") {
+      throw new Error("TSL_STS_REQUIRES_VALID_TSL_NDR");
     }
 
-    if (delta.retro_status === "IMPOSSIBLE") {
-      return this.#state("CRITICAL", delta.retro_reason);
-    }
+    this.tslNDR = tslNDR;
 
-    if (ae && ae.type === "ABSENT_EXECUTION") {
-      return this.#state("TENSION", ae.reason);
-    }
+    this.maxDeviations = Number.isFinite(options.maxDeviations)
+      ? Number(options.maxDeviations)
+      : 50;
 
-    if (delta.retro_status === "ANOMALY") {
-      return this.#state("TENSION", delta.retro_reason);
-    }
-
-    return this.#state("STABLE", "STRUCTURALLY_COMPATIBLE");
+    this.deviationLog = [];
   }
 
-  #state(level, reason) {
+  reset() {
+    this.deviationLog = [];
+  }
+
+  getDeviations() {
+    return [...this.deviationLog];
+  }
+
+  #storeDeviation(event) {
+    this.deviationLog.push(event);
+
+    if (this.deviationLog.length > this.maxDeviations) {
+      this.deviationLog.shift();
+    }
+  }
+
+  analyze(sequence) {
+    if (!Array.isArray(sequence) || sequence.length < 2) {
+      throw new Error("TSL_STS_REQUIRES_SEQUENCE_MIN_LENGTH_2");
+    }
+
+    const levels = sequence.map(H => {
+      const lvl = this.tslNDR.levelOf(H);
+      return lvl === null ? null : Number(lvl);
+    });
+
+    const transitions = [];
+    const deviations = [];
+
+    let prevDiff = null;
+
+    for (let i = 1; i < levels.length; i++) {
+      const prev = levels[i - 1];
+      const curr = levels[i];
+
+      if (prev === null || curr === null) continue;
+
+      const diff = curr - prev;
+
+      transitions.push({
+        from: prev,
+        to: curr,
+        diff
+      });
+
+      // كشف الانحراف السلوكي داخل النسق
+      if (prevDiff !== null) {
+        const prevSign = Math.sign(prevDiff);
+        const currSign = Math.sign(diff);
+
+        if (prevSign !== 0 && currSign !== 0 && prevSign !== currSign) {
+          const deviation = {
+            type: "INTERNAL_BEHAVIOR_DEVIATION",
+            at: i,
+            from: prev,
+            to: curr,
+            previousStep: prevDiff,
+            currentStep: diff,
+            timestamp: Date.now()
+          };
+
+          deviations.push(deviation);
+          this.#storeDeviation(deviation);
+        }
+      }
+
+      prevDiff = diff;
+    }
+
     return {
-      layer: "STS",
-      level,
-      reason
+      transitions,
+      deviations,
+      deviationCount: deviations.length,
+      storedDeviations: this.deviationLog.length
     };
   }
-
-  reset() {}
 }
