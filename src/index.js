@@ -3,6 +3,7 @@ import cors from "cors";
 
 import flowRouter from "./api/flow.js";
 import visionageRoute from "./api/visionage.route.js";
+import visionageTrackRoute from "./api/visionage-track.route.js";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -30,6 +31,7 @@ app.use(express.static("public"));
 
 app.use("/api/flow", flowRouter);
 app.use("/api/visionage", visionageRoute);
+app.use("/api/visionage-track", visionageTrackRoute);
 
 app.get("/", (_req, res) => {
   res.json({
