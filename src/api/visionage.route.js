@@ -6,11 +6,11 @@ const vision = new VisionageEngine()
 
 router.post("/", (req, res) => {
 
-  const { angle } = req.body
-
-  if (typeof angle !== "number") {
+  if (!req.body || typeof req.body.angle !== "number") {
     return res.status(400).json({ error: "angle required" })
   }
+
+  const { angle } = req.body
 
   const result = vision.update(angle)
 
