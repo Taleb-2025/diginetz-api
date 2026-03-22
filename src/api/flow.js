@@ -1,7 +1,6 @@
 import express from "express";
-import { createTSL } from “../runtime/tsl.observe.js”;
-import { TSL_StructuralAnalyzer } from “../analysis/TSL_StructuralAnalyzer.js”;
-
+import { createTSL } from "../runtime/tsl.observe.js";
+import { TSL_StructuralAnalyzer } from "../analysis/TSL_StructuralAnalyzer.js";
 const router = express.Router();
 
 router.use(
