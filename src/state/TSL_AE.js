@@ -1,71 +1,80 @@
 export class TSL_AE {
-
-  constructor(structureDefinition) {
-    if (!structureDefinition || typeof structureDefinition !== "object") {
-      throw new Error("TSL_AE_INVALID_STRUCTURE");
+  constructor(tslNDR, options = {}) {
+    if (!tslNDR || typeof tslNDR.levelOf !== "function") {
+      throw new Error("TSL_AE_REQUIRES_VALID_TSL_NDR");
     }
 
-    this.structure = structureDefinition;
+    this.tslNDR = tslNDR;
+
+    this.maxAbsences = Number.isFinite(options.maxAbsences)
+      ? Number(options.maxAbsences)
+      : 50;
+
+    this.absenceLog = [];
   }
 
-  observe(previous, current) {
-    if (!previous || !current) return null;
+  reset() {
+    this.absenceLog = [];
+  }
 
-    const absence = this.#detectInvalidTransformation(previous, current);
-    if (!absence) return null;
+  getAbsences() {
+    return [...this.absenceLog];
+  }
+
+  #storeAbsence(event) {
+    this.absenceLog.push(event);
+
+    if (this.absenceLog.length > this.maxAbsences) {
+      this.absenceLog.shift();
+    }
+  }
+
+  analyze(sequence) {
+    if (!Array.isArray(sequence) || sequence.length < 2) {
+      throw new Error("TSL_AE_REQUIRES_SEQUENCE_MIN_LENGTH_2");
+    }
+
+    const missing = [];
+
+    const levels = sequence.map(H => {
+      const lvl = this.tslNDR.levelOf(H);
+      return lvl === null ? null : Number(lvl);
+    });
+
+    for (let i = 1; i < levels.length; i++) {
+      const prev = levels[i - 1];
+      const curr = levels[i];
+
+      if (prev === null || curr === null) continue;
+
+      const diff = curr - prev;
+
+      if (Math.abs(diff) > 1) {
+        const step = diff > 0 ? 1 : -1;
+        let expected = prev + step;
+
+        while (expected !== curr) {
+          const event = {
+            type: "ABSENCE_EVENT",
+            expectedLevel: expected,
+            between: [prev, curr],
+            index: i,
+            timestamp: Date.now()
+          };
+
+          missing.push(event);
+
+          this.#storeAbsence(event);
+
+          expected += step;
+        }
+      }
+    }
 
     return {
-      layer: "AE",
-      type: "ABSENT_EXECUTION",
-      reason: absence.reason,
-      from: {
-        level: previous.level,
-        position: previous.position,
-        phase: previous.phase
-      },
-      to: {
-        level: current.level,
-        position: current.position,
-        phase: current.phase
-      }
+      missing,
+      hasAbsence: missing.length > 0,
+      totalStoredAbsences: this.absenceLog.length
     };
   }
-
-  #detectInvalidTransformation(prev, curr) {
-
-    if (prev.level !== curr.level) return null;
-
-    const levelStructure = this.structure[prev.level];
-    if (!levelStructure || !levelStructure.transitions) {
-      return {
-        reason: "UNDEFINED_LEVEL_STRUCTURE"
-      };
-    }
-
-    const transitions = levelStructure.transitions;
-    const allowedNext = transitions[prev.position];
-
-    if (!allowedNext) {
-      return {
-        reason: "UNDEFINED_SOURCE_POSITION"
-      };
-    }
-
-    const isAllowed =
-      Array.isArray(allowedNext)
-        ? allowedNext.includes(curr.position)
-        : allowedNext instanceof Set
-          ? allowedNext.has(curr.position)
-          : false;
-
-    if (!isAllowed) {
-      return {
-        reason: "INVALID_STRUCTURAL_TRANSFORMATION"
-      };
-    }
-
-    return null;
-  }
-
-  reset() {}
 }
