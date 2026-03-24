@@ -1,45 +1,41 @@
 import express from "express"
-import { VisionageBlackHoleEngine } from "../engines/visionage-black-hole.engine.js"
+import { VisionageTrackEngine } from "../engines/visionage-track.engine.js"
 
-const router  = express.Router()
-const game    = new VisionageBlackHoleEngine()
-
-game.reset()
-
-router.post("/start", (_req, res) => {
-const state = game.reset()
-res.json({ ok: true, ...game.getState() })
-})
+const router = express.Router()
+const tracker = new VisionageTrackEngine()
 
 router.post("/update", (req, res) => {
-const { angle } = req.body
+const { centerX, frameWidth, label, score, distance } = req.body
 
-if (!Number.isFinite(Number(angle))) {
-return res.status(400).json({ error: "angle required" })
+if (!Number.isFinite(Number(centerX)) || !Number.isFinite(Number(frameWidth))) {
+return res.status(400).json({ error: "centerX and frameWidth required" })
 }
 
-const result = game.update(Number(angle))
-res.json(result)
+const result = tracker.update(Number(centerX), Number(frameWidth))
+
+let level = "clear"
+if (distance === "VERY CLOSE") level = "critical"
+else if (distance === "CLOSE")  level = "warning"
+else if (distance === "MEDIUM") level = "notice"
+
+res.json({
+...result,
+label:    label    ?? null,
+score:    score    ?? null,
+distance: distance ?? null,
+level
 })
-
-router.post("/consume", (req, res) => {
-const { planetId } = req.body
-
-if (!Number.isFinite(Number(planetId))) {
-return res.status(400).json({ error: "planetId required" })
-}
-
-const result = game.consume(Number(planetId))
-res.json(result)
-})
-
-router.get("/state", (_req, res) => {
-res.json(game.getState())
 })
 
 router.post("/reset", (_req, res) => {
-game.reset()
-res.json({ ok: true, ...game.getState() })
+res.json(tracker.reset())
+})
+
+router.get("/state", (_req, res) => {
+res.json({
+angle: tracker.engine.getState(),
+cycle: tracker.engine.getCycle()
+})
 })
 
 export default router
