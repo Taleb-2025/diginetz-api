@@ -8,11 +8,7 @@ game.reset()
 
 router.post("/start", (_req, res) => {
 const state = game.reset()
-
-// ✅ NEW: استخدم update بدل getState لارجاع enemies
-const updated = game.update(0)
-
-res.json({ ok: true, ...updated })
+res.json({ ok: true, ...game.getState() })
 })
 
 router.post("/update", (req, res) => {
@@ -43,11 +39,7 @@ res.json(game.getState())
 
 router.post("/reset", (_req, res) => {
 game.reset()
-
-// ✅ NEW: نفس الشي هنا
-const updated = game.update(0)
-
-res.json({ ok: true, ...updated })
+res.json({ ok: true, ...game.getState() })
 })
 
 export default router
