@@ -1,24 +1,24 @@
-import { CyclicDynamicsEngine } from “./CyclicDynamicsEngine.js”
+import { CyclicDynamicsEngine } from "./CyclicDynamicsEngine.js"
 
 const PLANETS = [
-{ name: “Mercury”, color: “#b5b5b5”, radius: 18, points: 100, info: “Closest to the Sun” },
-{ name: “Venus”,   color: “#e8cda0”, radius: 22, points: 150, info: “Hottest planet”     },
-{ name: “Earth”,   color: “#4fa3e0”, radius: 24, points: 200, info: “Our home planet”    },
-{ name: “Mars”,    color: “#c1440e”, radius: 20, points: 175, info: “The Red Planet”     },
-{ name: “Jupiter”, color: “#c88b3a”, radius: 36, points: 300, info: “Largest planet”     },
-{ name: “Saturn”,  color: “#e4d191”, radius: 32, points: 275, info: “Has famous rings”   },
-{ name: “Uranus”,  color: “#7de8e8”, radius: 28, points: 250, info: “Rotates sideways”   },
-{ name: “Neptune”, color: “#4b70dd”, radius: 26, points: 225, info: “Windiest planet”    }
+{ name: "Mercury", color: "#b5b5b5", radius: 18, points: 100, info: "Closest to the Sun" },
+{ name: "Venus",   color: "#e8cda0", radius: 22, points: 150, info: "Hottest planet"     },
+{ name: "Earth",   color: "#4fa3e0", radius: 24, points: 200, info: "Our home planet"    },
+{ name: "Mars",    color: "#c1440e", radius: 20, points: 175, info: "The Red Planet"     },
+{ name: "Jupiter", color: "#c88b3a", radius: 36, points: 300, info: "Largest planet"     },
+{ name: "Saturn",  color: "#e4d191", radius: 32, points: 275, info: "Has famous rings"   },
+{ name: "Uranus",  color: "#7de8e8", radius: 28, points: 250, info: "Rotates sideways"   },
+{ name: "Neptune", color: "#4b70dd", radius: 26, points: 225, info: "Windiest planet"    }
 ]
 
 const STARS = [
-{ name: “Star”,   color: “#fffde7”, radius: 10, points: 50  },
-{ name: “Star”,   color: “#fff9c4”, radius: 8,  points: 50  },
-{ name: “Star”,   color: “#ffffff”, radius: 12, points: 75  }
+{ name: "Star",   color: "#fffde7", radius: 10, points: 50  },
+{ name: "Star",   color: "#fff9c4", radius: 8,  points: 50  },
+{ name: "Star",   color: "#ffffff", radius: 12, points: 75  }
 ]
 
 const COMETS = [
-{ name: “Comet”,  color: “#a5f3fc”, radius: 14, points: 125, info: “Fast moving comet” }
+{ name: "Comet",  color: "#a5f3fc", radius: 14, points: 125, info: "Fast moving comet" }
 ]
 
 export class VisionageBlackHoleEngine {
@@ -30,7 +30,6 @@ maxVelocity: 2.0,
 maxHistory:  500
 })
 
-
 this.planets        = []
 this.score          = 0
 this.level          = 1
@@ -38,15 +37,12 @@ this.consumed       = 0
 this.currentAngle   = 0
 this.escapeTime     = 30
 this.baseEscapeTime = 30
-
-
 }
 
 spawnPlanets() {
 this.planets = []
 const count  = this.level + 2
-const pool   = […PLANETS, …STARS, …COMETS]
-
+const pool   = [...PLANETS, ...STARS, ...COMETS]
 
 for (let i = 0; i < count; i++) {
   const template = pool[Math.floor(Math.random() * pool.length)]
@@ -68,15 +64,12 @@ for (let i = 0; i < count; i++) {
     floatPhase:  Math.random() * Math.PI * 2
   })
 }
-
-
 }
 
 update(deviceAngle) {
-const result       = this.engine.transitionTo(deviceAngle, { mode: “shortest” })
+const result       = this.engine.transitionTo(deviceAngle, { mode: "shortest" })
 this.currentAngle  = this.engine.getState()
 const now          = Date.now()
-
 
 for (const planet of this.planets) {
   if (planet.consumed) continue
@@ -128,14 +121,11 @@ return {
   level:    this.level,
   consumed: this.consumed
 }
-
-
 }
 
 consume(planetId) {
 const planet = this.planets.find(p => p.id === planetId && !p.consumed)
-if (!planet) return { ok: false, reason: “NOT_FOUND” }
-
+if (!planet) return { ok: false, reason: "NOT_FOUND" }
 
 const diff = Math.abs(this.engine.signedDistance(this.currentAngle, planet.angle))
 if (diff > 15) return { ok: false, reason: "TOO_FAR", diff: Math.round(diff) }
@@ -162,15 +152,13 @@ return {
   level:   this.level,
   levelUp: remaining === 0
 }
-
-
 }
 
 escape(planet) {
 const newAngle    = (this.currentAngle + 90 + Math.random() * 180) % 360
 planet.angle      = newAngle
 planet.escapeAt   = Date.now() + this.escapeTime * 1000
-planet.proximity  = “FAR”
+planet.proximity  = "FAR"
 }
 
 levelUp() {
