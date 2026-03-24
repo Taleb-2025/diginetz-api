@@ -91,7 +91,7 @@ if (!this.lastEnemySpawn || now - this.lastEnemySpawn > 2000) {
 
 for (const planet of this.planets) {
   // 🌀 تحريك الكواكب نحو الثقب
-planet.distance -= 0.5
+planet.distance -= planet.proximity === "VERY CLOSE" ? 0.1 : 0.5
 
 // إذا وصل للمركز يرجع بعيد
 if (planet.distance <= 10) {
