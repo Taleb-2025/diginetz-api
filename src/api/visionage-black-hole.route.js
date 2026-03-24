@@ -1,4 +1,3 @@
-
 import express from "express"
 import { VisionageBlackHoleEngine } from "../engines/visionage-black-hole.engine.js"
 
@@ -9,7 +8,7 @@ game.reset()
 
 router.post("/start", (_req, res) => {
 const state = game.reset()
-res.json({ ok: true, …game.getState() })
+res.json({ ok: true, ...game.getState() })
 })
 
 router.post("/update", (req, res) => {
