@@ -37,6 +37,11 @@ this.consumed       = 0
 this.currentAngle   = 0
 this.escapeTime     = 30
 this.baseEscapeTime = 30
+
+// ✅ NEW
+this.enemies = []
+this.energy  = 100
+this.lastEnemySpawn = 0
 }
 
 spawnPlanets() {
@@ -71,6 +76,19 @@ const result       = this.engine.transitionTo(deviceAngle, { mode: "shortest" })
 this.currentAngle  = this.engine.getState()
 const now          = Date.now()
 
+// ✅ NEW: spawn enemies
+if (!this.lastEnemySpawn || now - this.lastEnemySpawn > 2000) {
+  this.lastEnemySpawn = now
+
+  this.enemies.push({
+    id: Date.now(),
+    angle: Math.random() * 360,
+    distance: 120,
+    speed: 0.6 + Math.random() * 0.5,
+    dead: false
+  })
+}
+
 for (const planet of this.planets) {
   if (planet.consumed) continue
 
@@ -100,6 +118,18 @@ for (const planet of this.planets) {
   }
 }
 
+// ✅ NEW: update enemies
+for (const enemy of this.enemies) {
+  if (enemy.dead) continue
+
+  enemy.distance -= enemy.speed
+
+  if (enemy.distance <= 0) {
+    enemy.dead = true
+    this.energy -= 15
+  }
+}
+
 return {
   angle:    Math.round(this.currentAngle),
   velocity: result.velocity ?? 0,
@@ -117,6 +147,15 @@ return {
     floatPhase: p.floatPhase,
     orbitOffset: p.orbitOffset
   })),
+  // ✅ NEW
+  enemies: this.enemies
+    .filter(e => !e.dead)
+    .map(e => ({
+      id: e.id,
+      angle: e.angle,
+      distance: e.distance
+    })),
+  energy: this.energy,
   score:    this.score,
   level:    this.level,
   consumed: this.consumed
@@ -154,6 +193,28 @@ return {
 }
 }
 
+// ✅ NEW
+shoot() {
+let hit = false
+
+for (const enemy of this.enemies) {
+  if (enemy.dead) continue
+
+  const diff = Math.abs(
+    this.engine.signedDistance(this.currentAngle, enemy.angle)
+  )
+
+  if (diff < 10) {
+    enemy.dead = true
+    hit = true
+    this.score += 50
+    this.energy = Math.min(100, this.energy + 5)
+  }
+}
+
+return { hit }
+}
+
 escape(planet) {
 const newAngle    = (this.currentAngle + 90 + Math.random() * 180) % 360
 planet.angle      = newAngle
@@ -174,6 +235,11 @@ this.consumed   = 0
 this.escapeTime = this.baseEscapeTime
 this.engine.reset()
 this.spawnPlanets()
+
+// ✅ NEW
+this.enemies = []
+this.energy  = 100
+
 return { ok: true }
 }
 
@@ -183,7 +249,8 @@ score:   this.score,
 level:   this.level,
 consumed: this.consumed,
 angle:   Math.round(this.engine.getState()),
-planets: this.planets.length
+planets: this.planets.length,
+energy: this.energy // ✅ NEW
 }
 }
 }
