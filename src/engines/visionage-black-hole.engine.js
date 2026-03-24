@@ -90,6 +90,13 @@ if (!this.lastEnemySpawn || now - this.lastEnemySpawn > 2000) {
 }
 
 for (const planet of this.planets) {
+  // 🌀 تحريك الكواكب نحو الثقب
+planet.distance -= 0.2
+
+// إذا وصل للمركز يرجع بعيد
+if (planet.distance <= 10) {
+  this.escape(planet)
+}
   if (planet.consumed) continue
 
   planet.orbitOffset += planet.orbitSpeed
