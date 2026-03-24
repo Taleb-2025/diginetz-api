@@ -40,7 +40,7 @@ res.json(game.getState())
 
 router.post("/reset", (_req, res) => {
 game.reset()
-res.json({ ok: true, …game.getState() })
+res.json({ ok: true, ...game.getState() })
 })
 
 export default router
