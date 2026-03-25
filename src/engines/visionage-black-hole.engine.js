@@ -38,7 +38,6 @@ this.currentAngle   = 0
 this.escapeTime     = 30
 this.baseEscapeTime = 30
 
-// ✅ NEW
 this.enemies = []
 this.energy  = 100
 this.lastEnemySpawn = 0
@@ -52,9 +51,7 @@ const pool   = [...PLANETS, ...STARS, ...COMETS]
 for (let i = 0; i < count; i++) {
   const template = pool[Math.floor(Math.random() * pool.length)]
   const angle    = Math.random() * 360
-  const distance = this.level < 3
-    ? 40 + Math.random() * 30
-    : 30 + Math.random() * 60
+  const distance = 80 + Math.random() * 40   // ✅ ثابت أكثر (بدون سحب)
 
   this.planets.push({
     ...template,
@@ -64,7 +61,7 @@ for (let i = 0; i < count; i++) {
     spawnedAt:   Date.now(),
     escapeAt:    Date.now() + this.escapeTime * 1000,
     consumed:    false,
-    orbitSpeed:  (Math.random() - 0.5) * 0.3,
+    orbitSpeed:  (Math.random() - 0.5) * 0.5,
     orbitOffset: Math.random() * 360,
     floatPhase:  Math.random() * Math.PI * 2
   })
@@ -76,7 +73,7 @@ const result       = this.engine.transitionTo(deviceAngle, { mode: "shortest" })
 this.currentAngle  = this.engine.getState()
 const now          = Date.now()
 
-// ✅ NEW: spawn enemies
+// 🛸 spawn enemies
 if (!this.lastEnemySpawn || now - this.lastEnemySpawn > 2000) {
   this.lastEnemySpawn = now
 
@@ -89,26 +86,23 @@ if (!this.lastEnemySpawn || now - this.lastEnemySpawn > 2000) {
   })
 }
 
+// 🌍 planets
 for (const planet of this.planets) {
-  // 🌀 تحريك الكواكب نحو الثقب
-planet.distance -= planet.proximity === "VERY CLOSE" ? 0.1 : 0.5
 
-// إذا وصل للمركز يرجع بعيد
-if (planet.distance <= 10) {
-  this.escape(planet)
-}
   if (planet.consumed) continue
 
   planet.orbitOffset += planet.orbitSpeed
+  planet.angle += planet.orbitSpeed   // ✅ دوران حول الثقب
   planet.floatPhase  += 0.02
 
   const angleDiff = Math.abs(
     this.engine.signedDistance(this.currentAngle, planet.angle)
   )
 
-  if (angleDiff < 15)      planet.proximity = "VERY CLOSE"
-  else if (angleDiff < 35) planet.proximity = "CLOSE"
-  else if (angleDiff < 70) planet.proximity = "MEDIUM"
+  // ✅ proximity موسعة
+  if (angleDiff < 25)      planet.proximity = "VERY CLOSE"
+  else if (angleDiff < 50) planet.proximity = "CLOSE"
+  else if (angleDiff < 90) planet.proximity = "MEDIUM"
   else                     planet.proximity = "FAR"
 
   planet.timeLeft = Math.max(0, Math.ceil((planet.escapeAt - now) / 1000))
@@ -120,12 +114,12 @@ if (planet.distance <= 10) {
   planet.direction = this.engine.signedDistance(this.currentAngle, planet.angle) > 0
     ? "RIGHT" : "LEFT"
 
-  if (Math.abs(this.engine.signedDistance(this.currentAngle, planet.angle)) < 5) {
+  if (Math.abs(this.engine.signedDistance(this.currentAngle, planet.angle)) < 10) {
     planet.direction = "CENTER"
   }
 }
 
-// ✅ NEW: update enemies
+// 🛸 enemies movement
 for (const enemy of this.enemies) {
   if (enemy.dead) continue
 
@@ -133,28 +127,31 @@ for (const enemy of this.enemies) {
 
   if (enemy.distance <= 0) {
     enemy.dead = true
-    this.energy -= 15
+    this.energy = Math.max(0, this.energy - 15)
   }
 }
 
 return {
   angle:    Math.round(this.currentAngle),
   velocity: result.velocity ?? 0,
-  planets:  this.planets.filter(p => !p.consumed).map(p => ({
-    id:        p.id,
-    name:      p.name,
-    color:     p.color,
-    radius:    p.radius,
-    points:    p.points,
-    info:      p.info ?? null,
-    angle:     p.angle,
-    proximity: p.proximity,
-    direction: p.direction,
-    timeLeft:  p.timeLeft,
-    floatPhase: p.floatPhase,
-    orbitOffset: p.orbitOffset
-  })),
-  // ✅ NEW
+
+  planets: this.planets
+    .filter(p => !p.consumed)
+    .map(p => ({
+      id:        p.id,
+      name:      p.name,
+      color:     p.color,
+      radius:    p.radius,
+      points:    p.points,
+      info:      p.info ?? null,
+      angle:     p.angle,
+      proximity: p.proximity,
+      direction: p.direction,
+      timeLeft:  p.timeLeft,
+      floatPhase: p.floatPhase,
+      orbitOffset: p.orbitOffset
+    })),
+
   enemies: this.enemies
     .filter(e => !e.dead)
     .map(e => ({
@@ -162,9 +159,10 @@ return {
       angle: e.angle,
       distance: e.distance
     })),
+
   energy: this.energy,
-  score:    this.score,
-  level:    this.level,
+  score: this.score,
+  level: this.level,
   consumed: this.consumed
 }
 }
@@ -174,7 +172,9 @@ const planet = this.planets.find(p => p.id === planetId && !p.consumed)
 if (!planet) return { ok: false, reason: "NOT_FOUND" }
 
 const diff = Math.abs(this.engine.signedDistance(this.currentAngle, planet.angle))
-if (diff > 15) return { ok: false, reason: "TOO_FAR", diff: Math.round(diff) }
+
+// ✅ تم التوسيع
+if (diff > 25) return { ok: false, reason: "TOO_FAR", diff: Math.round(diff) }
 
 planet.consumed  = true
 const bonus      = Math.ceil(planet.timeLeft / 5) * 10
@@ -189,18 +189,17 @@ if (remaining === 0) {
 }
 
 return {
-  ok:      true,
+  ok: true,
   earned,
   bonus,
-  name:    planet.name,
-  info:    planet.info ?? null,
-  score:   this.score,
-  level:   this.level,
+  name: planet.name,
+  info: planet.info ?? null,
+  score: this.score,
+  level: this.level,
   levelUp: remaining === 0
 }
 }
 
-// ✅ NEW
 shoot() {
 let hit = false
 
@@ -243,7 +242,6 @@ this.escapeTime = this.baseEscapeTime
 this.engine.reset()
 this.spawnPlanets()
 
-// ✅ NEW
 this.enemies = []
 this.energy  = 100
 
@@ -252,12 +250,12 @@ return { ok: true }
 
 getState() {
 return {
-score:   this.score,
-level:   this.level,
+score: this.score,
+level: this.level,
 consumed: this.consumed,
-angle:   Math.round(this.engine.getState()),
+angle: Math.round(this.engine.getState()),
 planets: this.planets.length,
-energy: this.energy // ✅ NEW
+energy: this.energy
 }
 }
 }
