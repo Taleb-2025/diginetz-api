@@ -75,12 +75,9 @@ router.post("/", async (req, res) => {
   }
 
   try {
-    // تحويل base64 إلى buffer
-    const base64Data = image.replace(/^data:image\/\w+;base64,/, "")
-    const buffer = Buffer.from(base64Data, "base64")
-
-    // تشغيل الكشف
-    const results = await pipeline(buffer, { threshold: 0.4 })
+    // تشغيل الكشف - نرسل base64 مباشرة
+    const imageData = image.startsWith("data:") ? image : "data:image/jpeg;base64," + image
+    const results = await pipeline(imageData, { threshold: 0.4 })
 
     const imageWidth  = width  || 640
     const imageHeight = height || 480
