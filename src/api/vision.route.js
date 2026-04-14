@@ -31,7 +31,7 @@ async function loadDetector() {
 async function loadCaptioner() {
   try {
     const { pipeline } = await import("@huggingface/transformers")
-    captioner      = await pipeline("image-to-text", "Xenova/blip-image-captioning-base", { device: "cpu" })
+    captioner      = await pipeline("image-to-text", "Xenova/vit-gpt2-image-captioning", { device: "cpu" })
     captionerReady = true
     console.log("Captioner ready")
   } catch (e) {
@@ -169,7 +169,7 @@ router.post("/describe", async (req, res) => {
     res.json({
       caption,
       mainObject,
-      model: "blip-image-captioning-base"
+      model: "vit-gpt2-image-captioning"
     })
 
   } catch (e) {
@@ -182,7 +182,7 @@ router.post("/describe", async (req, res) => {
 router.get("/status", (_req, res) => {
   res.json({
     detector:  { ready: detectorReady,  error: detectorError  || null, model: "detr-resnet-50" },
-    captioner: { ready: captionerReady, error: captionerError || null, model: "blip-image-captioning-base" }
+    captioner: { ready: captionerReady, error: captionerError || null, model: "vit-gpt2-image-captioning" }
   })
 })
 
