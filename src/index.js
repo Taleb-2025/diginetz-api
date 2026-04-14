@@ -5,6 +5,7 @@ import visionageRoute      from "./api/visionage.route.js"
 import visionageTrackRoute from "./api/visionage-track.route.js"
 import blackHoleRoute      from "./api/visionage-black-hole.route.js"
 import visionRoute         from "./api/vision.route.js"
+import automotiveRoute     from "./api/automotive.route.js"
 
 const app  = express()
 const PORT = process.env.PORT || 8080
@@ -17,7 +18,8 @@ app.use(cors({
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: [
     "Content-Type",
-    "x-reference-id"
+    "x-reference-id",
+    "x-agent-key"
   ]
 }))
 
@@ -33,6 +35,7 @@ app.use("/api/visionage",       visionageRoute)
 app.use("/api/visionage-track", visionageTrackRoute)
 app.use("/api/black-hole",      blackHoleRoute)
 app.use("/api/vision",          visionRoute)
+app.use("/api/automotive",      automotiveRoute)
 
 app.get("/", (_req, res) => {
   res.json({
