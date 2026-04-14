@@ -1,87 +1,20 @@
 // vision.route.js
-// كشف الأشياء: DETR للأصناف الأساسية + OWL-ViT للأصناف المخصصة
-// JavaScript خالص، بدون Python
+// Search Engine: OWL-ViT + OCR + Image Match
+// بدون كشف تلقائي - يشتغل فقط عند طلب المستخدم
 
 import express from "express"
 
 const router = express.Router()
 
-// ─── CUSTOM CATEGORIES (خارج COCO) ───────────────────────────────────────────
-const CUSTOM_LABELS = {
-  home: [
-    "door handle", "light switch", "fire extinguisher",
-    "door bell", "window blind", "radiator", "power outlet",
-    "door lock", "staircase railing", "smoke detector"
-  ],
-  garden: [
-    "flower pot", "garden hose", "garden fence",
-    "watering can", "garden lamp", "garden gate",
-    "outdoor bench", "plant pot", "flower bed"
-  ],
-  street: [
-    "street lamp", "manhole cover", "crosswalk",
-    "trash bin", "bus stop", "telephone booth",
-    "fire hydrant post", "bicycle rack", "bollard",
-    "construction barrier", "road cone"
-  ],
-  traffic_signs: [
-    "speed limit sign", "no entry sign", "yield sign",
-    "pedestrian crossing sign", "construction sign",
-    "one way sign", "parking sign", "no parking sign",
-    "road works sign", "danger sign"
-  ],
-  clothing: [
-    "shirt", "pants", "dress", "jacket",
-    "sneakers", "scarf", "gloves", "coat",
-    "hoodie", "skirt", "boots", "sandals"
-  ],
-  food_items: [
-    "bread loaf", "milk carton", "egg carton",
-    "cereal box", "fruit basket", "shopping bag",
-    "food package", "vegetable display", "bakery items"
-  ],
-  shop_signs: [
-    "shop sign", "pharmacy sign", "restaurant sign",
-    "bakery sign", "supermarket sign", "cafe sign",
-    "store entrance", "shop window display", "price tag board"
-  ],
-  general_signs: [
-    "warning sign", "exit sign", "no smoking sign",
-    "information board", "safety sign", "emergency exit sign",
-    "toilet sign", "disabled access sign", "opening hours sign"
-  ]
-}
-
-// قائمة مسطحة لكل الأصناف المخصصة
-const ALL_CUSTOM_LABELS = Object.values(CUSTOM_LABELS).flat()
-// ─────────────────────────────────────────────────────────────────────────────
-
-// نموذج DETR للكشف الأساسي (COCO 91 صنف)
-let detector      = null
-let detectorReady = false
-let detectorError = null
-
-// نموذج OWL-ViT للأصناف المخصصة
+// نموذج OWL-ViT للبحث بالكلمات
 let owlvit      = null
 let owlvitReady = false
 let owlvitError = null
 
-// نموذج VIT-GPT2 لوصف الصور (للبحث بصورة)
-let captioner      = null
-let captionerReady = false
-let captionerError = null
-
-async function loadDetector() {
-  try {
-    const { pipeline } = await import("@huggingface/transformers")
-    detector      = await pipeline("object-detection", "Xenova/detr-resnet-50", { device: "cpu" })
-    detectorReady = true
-    console.log("Detector ready")
-  } catch (e) {
-    detectorError = e.message
-    console.error("Detector failed:", e.message)
-  }
-}
+// نموذج OCR للقراءة
+let ocrPipeline  = null
+let ocrReady     = false
+let ocrError     = null
 
 async function loadOwlVit() {
   try {
@@ -95,26 +28,33 @@ async function loadOwlVit() {
   }
 }
 
-async function loadCaptioner() {
+async function loadOCR() {
   try {
     const { pipeline } = await import("@huggingface/transformers")
-    captioner      = await pipeline("image-to-text", "Xenova/vit-gpt2-image-captioning", { device: "cpu" })
-    captionerReady = true
-    console.log("Captioner ready")
+    ocrPipeline = await pipeline("image-to-text", "Xenova/trocr-small-printed", { device: "cpu" })
+    ocrReady    = true
+    console.log("OCR ready")
   } catch (e) {
-    captionerError = e.message
-    console.error("Captioner failed:", e.message)
+    ocrError = e.message
+    console.error("OCR failed:", e.message)
   }
 }
 
 // تحميل النماذج عند بدء السيرفر
-loadDetector()
 loadOwlVit()
-loadCaptioner()
+loadOCR()
+
+// تحويل base64 إلى RawImage
+async function toRawImage(image) {
+  const { RawImage } = await import("@huggingface/transformers")
+  const base64Data   = image.replace(/^data:image\/\w+;base64,/, "")
+  const buffer       = Buffer.from(base64Data, "base64")
+  return await RawImage.fromBlob(new Blob([buffer], { type: "image/jpeg" }))
+}
 
 // تحديد الـ zone
 function getZone(box, imageWidth) {
-  const cx     = (box.xmin !== undefined ? box.xmin : box.x) + (box.xmax !== undefined ? (box.xmax - box.xmin) : box.w) / 2
+  const cx     = box.xmin + (box.xmax - box.xmin) / 2
   const zoneW  = imageWidth / 3
   const margin = zoneW * 0.2
   if (cx < zoneW - margin) return "Left"
@@ -124,8 +64,8 @@ function getZone(box, imageWidth) {
 
 // تقدير المسافة
 function getDistance(box, imageWidth, imageHeight) {
-  const w         = box.xmax !== undefined ? (box.xmax - box.xmin) : box.w
-  const h         = box.ymax !== undefined ? (box.ymax - box.ymin) : box.h
+  const w         = box.xmax - box.xmin
+  const h         = box.ymax - box.ymin
   const area      = w * h
   const frameArea = imageWidth * imageHeight
   const ratio     = area / Math.max(frameArea, 1)
@@ -135,173 +75,140 @@ function getDistance(box, imageWidth, imageHeight) {
   return "far"
 }
 
-// تحويل صورة base64 إلى RawImage
-async function toRawImage(image) {
-  const { RawImage } = await import("@huggingface/transformers")
-  const base64Data   = image.replace(/^data:image\/\w+;base64,/, "")
-  const buffer       = Buffer.from(base64Data, "base64")
-  return await RawImage.fromBlob(new Blob([buffer], { type: "image/jpeg" }))
-}
-
-// استخراج الكلمة الرئيسية من وصف الصورة
-function extractMainObject(caption) {
-  if (!caption) return ""
-  const stopWords = [
-    "a", "an", "the", "is", "are", "on", "in", "at", "of",
-    "with", "there", "some", "two", "three", "many", "several",
-    "standing", "sitting", "walking", "holding", "wearing",
-    "large", "small", "and", "or", "near", "next", "front"
-  ]
-  const words  = caption.toLowerCase().split(/\s+/)
-  const nouns  = words.filter(w => !stopWords.includes(w) && w.length > 2)
-  return nouns.slice(0, 3).join(" ") || caption.split(" ").slice(0, 3).join(" ")
-}
-
-// ─── POST /api/vision ─────────────────────────────────────────────────────────
-// كشف الأشياء: DETR + OWL-ViT معاً
-router.post("/", async (req, res) => {
-  if (!detectorReady && !owlvitReady) {
-    return res.status(503).json({ error: "Models loading, please wait" })
+// ─── POST /api/vision/search ──────────────────────────────────────────────────
+// البحث بالكلمة - OWL-ViT يبحث عن الشيء في الكاميرا
+router.post("/search", async (req, res) => {
+  if (!owlvitReady) {
+    return res.status(503).json({
+      error: owlvitError ? "OWL-ViT failed: " + owlvitError : "OWL-ViT loading..."
+    })
   }
 
-  const { image, width, height } = req.body
-  if (!image) return res.status(400).json({ error: "image (base64) required" })
+  const { image, query, width, height } = req.body
 
-  const imageWidth  = width  || 640
-  const imageHeight = height || 480
-  const allObjects  = []
+  if (!image) return res.status(400).json({ error: "image required" })
+  if (!query) return res.status(400).json({ error: "query required" })
 
   try {
-    const rawImage = await toRawImage(image)
+    const rawImage    = await toRawImage(image)
+    const imageWidth  = width  || 640
+    const imageHeight = height || 480
 
-    // 1. DETR - كشف الأصناف الأساسية
-    if (detectorReady) {
-      try {
-        const detrResults = await detector(rawImage, { threshold: 0.4 })
-        for (const item of detrResults) {
-          const zone     = getZone(item.box, imageWidth)
-          const distance = getDistance(item.box, imageWidth, imageHeight)
-          allObjects.push({
-            id:       allObjects.length + 1,
-            label:    item.label,
-            class:    item.label.toLowerCase(),
-            score:    Math.round(item.score * 100),
-            zone,
-            distance,
-            source:   "detr",
-            box: {
-              x: Math.round(item.box.xmin),
-              y: Math.round(item.box.ymin),
-              w: Math.round(item.box.xmax - item.box.xmin),
-              h: Math.round(item.box.ymax - item.box.ymin)
-            }
-          })
-        }
-      } catch (e) {
-        console.error("DETR error:", e.message)
-      }
+    // OWL-ViT يبحث عن الكلمة في الصورة
+    const queries = Array.isArray(query) ? query : [query]
+    const results = await owlvit(rawImage, queries, { threshold: 0.15 })
+
+    if (!results || results.length === 0) {
+      return res.json({ found: false, query, objects: [] })
     }
 
-    // 2. OWL-ViT - كشف الأصناف المخصصة
-    if (owlvitReady) {
-      try {
-        const existingLabels = allObjects.map(o => o.class.toLowerCase())
-
-        // نرسل فقط الأصناف غير الموجودة في DETR
-        const labelsToSearch = ALL_CUSTOM_LABELS.filter(label =>
-          !existingLabels.some(el => el.includes(label) || label.includes(el))
-        )
-
-        if (labelsToSearch.length > 0) {
-          // OWL-ViT يبحث بدفعات لتجنب الثقل
-          const BATCH = 20
-          for (let i = 0; i < labelsToSearch.length; i += BATCH) {
-            const batch   = labelsToSearch.slice(i, i + BATCH)
-            const results = await owlvit(rawImage, batch, { threshold: 0.2 })
-
-            for (const item of results) {
-              const zone     = getZone(item.box, imageWidth)
-              const distance = getDistance(item.box, imageWidth, imageHeight)
-              allObjects.push({
-                id:       allObjects.length + 1,
-                label:    item.label,
-                class:    item.label.toLowerCase(),
-                score:    Math.round(item.score * 100),
-                zone,
-                distance,
-                source:   "owlvit",
-                box: {
-                  x: Math.round(item.box.xmin),
-                  y: Math.round(item.box.ymin),
-                  w: Math.round(item.box.xmax - item.box.xmin),
-                  h: Math.round(item.box.ymax - item.box.ymin)
-                }
-              })
-            }
-          }
-        }
-      } catch (e) {
-        console.error("OWL-ViT error:", e.message)
+    const objects = results.map((item, i) => ({
+      id:       i + 1,
+      label:    item.label,
+      score:    Math.round(item.score * 100),
+      zone:     getZone(item.box, imageWidth),
+      distance: getDistance(item.box, imageWidth, imageHeight),
+      box: {
+        x: Math.round(item.box.xmin),
+        y: Math.round(item.box.ymin),
+        w: Math.round(item.box.xmax - item.box.xmin),
+        h: Math.round(item.box.ymax - item.box.ymin)
       }
+    }))
+
+    res.json({ found: true, query, objects, count: objects.length })
+
+  } catch (e) {
+    console.error("Search error:", e.message)
+    res.status(500).json({ error: "Search failed", details: e.message })
+  }
+})
+
+// ─── POST /api/vision/match ───────────────────────────────────────────────────
+// مقارنة صورة مرجع مع الكاميرا
+// يستخدم OWL-ViT مع وصف مستخرج من الصورة المرجعية
+router.post("/match", async (req, res) => {
+  if (!owlvitReady) {
+    return res.status(503).json({ error: "OWL-ViT loading..." })
+  }
+
+  const { referenceImage, cameraImage, label, width, height } = req.body
+
+  if (!cameraImage) return res.status(400).json({ error: "cameraImage required" })
+  if (!label)       return res.status(400).json({ error: "label required" })
+
+  try {
+    const rawCamera   = await toRawImage(cameraImage)
+    const imageWidth  = width  || 640
+    const imageHeight = height || 480
+
+    // نبحث عن الـ label في الكاميرا
+    const results = await owlvit(rawCamera, [label], { threshold: 0.15 })
+
+    if (!results || results.length === 0) {
+      return res.json({ matched: false, label, objects: [] })
     }
+
+    // الأعلى ثقة هو الأفضل
+    const best = results.sort((a, b) => b.score - a.score)[0]
 
     res.json({
-      objects: allObjects,
-      count:   allObjects.length,
-      models:  {
-        detr:   detectorReady,
-        owlvit: owlvitReady
+      matched:  true,
+      label,
+      score:    Math.round(best.score * 100),
+      zone:     getZone(best.box, imageWidth),
+      distance: getDistance(best.box, imageWidth, imageHeight),
+      box: {
+        x: Math.round(best.box.xmin),
+        y: Math.round(best.box.ymin),
+        w: Math.round(best.box.xmax - best.box.xmin),
+        h: Math.round(best.box.ymax - best.box.ymin)
       }
     })
 
   } catch (e) {
-    console.error("Vision error:", e.message)
-    res.status(500).json({ error: "Detection failed", details: e.message })
+    console.error("Match error:", e.message)
+    res.status(500).json({ error: "Match failed", details: e.message })
   }
 })
 
-// ─── POST /api/vision/describe ────────────────────────────────────────────────
-// وصف صورة مرفوعة للبحث عن أي شيء
-router.post("/describe", async (req, res) => {
-  if (!captionerReady) {
-    if (captionerError) {
-      return res.status(503).json({ error: "Captioner failed", details: captionerError })
-    }
-    return res.status(503).json({ error: "Captioner loading, please wait" })
+// ─── POST /api/vision/ocr ─────────────────────────────────────────────────────
+// قراءة النص من الكاميرا
+router.post("/ocr", async (req, res) => {
+  if (!ocrReady) {
+    return res.status(503).json({
+      error: ocrError ? "OCR failed: " + ocrError : "OCR loading..."
+    })
   }
 
-  const { image } = req.body
-  if (!image) return res.status(400).json({ error: "image (base64) required" })
+  const { image, query } = req.body
+  if (!image) return res.status(400).json({ error: "image required" })
 
   try {
-    const rawImage   = await toRawImage(image)
-    const result     = await captioner(rawImage, { max_new_tokens: 50 })
-    const caption    = result?.[0]?.generated_text || ""
-    const mainObject = extractMainObject(caption)
+    const rawImage = await toRawImage(image)
+    const result   = await ocrPipeline(rawImage)
+    const text     = (result?.[0]?.generated_text || "").trim()
 
-    res.json({ caption, mainObject, model: "vit-gpt2-image-captioning" })
+    // لو فيه query → ابحث عنه في النص
+    if (query) {
+      const found = text.toLowerCase().includes(query.toLowerCase())
+      return res.json({ text, query, found })
+    }
+
+    res.json({ text, found: text.length > 0 })
 
   } catch (e) {
-    console.error("Captioner error:", e.message)
-    res.status(500).json({ error: "Caption failed", details: e.message })
+    console.error("OCR error:", e.message)
+    res.status(500).json({ error: "OCR failed", details: e.message })
   }
 })
 
 // ─── GET /api/vision/status ───────────────────────────────────────────────────
 router.get("/status", (_req, res) => {
   res.json({
-    detector:  { ready: detectorReady,  error: detectorError  || null, model: "detr-resnet-50" },
-    owlvit:    { ready: owlvitReady,    error: owlvitError    || null, model: "owlvit-base-patch32" },
-    captioner: { ready: captionerReady, error: captionerError || null, model: "vit-gpt2-image-captioning" },
-    customCategories: Object.keys(CUSTOM_LABELS).length,
-    customLabels:     ALL_CUSTOM_LABELS.length
+    owlvit:    { ready: owlvitReady, error: owlvitError  || null, model: "owlvit-base-patch32" },
+    ocr:       { ready: ocrReady,    error: ocrError     || null, model: "trocr-small-printed" }
   })
-})
-
-// ─── GET /api/vision/categories ──────────────────────────────────────────────
-// قائمة كل الأصناف المخصصة
-router.get("/categories", (_req, res) => {
-  res.json(CUSTOM_LABELS)
 })
 
 export default router
