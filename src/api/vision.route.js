@@ -1,20 +1,25 @@
 // vision.route.js
-// Search Engine: OWL-ViT + OCR + Image Match
-// بدون كشف تلقائي - يشتغل فقط عند طلب المستخدم
+// Search Engine: OWL-ViT + OCR + Captioner
+// بدون كشف تلقائي
 
 import express from "express"
 
 const router = express.Router()
 
-// نموذج OWL-ViT للبحث بالكلمات
+// OWL-ViT للبحث بالكلمات
 let owlvit      = null
 let owlvitReady = false
 let owlvitError = null
 
-// نموذج OCR للقراءة
-let ocrPipeline  = null
-let ocrReady     = false
-let ocrError     = null
+// OCR لقراءة النصوص
+let ocrPipeline = null
+let ocrReady    = false
+let ocrError    = null
+
+// Captioner لوصف الصور (VIT-GPT2)
+let captioner      = null
+let captionerReady = false
+let captionerError = null
 
 async function loadOwlVit() {
   try {
@@ -40,9 +45,21 @@ async function loadOCR() {
   }
 }
 
-// تحميل النماذج عند بدء السيرفر
+async function loadCaptioner() {
+  try {
+    const { pipeline } = await import("@huggingface/transformers")
+    captioner      = await pipeline("image-to-text", "Xenova/vit-gpt2-image-captioning", { device: "cpu" })
+    captionerReady = true
+    console.log("Captioner ready")
+  } catch (e) {
+    captionerError = e.message
+    console.error("Captioner failed:", e.message)
+  }
+}
+
 loadOwlVit()
 loadOCR()
+loadCaptioner()
 
 // تحويل base64 إلى RawImage
 async function toRawImage(image) {
@@ -76,7 +93,7 @@ function getDistance(box, imageWidth, imageHeight) {
 }
 
 // ─── POST /api/vision/search ──────────────────────────────────────────────────
-// البحث بالكلمة - OWL-ViT يبحث عن الشيء في الكاميرا
+// OWL-ViT يبحث عن كلمة في الكاميرا
 router.post("/search", async (req, res) => {
   if (!owlvitReady) {
     return res.status(503).json({
@@ -85,7 +102,6 @@ router.post("/search", async (req, res) => {
   }
 
   const { image, query, width, height } = req.body
-
   if (!image) return res.status(400).json({ error: "image required" })
   if (!query) return res.status(400).json({ error: "query required" })
 
@@ -93,10 +109,8 @@ router.post("/search", async (req, res) => {
     const rawImage    = await toRawImage(image)
     const imageWidth  = width  || 640
     const imageHeight = height || 480
-
-    // OWL-ViT يبحث عن الكلمة في الصورة
-    const queries = Array.isArray(query) ? query : [query]
-    const results = await owlvit(rawImage, queries, { threshold: 0.15 })
+    const queries     = Array.isArray(query) ? query : [query]
+    const results     = await owlvit(rawImage, queries, { threshold: 0.15 })
 
     if (!results || results.length === 0) {
       return res.json({ found: false, query, objects: [] })
@@ -124,56 +138,52 @@ router.post("/search", async (req, res) => {
   }
 })
 
-// ─── POST /api/vision/match ───────────────────────────────────────────────────
-// مقارنة صورة مرجع مع الكاميرا
-// يستخدم OWL-ViT مع وصف مستخرج من الصورة المرجعية
-router.post("/match", async (req, res) => {
-  if (!owlvitReady) {
-    return res.status(503).json({ error: "OWL-ViT loading..." })
-  }
-
-  const { referenceImage, cameraImage, label, width, height } = req.body
-
-  if (!cameraImage) return res.status(400).json({ error: "cameraImage required" })
-  if (!label)       return res.status(400).json({ error: "label required" })
+// ─── POST /api/vision/describe ────────────────────────────────────────────────
+// يصف الصورة تلقائياً + OCR
+// يُستخدم عند رفع صورة مرجع بدون كتابة
+router.post("/describe", async (req, res) => {
+  const { image } = req.body
+  if (!image) return res.status(400).json({ error: "image required" })
 
   try {
-    const rawCamera   = await toRawImage(cameraImage)
-    const imageWidth  = width  || 640
-    const imageHeight = height || 480
+    const rawImage = await toRawImage(image)
+    let text       = ""
+    let caption    = ""
 
-    // نبحث عن الـ label في الكاميرا
-    const results = await owlvit(rawCamera, [label], { threshold: 0.15 })
-
-    if (!results || results.length === 0) {
-      return res.json({ matched: false, label, objects: [] })
+    // 1. جرب OCR أولاً
+    if (ocrReady) {
+      try {
+        const ocrResult = await ocrPipeline(rawImage)
+        text = (ocrResult?.[0]?.generated_text || "").trim()
+      } catch (e) {}
     }
 
-    // الأعلى ثقة هو الأفضل
-    const best = results.sort((a, b) => b.score - a.score)[0]
+    // 2. لو ما فيه نص → صف الصورة بـ Captioner
+    if ((!text || text.length < 3) && captionerReady) {
+      try {
+        const capResult = await captioner(rawImage, { max_new_tokens: 30 })
+        caption = (capResult?.[0]?.generated_text || "").trim()
+      } catch (e) {}
+    }
+
+    // الأولوية: OCR ثم Caption
+    const result = text.length > 2 ? text : caption
 
     res.json({
-      matched:  true,
-      label,
-      score:    Math.round(best.score * 100),
-      zone:     getZone(best.box, imageWidth),
-      distance: getDistance(best.box, imageWidth, imageHeight),
-      box: {
-        x: Math.round(best.box.xmin),
-        y: Math.round(best.box.ymin),
-        w: Math.round(best.box.xmax - best.box.xmin),
-        h: Math.round(best.box.ymax - best.box.ymin)
-      }
+      text,
+      caption,
+      result,
+      source: text.length > 2 ? "ocr" : "caption"
     })
 
   } catch (e) {
-    console.error("Match error:", e.message)
-    res.status(500).json({ error: "Match failed", details: e.message })
+    console.error("Describe error:", e.message)
+    res.status(500).json({ error: "Describe failed", details: e.message })
   }
 })
 
 // ─── POST /api/vision/ocr ─────────────────────────────────────────────────────
-// قراءة النص من الكاميرا
+// قراءة النص من الكاميرا (Smart OCR)
 router.post("/ocr", async (req, res) => {
   if (!ocrReady) {
     return res.status(503).json({
@@ -189,7 +199,6 @@ router.post("/ocr", async (req, res) => {
     const result   = await ocrPipeline(rawImage)
     const text     = (result?.[0]?.generated_text || "").trim()
 
-    // لو فيه query → ابحث عنه في النص
     if (query) {
       const found = text.toLowerCase().includes(query.toLowerCase())
       return res.json({ text, query, found })
@@ -206,8 +215,9 @@ router.post("/ocr", async (req, res) => {
 // ─── GET /api/vision/status ───────────────────────────────────────────────────
 router.get("/status", (_req, res) => {
   res.json({
-    owlvit:    { ready: owlvitReady, error: owlvitError  || null, model: "owlvit-base-patch32" },
-    ocr:       { ready: ocrReady,    error: ocrError     || null, model: "trocr-small-printed" }
+    owlvit:    { ready: owlvitReady,    error: owlvitError    || null, model: "owlvit-base-patch32" },
+    ocr:       { ready: ocrReady,       error: ocrError       || null, model: "trocr-small-printed" },
+    captioner: { ready: captionerReady, error: captionerError || null, model: "vit-gpt2-image-captioning" }
   })
 })
 
