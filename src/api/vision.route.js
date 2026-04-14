@@ -104,8 +104,12 @@ router.post("/", async (req, res) => {
   }
 
   try {
-    const imageData   = image.startsWith("data:") ? image : "data:image/jpeg;base64," + image
-    const results     = await detector(imageData, { threshold: 0.4 })
+    // تحويل base64 إلى RawImage
+    const base64Data = image.replace(/^data:image\/\w+;base64,/, "")
+    const buffer     = Buffer.from(base64Data, "base64")
+    const { RawImage } = await import("@huggingface/transformers")
+    const rawImage   = await RawImage.fromBlob(new Blob([buffer], { type: "image/jpeg" }))
+    const results    = await detector(rawImage, { threshold: 0.4 })
     const imageWidth  = width  || 640
     const imageHeight = height || 480
 
@@ -153,8 +157,12 @@ router.post("/describe", async (req, res) => {
   }
 
   try {
-    const imageData = image.startsWith("data:") ? image : "data:image/jpeg;base64," + image
-    const result    = await captioner(imageData, { max_new_tokens: 50 })
+    // تحويل base64 إلى RawImage
+    const base64Data2 = image.replace(/^data:image\/\w+;base64,/, "")
+    const buffer2     = Buffer.from(base64Data2, "base64")
+    const { RawImage: RI } = await import("@huggingface/transformers")
+    const rawImage2   = await RI.fromBlob(new Blob([buffer2], { type: "image/jpeg" }))
+    const result      = await captioner(rawImage2, { max_new_tokens: 50 })
     const caption   = result?.[0]?.generated_text || ""
     const mainObject = extractMainObject(caption)
 
