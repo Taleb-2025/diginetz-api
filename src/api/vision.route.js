@@ -11,6 +11,11 @@ let owlvit      = null
 let owlvitReady = false
 let owlvitError = null
 
+// CLIP للمقارنة البصرية
+let clipModel      = null
+let clipReady      = false
+let clipError      = null
+
 // OCR لقراءة النصوص
 let ocrPipeline = null
 let ocrReady    = false
@@ -60,6 +65,22 @@ async function loadCaptioner() {
 loadOwlVit()
 loadOCR()
 loadCaptioner()
+loadClip()
+
+async function loadClip() {
+  try {
+    const { AutoProcessor, CLIPVisionModelWithProjection, RawImage } = await import("@huggingface/transformers")
+    clipModel = {
+      processor: await AutoProcessor.from_pretrained("Xenova/clip-vit-base-patch32"),
+      model:     await CLIPVisionModelWithProjection.from_pretrained("Xenova/clip-vit-base-patch32")
+    }
+    clipReady = true
+    console.log("CLIP ready")
+  } catch (e) {
+    clipError = e.message
+    console.error("CLIP failed:", e.message)
+  }
+}
 
 // تحويل base64 إلى RawImage
 async function toRawImage(image) {
@@ -212,12 +233,65 @@ router.post("/ocr", async (req, res) => {
   }
 })
 
+// ─── POST /api/vision/match-visual ───────────────────────────────────────────
+// CLIP يقارن صورة مرجع مع frame الكاميرا بصرياً
+router.post("/match-visual", async (req, res) => {
+  if (!clipReady) {
+    return res.status(503).json({
+      error: clipError ? "CLIP failed: " + clipError : "CLIP loading..."
+    })
+  }
+
+  const { referenceImage, cameraImage } = req.body
+  if (!referenceImage) return res.status(400).json({ error: "referenceImage required" })
+  if (!cameraImage)    return res.status(400).json({ error: "cameraImage required" })
+
+  try {
+    const { RawImage } = await import("@huggingface/transformers")
+
+    // تحويل الصورتين
+    const refBase64  = referenceImage.replace(/^data:image\/\w+;base64,/, "")
+    const camBase64  = cameraImage.replace(/^data:image\/\w+;base64,/, "")
+    const refBuffer  = Buffer.from(refBase64, "base64")
+    const camBuffer  = Buffer.from(camBase64, "base64")
+    const refRaw     = await RawImage.fromBlob(new Blob([refBuffer], { type: "image/jpeg" }))
+    const camRaw     = await RawImage.fromBlob(new Blob([camBuffer], { type: "image/jpeg" }))
+
+    // استخرج features من الصورتين
+    const refInputs  = await clipModel.processor(refRaw)
+    const camInputs  = await clipModel.processor(camRaw)
+    const refOutputs = await clipModel.model(refInputs)
+    const camOutputs = await clipModel.model(camInputs)
+
+    // احسب cosine similarity بين الـ features
+    const refEmbed = refOutputs.image_embeds.data
+    const camEmbed = camOutputs.image_embeds.data
+
+    let dot = 0, refNorm = 0, camNorm = 0
+    for (let i = 0; i < refEmbed.length; i++) {
+      dot     += refEmbed[i] * camEmbed[i]
+      refNorm += refEmbed[i] * refEmbed[i]
+      camNorm += camEmbed[i] * camEmbed[i]
+    }
+    const similarity = dot / (Math.sqrt(refNorm) * Math.sqrt(camNorm))
+    const score      = Math.round(similarity * 100)
+    const matched    = similarity > 0.80
+
+    res.json({ matched, score, similarity: similarity.toFixed(4) })
+
+  } catch (e) {
+    console.error("Match-visual error:", e.message)
+    res.status(500).json({ error: "Match failed", details: e.message })
+  }
+})
+
 // ─── GET /api/vision/status ───────────────────────────────────────────────────
 router.get("/status", (_req, res) => {
   res.json({
     owlvit:    { ready: owlvitReady,    error: owlvitError    || null, model: "owlvit-base-patch32" },
     ocr:       { ready: ocrReady,       error: ocrError       || null, model: "trocr-small-printed" },
-    captioner: { ready: captionerReady, error: captionerError || null, model: "vit-gpt2-image-captioning" }
+    captioner: { ready: captionerReady, error: captionerError || null, model: "vit-gpt2-image-captioning" },
+    clip:      { ready: clipReady,      error: clipError      || null, model: "clip-vit-base-patch32" }
   })
 })
 
