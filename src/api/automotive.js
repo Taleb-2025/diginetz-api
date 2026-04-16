@@ -1,91 +1,202 @@
+'use strict'
 
-import express from "express";
+/**
+ * automotive.route.js
+ * REST API routes for DigiNetz TSL Automotive
+ *
+ * Path: src/api/automotive.route.js
+ *
+ * Endpoints:
+ *   GET  /api/automotive/status          → vehicle health status
+ *   POST /api/automotive/push            → OBD agent (Laptop/Android)
+ *   POST /api/automotive/push-shortcut   → iOS Shortcut
+ *   POST /api/automotive/simulate        → control simulation
+ *   GET  /api/automotive/scenarios       → list scenarios
+ *   POST /api/automotive/recalibrate     → reset analyzers
+ *   GET  /api/automotive/pids            → PID configurations
+ */
 
-const router = express.Router();
+import { Router }          from 'express'
+import { OBDSimulator }    from '../obd/OBDSimulator.js'
+import { AnalyzerManager } from '../obd/AnalyzerManager.js'
 
-/*
-  Automotive Adapter
-  ------------------
-  - Receives raw vehicle data from browser
-  - Normalizes it into a structural string
-  - Forwards it to TSL Core (flow.js)
-*/
+const router    = Router()
+const simulator = new OBDSimulator()
+const manager   = new AnalyzerManager()
 
-const TSL_CORE_URL = process.env.TSL_CORE_URL || "http://localhost:8080/api/flow";
+// ─── Internal ─────────────────────────────────────────────────────────────────
 
-/* ---------- normalize raw stream ---------- */
-function normalizeRawStream(raw) {
-  if (!raw || typeof raw !== "string") return "";
-
-  // Minimal, deterministic normalization
-  // No parsing, no decoding, no storage
-  return raw
-    .replace(/\s+/g, "")
-    .slice(0, 4096); // hard safety limit
+function feed(data) {
+  manager.process(data)
 }
 
-/* ---------- INIT reference ---------- */
-router.post("/init", async (req, res) => {
-  const { rawStream } = req.body;
+// ─── GET /api/automotive/status ──────────────────────────────────────────────
 
-  const input = normalizeRawStream(rawStream);
+router.get('/status', (_req, res) => {
+  if (!manager.hasData()) {
+    return res.json({
+      ready:   false,
+      message: 'No data yet. Start simulation or connect OBD agent.'
+    })
+  }
+  res.json({
+    ready: true,
+    ...manager.getStatus()
+  })
+})
 
-  if (!input) {
-    return res.status(400).json({
-      ok: false,
-      reason: "INVALID_RAW_STREAM"
-    });
+// ─── POST /api/automotive/push ───────────────────────────────────────────────
+// From Laptop / Android agent
+// Body: { name, value, time, source }
+
+router.post('/push', (req, res) => {
+  const key = req.headers['x-agent-key']
+
+  if (key !== process.env.AGENT_KEY) {
+    return res.status(401).json({ error: 'unauthorized' })
   }
 
-  try {
-    const r = await fetch(`${TSL_CORE_URL}/init`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ input })
-    });
+  const { name, value, time, source } = req.body
 
-    const data = await r.json();
-    return res.status(r.status).json(data);
-
-  } catch (err) {
-    return res.status(500).json({
-      ok: false,
-      reason: "TSL_CORE_UNREACHABLE",
-      error: String(err)
-    });
-  }
-});
-
-/* ---------- EXECUTE comparison ---------- */
-router.post("/execute", async (req, res) => {
-  const { rawStream } = req.body;
-
-  const input = normalizeRawStream(rawStream);
-
-  if (!input) {
-    return res.status(400).json({
-      ok: false,
-      reason: "INVALID_RAW_STREAM"
-    });
+  if (!name || value === undefined) {
+    return res.status(400).json({ error: 'missing name or value' })
   }
 
-  try {
-    const r = await fetch(`${TSL_CORE_URL}/execute`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ input })
-    });
+  const result = manager.process({
+    name,
+    value:  parseFloat(value),
+    time:   time ?? Date.now(),
+    source: source ?? 'obd'
+  })
 
-    const data = await r.json();
-    return res.status(r.status).json(data);
-
-  } catch (err) {
-    return res.status(500).json({
-      ok: false,
-      reason: "TSL_CORE_UNREACHABLE",
-      error: String(err)
-    });
+  if (!result) {
+    return res.status(400).json({ error: `unknown PID: ${name}` })
   }
-});
 
-export default router;
+  res.json({
+    ok:     true,
+    name,
+    health: result.health,
+    status: result.status
+  })
+})
+
+// ─── POST /api/automotive/push-shortcut ──────────────────────────────────────
+// From iOS Shortcut
+// Body: { rpm, speed, coolant, throttle, load, key }
+
+router.post('/push-shortcut', (req, res) => {
+  const { rpm, speed, coolant, throttle, load, key } = req.body ?? {}
+
+  if (key !== process.env.AGENT_KEY) {
+    return res.status(401).json({ error: 'unauthorized' })
+  }
+
+  const readings = [
+    { name: 'RPM',      value: rpm      },
+    { name: 'SPEED',    value: speed    },
+    { name: 'COOLANT',  value: coolant  },
+    { name: 'THROTTLE', value: throttle },
+    { name: 'LOAD',     value: load     }
+  ]
+
+  const results = {}
+
+  for (const r of readings) {
+    if (r.value !== null && r.value !== undefined) {
+      const parsed = parseFloat(r.value)
+      if (!isNaN(parsed)) {
+        const result = manager.process({
+          name:   r.name,
+          value:  parsed,
+          time:   Date.now(),
+          source: 'ios'
+        })
+        if (result) {
+          results[r.name] = {
+            health:   result.health,
+            status:   result.status,
+            behavior: result.behaviorVector?.behavior ?? null
+          }
+        }
+      }
+    }
+  }
+
+  res.json({
+    ok:     true,
+    source: 'ios',
+    results
+  })
+})
+
+// ─── POST /api/automotive/simulate ───────────────────────────────────────────
+
+router.post('/simulate', (req, res) => {
+  const { action, scenario } = req.body ?? {}
+
+  switch (action) {
+
+    case 'start': {
+      if (simulator.isActive()) {
+        return res.json({ ok: true, message: 'Simulator already running' })
+      }
+      const sc = scenario ?? 'normal'
+      simulator.setScenario(sc)
+      simulator.start(feed, 500)
+      return res.json({ ok: true, message: 'Simulator started', scenario: sc })
+    }
+
+    case 'stop': {
+      simulator.stop()
+      return res.json({ ok: true, message: 'Simulator stopped' })
+    }
+
+    case 'scenario': {
+      if (!scenario) {
+        return res.status(400).json({ error: 'scenario name required' })
+      }
+      try {
+        simulator.setScenario(scenario)
+        if (!simulator.isActive()) simulator.start(feed, 500)
+        return res.json({ ok: true, message: 'Scenario changed', scenario })
+      } catch (err) {
+        return res.status(400).json({ error: err.message })
+      }
+    }
+
+    default:
+      return res.status(400).json({
+        error: 'invalid action. Use: start | stop | scenario'
+      })
+  }
+})
+
+// ─── GET /api/automotive/scenarios ───────────────────────────────────────────
+
+router.get('/scenarios', (_req, res) => {
+  res.json({
+    active:    simulator.isActive(),
+    current:   simulator.getScenario(),
+    scenarios: simulator.getScenarios()
+  })
+})
+
+// ─── POST /api/automotive/recalibrate ────────────────────────────────────────
+
+router.post('/recalibrate', (req, res) => {
+  const { pid } = req.body ?? {}
+  manager.recalibrate(pid ?? null)
+  res.json({
+    ok:      true,
+    message: pid ? `Recalibrated ${pid}` : 'All analyzers recalibrated'
+  })
+})
+
+// ─── GET /api/automotive/pids ────────────────────────────────────────────────
+
+router.get('/pids', (_req, res) => {
+  res.json({ pids: manager.getPIDList() })
+})
+
+export default router
