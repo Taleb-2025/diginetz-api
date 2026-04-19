@@ -10,6 +10,12 @@
 
 import { CyclicDynamicsEngine } from '../engines/CyclicDynamicsEngine.js'
 import { CyclicAnalyzer }       from '../engines/CyclicAnalyzer.js'
+import { BaselineManager }      from './BaselineManager.js'
+import { CorrelationEngine }    from './CorrelationEngine.js'
+import { AdvisorEngine }        from './AdvisorEngine.js'
+import { ConfidenceEngine }     from './ConfidenceEngine.js'
+import { TimeSeriesEngine }     from './TimeSeriesEngine.js'
+import { DTCEngine }            from './DTCEngine.js'
 
 // ─── PID Configurations ───────────────────────────────────────────────────────
 const PID_CONFIGS = {
@@ -69,7 +75,15 @@ export class AnalyzerManager {
   constructor() {
     this._analyzers = {}
     this._results   = {}
-    this._source    = 'simulation'   // 'simulation' | 'obd'
+    this._source    = 'simulation'
+
+    // ── الستة Engines الجديدة ──
+    this._baseline    = new BaselineManager({ minSamples: 30 })
+    this._correlation = new CorrelationEngine()
+    this._confidence  = new ConfidenceEngine()
+    this._timeSeries  = new TimeSeriesEngine({ windowSize: 30 })
+    this._dtc         = new DTCEngine()
+    this._lang        = 'en'
 
     for (const [name, cfg] of Object.entries(PID_CONFIGS)) {
       const engine = new CyclicDynamicsEngine({
@@ -79,9 +93,9 @@ export class AnalyzerManager {
       })
 
       this._analyzers[name] = new CyclicAnalyzer(engine, {
-        baseThreshold:   cfg.baseThreshold,
-        intervalMs:      500,
-        historyWindow:   20,
+        baseThreshold:    cfg.baseThreshold,
+        intervalMs:       500,
+        historyWindow:    20,
         scoreHistorySize: 10
       })
     }
@@ -97,12 +111,32 @@ export class AnalyzerManager {
 
     const result = analyzer.analyze(value)
 
+    // ── تغذية الـ Engines الجديدة ──
+    this._baseline.addSample(name, value)
+    this._correlation.update(name, value)
+    this._timeSeries.add(name, value, time ?? Date.now())
+
+    // قفل الـ Baseline بعد 30 عينة
+    if (!this._baseline.isReady()) {
+      this._baseline.lock()
+    }
+
+    // مقارنة مع Baseline إن كان جاهزاً
+    const baselineCompare = this._baseline.isReady()
+      ? this._baseline.compare(name, value)
+      : null
+
+    // Time Series لهذا الـ PID
+    const timeSeries = this._timeSeries.analyze(name)
+
     this._results[name] = {
       ...result,
       value,
-      time:  time ?? Date.now(),
-      unit:  PID_CONFIGS[name]?.unit  ?? '',
-      label: PID_CONFIGS[name]?.label ?? name
+      time:            time ?? Date.now(),
+      unit:            PID_CONFIGS[name]?.unit  ?? '',
+      label:           PID_CONFIGS[name]?.label ?? name,
+      baselineCompare,
+      timeSeries:      timeSeries.ready ? timeSeries : null
     }
 
     return this._results[name]
@@ -111,7 +145,7 @@ export class AnalyzerManager {
   // ─── Status ────────────────────────────────────────────────────────────────
 
   getStatus() {
-    const analyzers = {}
+    const analyzers     = {}
     let   weightedSum   = 0
     let   totalWeight   = 0
     let   worstStatus   = 'NORMAL'
@@ -120,6 +154,15 @@ export class AnalyzerManager {
     const statusPriority = { CRITICAL: 4, WARNING: 3, NOTICE: 2, NORMAL: 1 }
     const healthPriority = { Critical: 4, Risk: 3, Drift: 2, Stable: 1 }
 
+    // ── Correlation Analysis ──
+    const correlationAlerts = this._correlation.analyze()
+
+    // ── Time Series Warnings ──
+    const timeSeriesWarnings = this._timeSeries.getWarnings()
+
+    // ── PID scores لـ Confidence ──
+    const pidScores = []
+
     for (const [name, r] of Object.entries(this._results)) {
       const behavior = r.behaviorVector?.behavior ?? 0
       const weight   = PID_WEIGHTS[name] ?? 0.1
@@ -127,7 +170,6 @@ export class AnalyzerManager {
       weightedSum += behavior * weight
       totalWeight += weight
 
-      // Track worst status
       if ((statusPriority[r.status] ?? 0) > (statusPriority[worstStatus] ?? 0)) {
         worstStatus = r.status
       }
@@ -135,18 +177,43 @@ export class AnalyzerManager {
         worstHealth = r.health
       }
 
+      // ── Confidence لكل PID ──
+      const confidenceResult = this._confidence.evaluatePID({
+        sampleCount:   r.behaviorVector ? 10 : 0,
+        stdDev:        r.stdDev  ?? 0,
+        mean:          r.avgStep ?? 1,
+        hasBaseline:   this._baseline.isReady(),
+        historyLength: 10
+      })
+
+      pidScores.push(confidenceResult.score)
+
+      // ── Advisor للـ PID ──
+      const pidAdvice = AdvisorEngine.advisePID(
+        name,
+        r.status,
+        r.trend,
+        r.value
+      )
+
       analyzers[name] = {
-        label:    r.label,
-        value:    r.value,
-        unit:     r.unit,
-        health:   r.health,
-        status:   r.status,
-        severity: r.severity,
-        behavior: behavior,
-        trend:    r.trend,
-        forecast: r.forecast  ?? null,
-        eta:      r.eta       ?? null,
-        explain:  r.explain   ?? null
+        label:           r.label,
+        value:           r.value,
+        unit:            r.unit,
+        health:          r.health,
+        status:          r.status,
+        severity:        r.severity,
+        behavior:        behavior,
+        trend:           r.trend,
+        forecast:        r.forecast         ?? null,
+        eta:             r.eta              ?? null,
+        explain:         r.explain          ?? null,
+        baselineCompare: r.baselineCompare  ?? null,
+        timeSeries:      r.timeSeries       ?? null,
+        confidence:      confidenceResult,
+        advice:          pidAdvice
+          ? { [this._lang]: pidAdvice[this._lang] ?? pidAdvice.en }
+          : null
       }
     }
 
@@ -154,14 +221,66 @@ export class AnalyzerManager {
       ? Math.round(weightedSum / totalWeight)
       : null
 
+    // ── Overall Confidence ──
+    const overallConfidence = this._confidence.evaluateOverall(
+      pidScores,
+      correlationAlerts.length
+    )
+
+    // ── Risk Assessment ──
+    const risk = overall !== null
+      ? AdvisorEngine.assessRisk(overall)
+      : null
+
+    // ── Advisor Report ──
+    const advisorReport = overall !== null
+      ? AdvisorEngine.buildReport(
+          overall,
+          this._results,
+          correlationAlerts,
+          this._lang
+        )
+      : null
+
+    // ── DTC ──
+    const dtcCodes   = this._dtc.getCodes()
+    const dtcInsights = dtcCodes.length > 0
+      ? this._dtc.correlateWithAnalysis(this._results)
+      : []
+
+    // ── Baseline Progress ──
+    const baselineStatus = {
+      ready:    this._baseline.isReady(),
+      progress: this._baseline.getProgress()
+    }
+
     return {
-      source:      this._source,
+      source:           this._source,
       overall,
       worstStatus,
       worstHealth,
       analyzers,
-      timestamp:   Date.now()
+      timestamp:        Date.now(),
+      confidence:       overallConfidence,
+      risk,
+      advisor:          advisorReport,
+      correlations:     correlationAlerts,
+      timeSeriesAlerts: timeSeriesWarnings,
+      dtc:              { codes: dtcCodes, insights: dtcInsights },
+      baseline:         baselineStatus
     }
+  }
+
+  // ─── DTC Processing ────────────────────────────────────────────────────────
+
+  processDTC(rawResponse, lang = 'en') {
+    return this._dtc.processCodes(rawResponse, lang)
+  }
+
+  // ─── Language ──────────────────────────────────────────────────────────────
+
+  setLang(lang) {
+    this._lang = lang
   }
 
   // ─── Pattern Learning ──────────────────────────────────────────────────────
@@ -188,6 +307,9 @@ export class AnalyzerManager {
         analyzer.recalibrate()
       }
       this._results = {}
+      this._baseline.reset()
+      this._timeSeries  = new TimeSeriesEngine({ windowSize: 30 })
+      this._correlation = new CorrelationEngine()
     }
   }
 
