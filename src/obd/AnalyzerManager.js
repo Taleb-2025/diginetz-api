@@ -86,10 +86,12 @@ export class AnalyzerManager {
     this._lang        = 'en'
 
     for (const [name, cfg] of Object.entries(PID_CONFIGS)) {
+
+      // ✅ الإصلاح: cycle = max - min لأن CyclicDynamicsEngine يستخدم cycle لا min/max
       const engine = new CyclicDynamicsEngine({
-        min:         cfg.min,
-        max:         cfg.max,
-        maxVelocity: cfg.maxVelocity
+        cycle:        cfg.max - cfg.min,
+        maxVelocity:  cfg.maxVelocity,
+        initialState: 0
       })
 
       this._analyzers[name] = new CyclicAnalyzer(engine, {
@@ -109,9 +111,13 @@ export class AnalyzerManager {
 
     this._source = source ?? this._source
 
-    const result = analyzer.analyze(value)
+    // ✅ نحوّل القيمة لتناسب الفضاء الدائري (نطرح الـ min)
+    const cfg          = PID_CONFIGS[name]
+    const normalizedVal = cfg ? Math.max(0, value - cfg.min) : value
 
-    // ── تغذية الـ Engines الجديدة ──
+    const result = analyzer.analyze(normalizedVal)
+
+    // ── تغذية الـ Engines الجديدة بالقيمة الأصلية ──
     this._baseline.addSample(name, value)
     this._correlation.update(name, value)
     this._timeSeries.add(name, value, time ?? Date.now())
@@ -131,10 +137,10 @@ export class AnalyzerManager {
 
     this._results[name] = {
       ...result,
-      value,
+      value,                                      // ← القيمة الأصلية للعرض
       time:            time ?? Date.now(),
-      unit:            PID_CONFIGS[name]?.unit  ?? '',
-      label:           PID_CONFIGS[name]?.label ?? name,
+      unit:            cfg?.unit  ?? '',
+      label:           cfg?.label ?? name,
       baselineCompare,
       timeSeries:      timeSeries.ready ? timeSeries : null
     }
@@ -208,6 +214,8 @@ export class AnalyzerManager {
         forecast:        r.forecast         ?? null,
         eta:             r.eta              ?? null,
         explain:         r.explain          ?? null,
+        stdDev:          r.stdDev           ?? null,
+        avgStep:         r.avgStep          ?? null,
         baselineCompare: r.baselineCompare  ?? null,
         timeSeries:      r.timeSeries       ?? null,
         confidence:      confidenceResult,
@@ -243,7 +251,7 @@ export class AnalyzerManager {
       : null
 
     // ── DTC ──
-    const dtcCodes   = this._dtc.getCodes()
+    const dtcCodes    = this._dtc.getCodes()
     const dtcInsights = dtcCodes.length > 0
       ? this._dtc.correlateWithAnalysis(this._results)
       : []
@@ -306,7 +314,7 @@ export class AnalyzerManager {
       for (const analyzer of Object.values(this._analyzers)) {
         analyzer.recalibrate()
       }
-      this._results = {}
+      this._results    = {}
       this._baseline.reset()
       this._timeSeries  = new TimeSeriesEngine({ windowSize: 30 })
       this._correlation = new CorrelationEngine()
