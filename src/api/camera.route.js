@@ -154,18 +154,48 @@ router.get("/status", (_req, res) => {
 })
 
 // ─── GET /api/camera/frame ────────────────────────────────────────────────────
-// جلب صورة من الكاميرا
+// جلب معلومات الكاميرا (Snapshot غير متاح عبر Cloud API)
 router.get("/frame", async (req, res) => {
   if (!sessionReady) {
     return res.status(503).json({ error: "Camera not ready" })
   }
 
   try {
-    // RTSP snapshot عبر الكاميرا
-    const result = await sendCameraCommand("getVideoQualities", {})
-    res.json({ ok: true, result })
+    // جلب حالة الكاميرا الحالية
+    const result = await sendCameraCommand("getDeviceInfo", {})
+    res.json({
+      ok:          true,
+      online:      true,
+      model:       "Tapo C52A",
+      imageBase64: null,
+      note:        "Direct snapshot requires local network access",
+      deviceInfo:  result
+    })
   } catch (e) {
     res.status(500).json({ error: e.message })
+  }
+})
+
+// ─── POST /api/camera/snapshot ────────────────────────────────────────────────
+// محاولة جلب snapshot عبر HTTP محلي (يشتغل فقط على نفس الشبكة)
+router.post("/snapshot", async (req, res) => {
+  try {
+    const snapUrl = "http://" + CAMERA_IP + "/stream/snap.jpg"
+    const https   = await import("http")
+    const snap    = await new Promise((resolve, reject) => {
+      const req2 = https.get(snapUrl, (r) => {
+        const chunks = []
+        r.on("data", c => chunks.push(c))
+        r.on("end",  () => resolve(Buffer.concat(chunks)))
+        r.on("error", reject)
+      })
+      req2.on("error", reject)
+      req2.setTimeout(3000, () => { req2.destroy(); reject(new Error("timeout")) })
+    })
+    const b64 = snap.toString("base64")
+    res.json({ ok: true, imageBase64: b64 })
+  } catch (e) {
+    res.status(500).json({ error: "Snapshot failed - camera may not be on same network", details: e.message })
   }
 })
 
@@ -179,11 +209,20 @@ router.post("/pan", async (req, res) => {
   if (typeof angle !== "number") return res.status(400).json({ error: "angle required" })
 
   try {
-    const result = await sendCameraCommand("motorMove", {
-      x_speed: Math.sign(angle) * Math.min(Math.abs(angle), 100),
-      y_speed: 0
-    })
-    res.json({ ok: true, angle, result })
+    // Tapo PTZ commands
+    const speed  = Math.min(Math.abs(angle), 100)
+    const dir    = angle > 0 ? "right" : "left"
+    let result
+    try {
+      result = await sendCameraCommand("motorMove", { x_speed: angle > 0 ? speed : -speed, y_speed: 0 })
+    } catch (e1) {
+      try {
+        result = await sendCameraCommand("move", { direction: dir, speed })
+      } catch (e2) {
+        result = { tried: ["motorMove", "move"], error: e2.message }
+      }
+    }
+    res.json({ ok: true, angle, direction: dir, result })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
