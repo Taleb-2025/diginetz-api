@@ -18,6 +18,7 @@ import { TimeSeriesEngine }     from './TimeSeriesEngine.js'
 import { DTCEngine }            from './DTCEngine.js'
 
 // ─── PID Configurations ───────────────────────────────────────────────────────
+// SPEED محذوف — VSS غير موثوق في هذه السيارة
 const PID_CONFIGS = {
   RPM: {
     min:           0,
@@ -26,14 +27,6 @@ const PID_CONFIGS = {
     baseThreshold: 300,
     unit:          'rpm',
     label:         'Engine RPM'
-  },
-  SPEED: {
-    min:           0,
-    max:           260,
-    maxVelocity:   30,
-    baseThreshold: 10,
-    unit:          'km/h',
-    label:         'Vehicle Speed'
   },
   COOLANT: {
     min:           -40,
@@ -62,17 +55,13 @@ const PID_CONFIGS = {
 }
 
 // ─── Health Score Weights per PID ─────────────────────────────────────────────
+// SPEED محذوف — وزنه موزّع على RPM و COOLANT
 const PID_WEIGHTS = {
-  RPM:      0.30,
-  COOLANT:  0.30,
-  SPEED:    0.15,
-  THROTTLE: 0.15,
+  RPM:      0.35,
+  COOLANT:  0.35,
+  THROTTLE: 0.20,
   LOAD:     0.10
 }
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-const IDLE_RPM_THRESHOLD   = 900   // RPM أقل من هذا = السيارة واقفة
-const IDLE_SPEED_MAX       = 5     // km/h أكثر من هذا مع idle = قراءة خاطئة
 
 export class AnalyzerManager {
 
@@ -81,7 +70,6 @@ export class AnalyzerManager {
     this._results   = {}
     this._source    = 'simulation'
 
-    // ── الستة Engines الجديدة ──
     this._baseline    = new BaselineManager({ minSamples: 30 })
     this._correlation = new CorrelationEngine()
     this._confidence  = new ConfidenceEngine()
@@ -105,68 +93,39 @@ export class AnalyzerManager {
     }
   }
 
-  // ─── Speed Filter ─────────────────────────────────────────────────────────
-  // إذا RPM في وضع idle والسيارة واقفة
-  // → SPEED يُصحَّح لـ 0 لأن VSS يعطي قراءة خاطئة
-
-  _filterSpeed(name, value) {
-    if (name !== 'SPEED') return value
-
-    const currentRPM = this._results['RPM']?.value ?? null
-
-    // إذا RPM معروف وهو في وضع idle
-    if (currentRPM !== null &&
-        currentRPM < IDLE_RPM_THRESHOLD &&
-        value > IDLE_SPEED_MAX) {
-      return 0  // ← السيارة واقفة — تجاهل قراءة VSS الخاطئة
-    }
-
-    return value
-  }
-
   // ─── Core ──────────────────────────────────────────────────────────────────
 
   process({ name, value, time, source }) {
+    // SPEED مُتجاهل تماماً — VSS غير موثوق
+    if (name === 'SPEED') return null
+
     const analyzer = this._analyzers[name]
     if (!analyzer) return null
 
     this._source = source ?? this._source
 
-    // ✅ فلتر SPEED الخاطئ عند الـ idle
-    const filteredValue = this._filterSpeed(name, value)
-
-    // ✅ نحوّل القيمة لتناسب الفضاء الدائري (نطرح الـ min)
     const cfg           = PID_CONFIGS[name]
-    const normalizedVal = cfg ? Math.max(0, filteredValue - cfg.min) : filteredValue
+    const normalizedVal = cfg ? Math.max(0, value - cfg.min) : value
 
     const result = analyzer.analyze(normalizedVal)
 
-    // ── تغذية الـ Engines الجديدة بالقيمة المصفّاة ──
-    this._baseline.addSample(name, filteredValue)
-    this._correlation.update(name, filteredValue)
-    this._timeSeries.add(name, filteredValue, time ?? Date.now())
+    this._baseline.addSample(name, value)
+    this._correlation.update(name, value)
+    this._timeSeries.add(name, value, time ?? Date.now())
 
-    // قفل الـ Baseline بعد 30 عينة
     if (!this._baseline.isReady()) {
       this._baseline.lock()
     }
 
-    // مقارنة مع Baseline إن كان جاهزاً
     const baselineCompare = this._baseline.isReady()
-      ? this._baseline.compare(name, filteredValue)
+      ? this._baseline.compare(name, value)
       : null
 
-    // Time Series لهذا الـ PID
     const timeSeries = this._timeSeries.analyze(name)
-
-    // هل تم تصحيح القيمة؟
-    const wasFiltered = filteredValue !== value
 
     this._results[name] = {
       ...result,
-      value:           filteredValue,   // ← القيمة المصفّاة للعرض والتحليل
-      rawValue:        value,           // ← القيمة الأصلية من OBD للمرجع
-      wasFiltered,                      // ← هل تم تصحيحها؟
+      value,
       time:            time ?? Date.now(),
       unit:            cfg?.unit  ?? '',
       label:           cfg?.label ?? name,
@@ -189,14 +148,9 @@ export class AnalyzerManager {
     const statusPriority = { CRITICAL: 4, WARNING: 3, NOTICE: 2, NORMAL: 1 }
     const healthPriority = { Critical: 4, Risk: 3, Drift: 2, Stable: 1 }
 
-    // ── Correlation Analysis ──
-    const correlationAlerts = this._correlation.analyze()
-
-    // ── Time Series Warnings ──
+    const correlationAlerts  = this._correlation.analyze()
     const timeSeriesWarnings = this._timeSeries.getWarnings()
-
-    // ── PID scores لـ Confidence ──
-    const pidScores = []
+    const pidScores          = []
 
     for (const [name, r] of Object.entries(this._results)) {
       const behavior = r.behaviorVector?.behavior ?? 0
@@ -212,7 +166,6 @@ export class AnalyzerManager {
         worstHealth = r.health
       }
 
-      // ── Confidence لكل PID ──
       const confidenceResult = this._confidence.evaluatePID({
         sampleCount:   r.behaviorVector ? 10 : 0,
         stdDev:        r.stdDev  ?? 0,
@@ -223,7 +176,6 @@ export class AnalyzerManager {
 
       pidScores.push(confidenceResult.score)
 
-      // ── Advisor للـ PID ──
       const pidAdvice = AdvisorEngine.advisePID(
         name,
         r.status,
@@ -248,7 +200,6 @@ export class AnalyzerManager {
         baselineCompare: r.baselineCompare  ?? null,
         timeSeries:      r.timeSeries       ?? null,
         confidence:      confidenceResult,
-        wasFiltered:     r.wasFiltered      ?? false,
         advice:          pidAdvice
           ? { [this._lang]: pidAdvice[this._lang] ?? pidAdvice.en }
           : null
@@ -259,18 +210,15 @@ export class AnalyzerManager {
       ? Math.round(weightedSum / totalWeight)
       : null
 
-    // ── Overall Confidence ──
     const overallConfidence = this._confidence.evaluateOverall(
       pidScores,
       correlationAlerts.length
     )
 
-    // ── Risk Assessment ──
     const risk = overall !== null
       ? AdvisorEngine.assessRisk(overall)
       : null
 
-    // ── Advisor Report ──
     const advisorReport = overall !== null
       ? AdvisorEngine.buildReport(
           overall,
@@ -280,13 +228,11 @@ export class AnalyzerManager {
         )
       : null
 
-    // ── DTC ──
     const dtcCodes    = this._dtc.getCodes()
     const dtcInsights = dtcCodes.length > 0
       ? this._dtc.correlateWithAnalysis(this._results)
       : []
 
-    // ── Baseline Progress ──
     const baselineStatus = {
       ready:    this._baseline.isReady(),
       progress: this._baseline.getProgress()
