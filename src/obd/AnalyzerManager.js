@@ -70,6 +70,10 @@ const PID_WEIGHTS = {
   LOAD:     0.10
 }
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+const IDLE_RPM_THRESHOLD   = 900   // RPM أقل من هذا = السيارة واقفة
+const IDLE_SPEED_MAX       = 5     // km/h أكثر من هذا مع idle = قراءة خاطئة
+
 export class AnalyzerManager {
 
   constructor() {
@@ -86,8 +90,6 @@ export class AnalyzerManager {
     this._lang        = 'en'
 
     for (const [name, cfg] of Object.entries(PID_CONFIGS)) {
-
-      // ✅ الإصلاح: cycle = max - min لأن CyclicDynamicsEngine يستخدم cycle لا min/max
       const engine = new CyclicDynamicsEngine({
         cycle:        cfg.max - cfg.min,
         maxVelocity:  cfg.maxVelocity,
@@ -103,6 +105,25 @@ export class AnalyzerManager {
     }
   }
 
+  // ─── Speed Filter ─────────────────────────────────────────────────────────
+  // إذا RPM في وضع idle والسيارة واقفة
+  // → SPEED يُصحَّح لـ 0 لأن VSS يعطي قراءة خاطئة
+
+  _filterSpeed(name, value) {
+    if (name !== 'SPEED') return value
+
+    const currentRPM = this._results['RPM']?.value ?? null
+
+    // إذا RPM معروف وهو في وضع idle
+    if (currentRPM !== null &&
+        currentRPM < IDLE_RPM_THRESHOLD &&
+        value > IDLE_SPEED_MAX) {
+      return 0  // ← السيارة واقفة — تجاهل قراءة VSS الخاطئة
+    }
+
+    return value
+  }
+
   // ─── Core ──────────────────────────────────────────────────────────────────
 
   process({ name, value, time, source }) {
@@ -111,16 +132,19 @@ export class AnalyzerManager {
 
     this._source = source ?? this._source
 
+    // ✅ فلتر SPEED الخاطئ عند الـ idle
+    const filteredValue = this._filterSpeed(name, value)
+
     // ✅ نحوّل القيمة لتناسب الفضاء الدائري (نطرح الـ min)
-    const cfg          = PID_CONFIGS[name]
-    const normalizedVal = cfg ? Math.max(0, value - cfg.min) : value
+    const cfg           = PID_CONFIGS[name]
+    const normalizedVal = cfg ? Math.max(0, filteredValue - cfg.min) : filteredValue
 
     const result = analyzer.analyze(normalizedVal)
 
-    // ── تغذية الـ Engines الجديدة بالقيمة الأصلية ──
-    this._baseline.addSample(name, value)
-    this._correlation.update(name, value)
-    this._timeSeries.add(name, value, time ?? Date.now())
+    // ── تغذية الـ Engines الجديدة بالقيمة المصفّاة ──
+    this._baseline.addSample(name, filteredValue)
+    this._correlation.update(name, filteredValue)
+    this._timeSeries.add(name, filteredValue, time ?? Date.now())
 
     // قفل الـ Baseline بعد 30 عينة
     if (!this._baseline.isReady()) {
@@ -129,15 +153,20 @@ export class AnalyzerManager {
 
     // مقارنة مع Baseline إن كان جاهزاً
     const baselineCompare = this._baseline.isReady()
-      ? this._baseline.compare(name, value)
+      ? this._baseline.compare(name, filteredValue)
       : null
 
     // Time Series لهذا الـ PID
     const timeSeries = this._timeSeries.analyze(name)
 
+    // هل تم تصحيح القيمة؟
+    const wasFiltered = filteredValue !== value
+
     this._results[name] = {
       ...result,
-      value,                                      // ← القيمة الأصلية للعرض
+      value:           filteredValue,   // ← القيمة المصفّاة للعرض والتحليل
+      rawValue:        value,           // ← القيمة الأصلية من OBD للمرجع
+      wasFiltered,                      // ← هل تم تصحيحها؟
       time:            time ?? Date.now(),
       unit:            cfg?.unit  ?? '',
       label:           cfg?.label ?? name,
@@ -219,6 +248,7 @@ export class AnalyzerManager {
         baselineCompare: r.baselineCompare  ?? null,
         timeSeries:      r.timeSeries       ?? null,
         confidence:      confidenceResult,
+        wasFiltered:     r.wasFiltered      ?? false,
         advice:          pidAdvice
           ? { [this._lang]: pidAdvice[this._lang] ?? pidAdvice.en }
           : null
@@ -314,7 +344,7 @@ export class AnalyzerManager {
       for (const analyzer of Object.values(this._analyzers)) {
         analyzer.recalibrate()
       }
-      this._results    = {}
+      this._results     = {}
       this._baseline.reset()
       this._timeSeries  = new TimeSeriesEngine({ windowSize: 30 })
       this._correlation = new CorrelationEngine()
