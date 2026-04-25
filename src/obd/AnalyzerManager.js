@@ -55,7 +55,6 @@ const PID_CONFIGS = {
 }
 
 // ─── Health Score Weights per PID ─────────────────────────────────────────────
-// SPEED محذوف — وزنه موزّع على RPM و COOLANT
 const PID_WEIGHTS = {
   RPM:      0.35,
   COOLANT:  0.35,
@@ -63,12 +62,35 @@ const PID_WEIGHTS = {
   LOAD:     0.10
 }
 
+// ─── Validation Constants ─────────────────────────────────────────────────────
+
+// الطبقة 1 — حدود القيم المطلقة (مستحيل فيزيائياً)
+const ABSOLUTE_LIMITS = {
+  RPM:      { min: 0,    max: 7000  },
+  COOLANT:  { min: -30,  max: 120   },  // 120°C الحد الأقصى الطبيعي
+  THROTTLE: { min: 0,    max: 100   },
+  LOAD:     { min: 0,    max: 100   }
+}
+
+// الطبقة 2 — أقصى تغيير مسموح بين قراءتين متتاليتين
+const MAX_DELTA = {
+  RPM:      3000,   // RPM لا يقفز أكثر من 3000 بين قراءتين
+  COOLANT:  10,     // الحرارة لا ترتفع أكثر من 10°C بين قراءتين
+  THROTTLE: 60,     // الخانق يمكن أن يتغير بسرعة لكن ليس أكثر من 60%
+  LOAD:     60      // الحمل مثل الخانق
+}
+
+// الطبقة 3 — Cross-validation بين PIDs
+// (تُفعَّل بعد جمع قيمتين على الأقل)
+
 export class AnalyzerManager {
 
   constructor() {
-    this._analyzers = {}
-    this._results   = {}
-    this._source    = 'simulation'
+    this._analyzers  = {}
+    this._results    = {}
+    this._source     = 'simulation'
+    this._lastValues = {}          // للطبقة 2 — تتبع القيمة السابقة
+    this._rejectedCount = {}       // إحصائيات الرفض
 
     this._baseline    = new BaselineManager({ minSamples: 30 })
     this._correlation = new CorrelationEngine()
@@ -90,7 +112,129 @@ export class AnalyzerManager {
         historyWindow:    20,
         scoreHistorySize: 10
       })
+
+      this._rejectedCount[name] = 0
     }
+  }
+
+  // ─── طبقة 1: فلتر القيم المستحيلة فيزيائياً ────────────────────────────────
+
+  _filterAbsolute(name, value) {
+    const limits = ABSOLUTE_LIMITS[name]
+    if (!limits) return { valid: true, value }
+
+    if (value < limits.min || value > limits.max) {
+      return {
+        valid:  false,
+        reason: `${name}=${value} خارج النطاق المقبول [${limits.min}, ${limits.max}]`
+      }
+    }
+
+    return { valid: true, value }
+  }
+
+  // ─── طبقة 2: فلتر التغير المفاجئ ───────────────────────────────────────────
+
+  _filterDelta(name, value) {
+    const maxDelta = MAX_DELTA[name]
+    if (!maxDelta) return { valid: true, value }
+
+    const last = this._lastValues[name]
+
+    // إذا لا توجد قراءة سابقة — اقبل
+    if (last === undefined) return { valid: true, value }
+
+    const delta = Math.abs(value - last)
+
+    if (delta > maxDelta) {
+      return {
+        valid:  false,
+        reason: `${name}: تغيير مفاجئ ${delta} > ${maxDelta} المسموح`
+      }
+    }
+
+    return { valid: true, value }
+  }
+
+  // ─── طبقة 3: Cross-validation بين PIDs ─────────────────────────────────────
+
+  _filterCrossValidation(name, value) {
+    const rpm      = this._lastValues['RPM']
+    const throttle = this._lastValues['THROTTLE']
+    const load     = this._lastValues['LOAD']
+    const coolant  = this._lastValues['COOLANT']
+
+    // COOLANT: إذا RPM idle ولكن COOLANT مرتفع جداً → مشكوك فيه
+    if (name === 'COOLANT' && rpm !== undefined) {
+      if (rpm < 1500 && value > 110) {
+        return {
+          valid:  false,
+          reason: `COOLANT=${value} مرتفع جداً مع RPM idle=${rpm}`
+        }
+      }
+    }
+
+    // THROTTLE: إذا THROTTLE مرتفع جداً لكن RPM منخفض → مشكوك فيه
+    if (name === 'THROTTLE' && rpm !== undefined) {
+      if (value > 70 && rpm < 1200) {
+        return {
+          valid:  false,
+          reason: `THROTTLE=${value}% مرتفع مع RPM=${rpm} منخفض`
+        }
+      }
+    }
+
+    // LOAD: إذا LOAD مرتفع جداً لكن THROTTLE وRPM منخفضان → مشكوك فيه
+    if (name === 'LOAD' && throttle !== undefined && rpm !== undefined) {
+      if (value > 80 && throttle < 20 && rpm < 1500) {
+        return {
+          valid:  false,
+          reason: `LOAD=${value}% مرتفع مع THROTTLE=${throttle}% وRPM=${rpm} منخفضين`
+        }
+      }
+    }
+
+    // RPM: إذا RPM مرتفع جداً لكن LOAD وTHROTTLE منخفضان → مشكوك فيه
+    if (name === 'RPM' && load !== undefined && throttle !== undefined) {
+      if (value > 4000 && load < 20 && throttle < 15) {
+        return {
+          valid:  false,
+          reason: `RPM=${value} مرتفع مع LOAD=${load}% وTHROTTLE=${throttle}% منخفضين`
+        }
+      }
+    }
+
+    return { valid: true, value }
+  }
+
+  // ─── تطبيق الثلاث طبقات ──────────────────────────────────────────────────
+
+  _validate(name, value, source) {
+    // Simulation لا تحتاج فلتر
+    if (source === 'simulation') return { valid: true, value }
+
+    // الطبقة 1
+    const abs = this._filterAbsolute(name, value)
+    if (!abs.valid) {
+      this._rejectedCount[name] = (this._rejectedCount[name] ?? 0) + 1
+      return abs
+    }
+
+    // الطبقة 2
+    const delta = this._filterDelta(name, value)
+    if (!delta.valid) {
+      this._rejectedCount[name] = (this._rejectedCount[name] ?? 0) + 1
+      return delta
+    }
+
+    // الطبقة 3
+    const cross = this._filterCrossValidation(name, value)
+    if (!cross.valid) {
+      this._rejectedCount[name] = (this._rejectedCount[name] ?? 0) + 1
+      return cross
+    }
+
+    return { valid: true, value }
   }
 
   // ─── Core ──────────────────────────────────────────────────────────────────
@@ -103,6 +247,16 @@ export class AnalyzerManager {
     if (!analyzer) return null
 
     this._source = source ?? this._source
+
+    // ✅ تطبيق الفلاتر الثلاثة
+    const validation = this._validate(name, value, this._source)
+    if (!validation.valid) {
+      // القيمة مرفوضة — لا نحدّث النتائج لكن نحتفظ بالنتائج القديمة
+      return null
+    }
+
+    // ✅ تحديث آخر قيمة مقبولة بعد النجاح فقط
+    this._lastValues[name] = value
 
     const cfg           = PID_CONFIGS[name]
     const normalizedVal = cfg ? Math.max(0, value - cfg.min) : value
@@ -200,6 +354,7 @@ export class AnalyzerManager {
         baselineCompare: r.baselineCompare  ?? null,
         timeSeries:      r.timeSeries       ?? null,
         confidence:      confidenceResult,
+        rejected:        this._rejectedCount[name] ?? 0,
         advice:          pidAdvice
           ? { [this._lang]: pidAdvice[this._lang] ?? pidAdvice.en }
           : null
@@ -251,7 +406,10 @@ export class AnalyzerManager {
       correlations:     correlationAlerts,
       timeSeriesAlerts: timeSeriesWarnings,
       dtc:              { codes: dtcCodes, insights: dtcInsights },
-      baseline:         baselineStatus
+      baseline:         baselineStatus,
+      validation: {
+        rejected: { ...this._rejectedCount }
+      }
     }
   }
 
@@ -291,6 +449,10 @@ export class AnalyzerManager {
         analyzer.recalibrate()
       }
       this._results     = {}
+      this._lastValues  = {}
+      this._rejectedCount = Object.fromEntries(
+        Object.keys(PID_CONFIGS).map(k => [k, 0])
+      )
       this._baseline.reset()
       this._timeSeries  = new TimeSeriesEngine({ windowSize: 30 })
       this._correlation = new CorrelationEngine()
