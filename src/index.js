@@ -25,26 +25,19 @@ app.use(cors({
 }))
 
 app.use(express.json({ limit: "10mb" }))
-app.use(express.raw({
-  type: "application/octet-stream",
-  limit: "1mb"
-}))
+app.use(express.raw({ type: "application/octet-stream", limit: "1mb" }))
 app.use(express.static("public"))
 
-app.use("/api/flow",        flowRouter)
-app.use("/api/visionage",   visionageRoute)
-app.use("/api/vision",      visionRoute)
-app.use("/api/automotive",  automotiveRoute)
-app.use("/api/camera",      cameraRoute)
-app.use("/api/security",    securityRoute)
-app.use("/api/cycleguard",  cycleguardRoute)
+app.use("/api/flow",       flowRouter)
+app.use("/api/visionage",  visionageRoute)
+app.use("/api/vision",     visionRoute)
+app.use("/api/automotive", automotiveRoute)
+app.use("/api/camera",     cameraRoute)
+app.use("/api/security",   securityRoute)
+app.use("/api/cycleguard", cycleguardRoute)
 
 app.get("/", (_req, res) => {
-  res.json({
-    service: "DigiNetz TSL Core",
-    engine:  "TSL + CPSE v1.0",
-    status:  "RUNNING"
-  })
+  res.json({ service: "DigiNetz TSL Core", engine: "TSL + CPSE v1.0", status: "RUNNING" })
 })
 
 app.get("/health", (_req, res) => {
