@@ -19,7 +19,7 @@
  */
 
 import { Router }               from "express"
-import { CyclicProcessorEngine } from "../engines/Cyclicprocessorengine.JS"
+import { CyclicProcessorEngine } from "../engines/CyclicProcessorEngine.js"
 
 const router = Router()
 
