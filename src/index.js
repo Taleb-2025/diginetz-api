@@ -7,6 +7,7 @@ import automotiveRoute from "./api/automotive.route.js"
 import cameraRoute     from "./api/camera.route.js"
 import securityRoute   from "./api/cam.security.route.js"
 import cycleguardRoute from "./api/cycleguard.route.js"
+import cycleguardSessionRoute from "./api/cycleguard-session.route.js"
 import identityRoute from "./api/identity.route.js"
 
 const app  = express()
@@ -36,7 +37,9 @@ app.use("/api/automotive", automotiveRoute)
 app.use("/api/camera",     cameraRoute)
 app.use("/api/security",   securityRoute)
 app.use("/api/cycleguard", cycleguardRoute)
+app.use("/api/cycleguard-session", cycleguardSessionRoute)
 app.use("/api/identity", identityRoute)
+
 app.get("/", (_req, res) => {
   res.json({ service: "DigiNetz TSL Core", engine: "TSL + CPSE v1.0", status: "RUNNING" })
 })
