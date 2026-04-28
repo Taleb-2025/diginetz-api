@@ -17,7 +17,9 @@ app.use(cors({
   allowedHeaders: [
     "Content-Type",
     "x-reference-id",
-    "x-agent-key"
+    "x-agent-key",
+    "x-cg-api-key",      // ✅ جديد
+    "x-cg-pub-token"     // ✅ جديد
   ]
 }))
 
@@ -25,9 +27,8 @@ app.use(express.json({ limit: "10mb" }))
 app.use(express.raw({ type: "application/octet-stream", limit: "1mb" }))
 app.use(express.static("public"))
 
-
 app.use("/api/cycleguard", cycleguardRoute)
-app.use("/api/cycleguard-session", cycleguardSessionRoute)
+app.use("/api/cg-session", cycleguardSessionRoute)  // ✅ مسار مصحح
 app.use("/api/identity", identityRoute)
 
 app.get("/", (_req, res) => {
