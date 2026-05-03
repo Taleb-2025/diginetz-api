@@ -12,6 +12,15 @@ function getInstance(id, options = {}) {
   return instances.get(id)
 }
 
+function getForexInstance() {
+  return getInstance('forex-demo', {
+    resolution: 1000,
+    cycle:      2,
+    windowSize: 128,
+    thresholdFactor: 2.0
+  })
+}
+
 router.get('/forex/tick', async (req, res) => {
   try {
     const r    = await fetch('https://api.frankfurter.app/latest?from=USD&to=EUR')
@@ -23,7 +32,7 @@ router.get('/forex/tick', async (req, res) => {
       value = value * (1 + spike)
     }
 
-    const engine = getInstance('forex-demo')
+    const engine = getForexInstance()
     const result = engine.observe(value)
 
     res.json({ value, ...result })
@@ -39,7 +48,7 @@ router.get('/forex/spike', async (req, res) => {
     const spike = (Math.random() * 0.15 + 0.05) * (Math.random() > 0.5 ? 1 : -1)
     const value = data.rates.EUR * (1 + spike)
 
-    const engine = getInstance('forex-demo')
+    const engine = getForexInstance()
     const result = engine.observe(value)
 
     res.json({ value, ...result })
@@ -93,23 +102,21 @@ router.get('/summary/:id', (req, res) => {
   const { id } = req.params
   if (!instances.has(id)) return res.status(404).json({ error: 'instance not found' })
 
-  const engine = getInstance(id)
-  res.json(engine.getSummary())
+  res.json(getInstance(id).getSummary())
 })
 
 router.get('/space/:id', (req, res) => {
   const { id } = req.params
   if (!instances.has(id)) return res.status(404).json({ error: 'instance not found' })
 
-  const engine = getInstance(id)
-  res.json({ space: engine.getSpace() })
+  res.json({ space: getInstance(id).getSpace() })
 })
 
 router.post('/reset/:id', (req, res) => {
   const { id } = req.params
   if (!instances.has(id)) return res.status(404).json({ error: 'instance not found' })
 
-  getInstance(id).reset()
+  instances.delete(id)
   res.json({ ok: true, id })
 })
 
