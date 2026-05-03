@@ -1,9 +1,9 @@
 import express from "express"
 import cors from "cors"
-
 import cycleguardRoute from "./api/cycleguard.route.js"
 import cycleguardSessionRoute from "./api/cycleguard-session.route.js"
 import identityRoute from "./api/identity.route.js"
+import celfRoute from "./api/celf.route.js"          // ← جديد
 
 const app  = express()
 const PORT = process.env.PORT || 8080
@@ -13,13 +13,13 @@ app.use(cors({
     "https://diginetz-template.com",
     "https://www.diginetz-template.com"
   ],
-  methods: ["GET", "POST", "OPTIONS"],
+  methods: ["GET", "POST", "OPTIONS", "DELETE"],     // ← أضف DELETE
   allowedHeaders: [
     "Content-Type",
     "x-reference-id",
     "x-agent-key",
-    "x-cg-api-key",      // ✅ جديد
-    "x-cg-pub-token"     // ✅ جديد
+    "x-cg-api-key",
+    "x-cg-pub-token"
   ]
 }))
 
@@ -28,11 +28,12 @@ app.use(express.raw({ type: "application/octet-stream", limit: "1mb" }))
 app.use(express.static("public"))
 
 app.use("/api/cycleguard", cycleguardRoute)
-app.use("/api/cg-session", cycleguardSessionRoute)  // ✅ مسار مصحح
+app.use("/api/cg-session", cycleguardSessionRoute)
 app.use("/api/identity", identityRoute)
+app.use("/celf", celfRoute)                          // ← جديد
 
 app.get("/", (_req, res) => {
-  res.json({ service: "DigiNetz TSL Core", engine: "TSL + CPSE v1.0", status: "RUNNING" })
+  res.json({ service: "DigiNetz TSL Core", engine: "TSL + CPSE v1.0 + CELF v6", status: "RUNNING" })
 })
 
 app.get("/health", (_req, res) => {
