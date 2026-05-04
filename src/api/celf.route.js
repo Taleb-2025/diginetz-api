@@ -42,12 +42,22 @@ function runCELF(data) {
   })
   let tp = 0, fp = 0, tn = 0, fn = 0
   for (const row of data) {
-    const result   = engine.observe(row.amount)
-    const detected = result.impossible === true
-    if (row.fraud  && detected)  tp++
-    if (!row.fraud && detected)  fp++
-    if (!row.fraud && !detected) tn++
-    if (row.fraud  && !detected) fn++
+
+
+    
+  const result = engine.observe(row.amount)
+
+const detected =
+  result.impossible === true &&
+  Math.abs(result.jump) > result.threshold * 1.5
+
+if (row.fraud  && detected)  tp++
+if (!row.fraud && detected)  fp++
+if (!row.fraud && !detected) tn++
+if (row.fraud  && !detected) fn++
+
+
+    
   }
   const fraudTotal = data.filter(r => r.fraud).length
   const precision  = tp / (tp + fp) || 0
