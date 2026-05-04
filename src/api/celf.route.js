@@ -1,15 +1,31 @@
 import express from 'express'
-import { CELF_Engine_V6 } from '../engines/CELF_Engine_V6.js'
+import { CELF_Engine_V8 } from '../engines/CELF_Engine_V8.js'
 
 const router = express.Router()
 
-const instances = new Map()
+// ─────────────────────────────────────────────
+// Instances — LRU, حد أقصى 100
+// ─────────────────────────────────────────────
+const MAX_INSTANCES = 100
+const instances     = new Map()
 
 function getInstance(id, options = {}) {
-  if (!instances.has(id)) {
-    instances.set(id, new CELF_Engine_V6(options))
+  if (instances.has(id)) {
+    // LRU: حرّك للنهاية
+    const engine = instances.get(id)
+    instances.delete(id)
+    instances.set(id, engine)
+    return engine
   }
-  return instances.get(id)
+
+  if (instances.size >= MAX_INSTANCES) {
+    const oldest = instances.keys().next().value
+    instances.delete(oldest)
+  }
+
+  const engine = new CELF_Engine_V8(options)
+  instances.set(id, engine)
+  return engine
 }
 
 function getForexInstance() {
@@ -21,6 +37,9 @@ function getForexInstance() {
   })
 }
 
+// ─────────────────────────────────────────────
+// Benchmark
+// ─────────────────────────────────────────────
 function generateBenchmarkData() {
   const data = []
   for (let i = 0; i < 9800; i++) {
@@ -37,28 +56,29 @@ function generateBenchmarkData() {
 }
 
 function runCELF(data) {
-  const engine = new CELF_Engine_V6({
+  const engine = new CELF_Engine_V8({
     resolution: 1000, cycle: 6000, windowSize: 128, thresholdFactor: 2.0
   })
+
   let tp = 0, fp = 0, tn = 0, fn = 0
+
   for (const row of data) {
+    const result = engine.observe(row.amount)
 
+    // warmup → لا كشف
+    if (result.phase === 'warmup') continue
 
-    
-  const result = engine.observe(row.amount)
+    // شذوذ = impossible + confidence منخفض
+    const detected =
+      result.impossible === true &&
+      result.confidence < 0.40
 
-const detected =
-  result.impossible === true &&
-  Math.abs(result.jump) > result.threshold * 1.5
-
-if (row.fraud  && detected)  tp++
-if (!row.fraud && detected)  fp++
-if (!row.fraud && !detected) tn++
-if (row.fraud  && !detected) fn++
-
-
-    
+    if (row.fraud  && detected)  tp++
+    if (!row.fraud && detected)  fp++
+    if (!row.fraud && !detected) tn++
+    if (row.fraud  && !detected) fn++
   }
+
   const fraudTotal = data.filter(r => r.fraud).length
   const precision  = tp / (tp + fp) || 0
   const recall     = tp / fraudTotal || 0
@@ -70,6 +90,7 @@ function runZScore(data) {
   const values = data.map(r => r.amount)
   const mean   = values.reduce((a, b) => a + b, 0) / values.length
   const std    = Math.sqrt(values.reduce((s, x) => s + (x - mean) ** 2, 0) / values.length)
+
   let tp = 0, fp = 0, tn = 0, fn = 0
   for (const row of data) {
     const detected = Math.abs((row.amount - mean) / std) > 3
@@ -78,6 +99,7 @@ function runZScore(data) {
     if (!row.fraud && !detected) tn++
     if (row.fraud  && !detected) fn++
   }
+
   const fraudTotal = data.filter(r => r.fraud).length
   const precision  = tp / (tp + fp) || 0
   const recall     = tp / fraudTotal || 0
@@ -85,28 +107,26 @@ function runZScore(data) {
   return { tp, fp, tn, fn, precision, recall, f1 }
 }
 
+// ─────────────────────────────────────────────
+// Routes
+// ─────────────────────────────────────────────
 router.get('/benchmark', (req, res) => {
   const data       = generateBenchmarkData()
   const fraudTotal = data.filter(r => r.fraud).length
   const celf       = runCELF(data)
   const zscore     = runZScore(data)
-
-  const winner = celf.f1 > zscore.f1 ? 'CELF' : celf.f1 < zscore.f1 ? 'Z-Score' : 'Draw'
+  const winner     = celf.f1 > zscore.f1 ? 'CELF' : celf.f1 < zscore.f1 ? 'Z-Score' : 'Draw'
 
   res.json({
-    dataset: {
-      total:  data.length,
-      fraud:  fraudTotal,
-      normal: data.length - fraudTotal
-    },
+    dataset: { total: data.length, fraud: fraudTotal, normal: data.length - fraudTotal },
     celf: {
       truePositive:  celf.tp,
       falsePositive: celf.fp,
       trueNegative:  celf.tn,
       falseNegative: celf.fn,
-      precision:     Math.round(celf.precision * 10000) / 100,
-      recall:        Math.round(celf.recall    * 10000) / 100,
-      f1:            Math.round(celf.f1        * 10000) / 100,
+      precision:     Math.round(celf.precision  * 10000) / 100,
+      recall:        Math.round(celf.recall     * 10000) / 100,
+      f1:            Math.round(celf.f1         * 10000) / 100,
       aliveRatio:    Math.round(celf.aliveRatio * 10000) / 100
     },
     zscore: {
@@ -131,24 +151,22 @@ router.get('/forex/tick', async (req, res) => {
       const spike = (Math.random() * 0.15 + 0.05) * (Math.random() > 0.5 ? 1 : -1)
       value = value * (1 + spike)
     }
-    const engine = getForexInstance()
-    const result = engine.observe(value)
+    const result = getForexInstance().observe(value)
     res.json({ value, ...result })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'fetch failed' })
   }
 })
 
 router.get('/forex/spike', async (req, res) => {
   try {
-    const r    = await fetch('https://api.frankfurter.app/latest?from=USD&to=EUR')
-    const data = await r.json()
+    const r     = await fetch('https://api.frankfurter.app/latest?from=USD&to=EUR')
+    const data  = await r.json()
     const spike = (Math.random() * 0.15 + 0.05) * (Math.random() > 0.5 ? 1 : -1)
     const value = data.rates.EUR * (1 + spike)
-    const engine = getForexInstance()
-    const result = engine.observe(value)
+    const result = getForexInstance().observe(value)
     res.json({ value, ...result })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'fetch failed' })
   }
 })
@@ -173,7 +191,11 @@ router.post('/filter', (req, res) => {
   if (!Array.isArray(values)) return res.status(400).json({ error: 'values must be array' })
   const engine   = getInstance(id)
   const filtered = engine.filter(values)
-  res.json({ filtered, blocked: values.filter(v => !filtered.includes(v)), total: values.length })
+  res.json({
+    filtered,
+    blocked: values.filter(v => !filtered.includes(v)),
+    total:   values.length
+  })
 })
 
 router.post('/reverse', (req, res) => {
@@ -193,6 +215,11 @@ router.get('/space/:id', (req, res) => {
   res.json({ space: getInstance(req.params.id).getSpace() })
 })
 
+router.get('/weights/:id', (req, res) => {
+  if (!instances.has(req.params.id)) return res.status(404).json({ error: 'instance not found' })
+  res.json(getInstance(req.params.id).getWeights())
+})
+
 router.post('/reset/:id', (req, res) => {
   if (!instances.has(req.params.id)) return res.status(404).json({ error: 'instance not found' })
   instances.delete(req.params.id)
@@ -209,7 +236,7 @@ router.get('/instances', (req, res) => {
   for (const [id, engine] of instances.entries()) {
     list.push({ id, ...engine.getSummary() })
   }
-  res.json({ instances: list, total: list.length })
+  res.json({ instances: list, total: list.length, max: MAX_INSTANCES })
 })
 
 export default router
