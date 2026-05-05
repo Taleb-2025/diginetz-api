@@ -63,9 +63,9 @@ function getBitcoinInstance() {
 }
 
 async function fetchBitcoinPrice() {
-  const r    = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT')
+  const r    = await fetch('https://api.coindesk.com/v1/bpi/currentprice/BTC.json')
   const data = await r.json()
-  return parseFloat(data.price)
+  return data.bpi.USD.rate_float
 }
 
 router.get('/bitcoin/tick', async (req, res) => {
@@ -131,7 +131,7 @@ function getLatencyInstance(url) {
 }
 
 router.get('/latency/tick', async (req, res) => {
-  const endpoint = 'https://api.binance.com/api/v3/time'
+  const endpoint = 'https://api.coindesk.com/v1/bpi/currentprice/BTC.json'
   const { duration, status } = await fetchLatency(endpoint)
   const category = latencyCategory(status, duration)
 
