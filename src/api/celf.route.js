@@ -152,7 +152,7 @@ router.get('/latency/tick', async (req, res) => {
 })
 
 router.get('/latency/spike', async (req, res) => {
-  const endpoint = 'https://httpbin.org/delay/2'
+  const endpoint = 'https://diginetz-api-production.up.railway.app/celf/benchmark'
   const { duration, status } = await fetchLatency(endpoint)
   const category = latencyCategory(status, duration)
 
