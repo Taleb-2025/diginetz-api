@@ -395,12 +395,12 @@ router.get('/memory', (req, res) => {
       celf: {
         spaceSizeKB,
         resolution: spaceLen,
-        note: 'ثابت بغض النظر عن عدد الخطوات'
+        note:  'fixed regardless of steps'
       },
       traditional: {
         estimatedKB: traditionalKB,
-        note: 'يكبر مع كل خطوة'
-      },
+        note:  'grows with every step'
+          },
       savingKB:      Math.max(0, Math.round((traditionalKB - spaceSizeKB) * 1000) / 1000),
       savingPercent: traditionalKB > 0
         ? Math.round((1 - spaceSizeKB / traditionalKB) * 100)
