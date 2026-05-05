@@ -63,9 +63,9 @@ function getBitcoinInstance() {
 }
 
 async function fetchBitcoinPrice() {
-  const r    = await fetch('https://api.coindesk.com/v1/bpi/currentprice/BTC.json')
+  const r    = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd')
   const data = await r.json()
-  return data.bpi.USD.rate_float
+  return data.bitcoin.usd
 }
 
 router.get('/bitcoin/tick', async (req, res) => {
@@ -131,7 +131,7 @@ function getLatencyInstance(url) {
 }
 
 router.get('/latency/tick', async (req, res) => {
-  const endpoint = 'https://api.coindesk.com/v1/bpi/currentprice/BTC.json'
+  const endpoint = 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd'
   const { duration, status } = await fetchLatency(endpoint)
   const category = latencyCategory(status, duration)
 
