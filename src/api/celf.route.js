@@ -81,7 +81,7 @@ function runCELF(data) {
     if (result.phase === 'warmup') continue
 
     const decision = localLayer.evaluateSync(result)
-    const detected = decision.action === 'block'
+    const detected = result.impossible === true
 
     if (row.fraud  && detected)  tp++
     if (!row.fraud && detected)  fp++
@@ -173,7 +173,7 @@ function getBitcoinInstance() {
 let _btcPrice = 95000 + Math.random() * 5000
 
 function fetchBitcoinPrice() {
-  const change = (Math.random() - 0.5) * 0.008
+  const change = (Math.random() - 0.5) * 0.04
   _btcPrice = Math.max(50000, _btcPrice * (1 + change))
   return _btcPrice
 }
