@@ -1,6 +1,10 @@
-// utils/decision-layer.js
-
 import { buildCelfContext } from './celf-context.js'
+
+// ─────────────────────────────────────────────
+// Categories that are always critical
+// regardless of CELF phase or maturity
+// ─────────────────────────────────────────────
+const CRITICAL_CATEGORIES = new Set(['timeout', 'server_error'])
 
 // ─────────────────────────────────────────────
 // TAF — Temporal Anomaly Filter
@@ -12,7 +16,7 @@ class TemporalAnomalyFilter {
   }
 
   update(result, confidence) {
-    // confidence يؤثر على قوة الـ flag (لا نعامل كل impossible بالتساوي)
+    // confidence يؤثر على قوة الـ flag
     const flag = result.impossible ? Math.max(0.3, confidence) : 0
 
     this.window.push(flag)
@@ -74,7 +78,6 @@ Respond in JSON only with:
     return JSON.parse(data.choices[0].message.content)
 
   } catch {
-    // timeout أو parse error → قرار محافظ
     return { severity: 'high', reason: 'llm_unavailable', action: 'review' }
   } finally {
     clearTimeout(timeout)
@@ -82,18 +85,74 @@ Respond in JSON only with:
 }
 
 // ─────────────────────────────────────────────
-// Decision Layer — الطبقة الرئيسية
+// Decision Layer
 // ─────────────────────────────────────────────
 export class DecisionLayer {
   constructor(options = {}) {
-    this.taf         = new TemporalAnomalyFilter(options.windowSize ?? 10)
-    this.useLLM      = options.useLLM ?? true
+    this.taf            = new TemporalAnomalyFilter(options.windowSize ?? 10)
+    this.useLLM         = options.useLLM         ?? true
     this.llmMinSeverity = options.llmMinSeverity ?? 'high'
   }
 
+  // ── Sync version (test, benchmark) ──────────
+  evaluateSync(celfResult, event = null) {
+    const context = buildCelfContext(celfResult)
+    const taf     = this.taf.update(celfResult, celfResult.confidence ?? 0)
+
+    // Category override — حرج فوري بغض النظر عن الـ phase
+    if (event?.category && CRITICAL_CATEGORIES.has(event.category)) {
+      return {
+        action: 'block',
+        reason: 'critical_category:' + event.category,
+        taf,
+        context,
+        llm:  null,
+        celf: {
+          impossible:    celfResult.impossible,
+          phase:         celfResult.phase,
+          confidence:    celfResult.confidence,
+          maturityScore: celfResult.maturityScore
+        }
+      }
+    }
+
+    const action = this.#resolveAction(celfResult, taf, context, null)
+
+    return {
+      action,
+      taf,
+      context,
+      llm:  null,
+      celf: {
+        impossible:    celfResult.impossible,
+        phase:         celfResult.phase,
+        confidence:    celfResult.confidence,
+        maturityScore: celfResult.maturityScore
+      }
+    }
+  }
+
+  // ── Async version (observe, forex, latency) ──
   async evaluate(celfResult, event = null) {
     const context = buildCelfContext(celfResult)
     const taf     = this.taf.update(celfResult, celfResult.confidence ?? 0)
+
+    // Category override — يتجاوز warmup في الحالات الحرجة
+    if (event?.category && CRITICAL_CATEGORIES.has(event.category)) {
+      return {
+        action: 'block',
+        reason: 'critical_category:' + event.category,
+        taf,
+        context,
+        llm:  null,
+        celf: {
+          impossible:    celfResult.impossible,
+          phase:         celfResult.phase,
+          confidence:    celfResult.confidence,
+          maturityScore: celfResult.maturityScore
+        }
+      }
+    }
 
     const severityRank = { low: 0, moderate: 1, high: 2, extreme: 3 }
     const minRank      = severityRank[this.llmMinSeverity] ?? 2
@@ -109,26 +168,11 @@ export class DecisionLayer {
       ? await analyzeWithLLM(event, celfResult, context)
       : null
 
-    // القرار النهائي
-    const action = (() => {
-      if (!celfResult.impossible)  return 'allow'
-      if (taf.isSpike)             return 'allow'   // حادثة عابرة
-      if (!taf.isRealAnomaly)      return 'allow'   // لم يتكرر بعد
-      if (llm)                     return llm.action // LLM يحكم
-      // بدون LLM — نحكم من severity
-      const s = context.interpretation.severity
-      if (s === 'extreme')         return 'block'
-      if (s === 'high')            return 'block'
-      return 'review'
-    })()
+    const action = this.#resolveAction(celfResult, taf, context, llm)
 
     return {
       action,
-      taf: {
-        score:         taf.score,
-        isSpike:       taf.isSpike,
-        isRealAnomaly: taf.isRealAnomaly
-      },
+      taf,
       context,
       llm,
       celf: {
@@ -138,5 +182,17 @@ export class DecisionLayer {
         maturityScore: celfResult.maturityScore
       }
     }
+  }
+
+  // ── القرار النهائي ───────────────────────────
+  #resolveAction(celfResult, taf, context, llm) {
+    if (!celfResult.impossible)  return 'allow'
+    if (taf.isSpike)             return 'allow'
+    if (!taf.isRealAnomaly)      return 'allow'
+    if (llm)                     return llm.action
+
+    const s = context.interpretation.severity
+    if (s === 'extreme' || s === 'high') return 'block'
+    return 'review'
   }
 }
