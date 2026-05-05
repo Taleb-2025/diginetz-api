@@ -51,6 +51,114 @@ function handleDecision(res, decision) {
 }
 
 // ─────────────────────────────────────────────
+// Benchmark
+// ─────────────────────────────────────────────
+function generateBenchmarkData() {
+  const data = []
+  for (let i = 0; i < 9800; i++) {
+    data.push({ amount: Math.abs(Math.random() * 150 + Math.random() * 50), fraud: false })
+  }
+  for (let i = 0; i < 200; i++) {
+    data.push({ amount: Math.random() * 4000 + 1000, fraud: true })
+  }
+  for (let i = data.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[data[i], data[j]] = [data[j], data[i]]
+  }
+  return data
+}
+
+function runCELF(data) {
+  const engine     = new CELF_Engine_V8({
+    resolution: 1000, cycle: 6000, windowSize: 128, thresholdFactor: 2.0
+  })
+  const localLayer = new DecisionLayer({ windowSize: 10, useLLM: false })
+
+  let tp = 0, fp = 0, tn = 0, fn = 0
+
+  for (const row of data) {
+    const result = engine.observe(row.amount)
+    if (result.phase === 'warmup') continue
+
+    const decision = localLayer.evaluateSync(result)
+    const detected = decision.action === 'block'
+
+    if (row.fraud  && detected)  tp++
+    if (!row.fraud && detected)  fp++
+    if (!row.fraud && !detected) tn++
+    if (row.fraud  && !detected) fn++
+  }
+
+  const fraudTotal = data.filter(r => r.fraud).length
+  const precision  = tp / (tp + fp) || 0
+  const recall     = tp / fraudTotal || 0
+  const f1         = 2 * (precision * recall) / (precision + recall) || 0
+  return { tp, fp, tn, fn, precision, recall, f1, aliveRatio: engine.getAliveRatio() }
+}
+
+function runZScore(data) {
+  const values = data.map(r => r.amount)
+  const mean   = values.reduce((a, b) => a + b, 0) / values.length
+  const std    = Math.sqrt(values.reduce((s, x) => s + (x - mean) ** 2, 0) / values.length)
+
+  let tp = 0, fp = 0, tn = 0, fn = 0
+  for (const row of data) {
+    const detected = Math.abs((row.amount - mean) / std) > 3
+    if (row.fraud  && detected)  tp++
+    if (!row.fraud && detected)  fp++
+    if (!row.fraud && !detected) tn++
+    if (row.fraud  && !detected) fn++
+  }
+
+  const fraudTotal = data.filter(r => r.fraud).length
+  const precision  = tp / (tp + fp) || 0
+  const recall     = tp / fraudTotal || 0
+  const f1         = 2 * (precision * recall) / (precision + recall) || 0
+  return { tp, fp, tn, fn, precision, recall, f1 }
+}
+
+router.get('/benchmark', (req, res) => {
+  const data       = generateBenchmarkData()
+  const fraudTotal = data.filter(r => r.fraud).length
+  const celf       = runCELF(data)
+  const zscore     = runZScore(data)
+  const winner     = celf.f1 > zscore.f1 ? 'CELF' : celf.f1 < zscore.f1 ? 'Z-Score' : 'Draw'
+
+  res.json({
+    dataset: { total: data.length, fraud: fraudTotal, normal: data.length - fraudTotal },
+    celf: {
+      truePositive:  celf.tp,
+      falsePositive: celf.fp,
+      trueNegative:  celf.tn,
+      falseNegative: celf.fn,
+      precision:     Math.round(celf.precision  * 10000) / 100,
+      recall:        Math.round(celf.recall     * 10000) / 100,
+      f1:            Math.round(celf.f1         * 10000) / 100,
+      aliveRatio:    Math.round(celf.aliveRatio * 10000) / 100
+    },
+    zscore: {
+      truePositive:  zscore.tp,
+      falsePositive: zscore.fp,
+      trueNegative:  zscore.tn,
+      falseNegative: zscore.fn,
+      precision:     Math.round(zscore.precision * 10000) / 100,
+      recall:        Math.round(zscore.recall    * 10000) / 100,
+      f1:            Math.round(zscore.f1        * 10000) / 100
+    },
+    winner
+  })
+})
+
+// ─────────────────────────────────────────────
+// Slow endpoint — تأخير حقيقي للاختبار
+// ─────────────────────────────────────────────
+router.get('/slow', async (req, res) => {
+  const delay = parseInt(req.query.ms) || 2500
+  await new Promise(r => setTimeout(r, delay))
+  res.json({ ok: true, delayed: delay })
+})
+
+// ─────────────────────────────────────────────
 // Bitcoin
 // ─────────────────────────────────────────────
 function getBitcoinInstance() {
@@ -62,11 +170,10 @@ function getBitcoinInstance() {
   })
 }
 
-// سعر Bitcoin داخلي — لا يحتاج API خارجي
 let _btcPrice = 95000 + Math.random() * 5000
 
 function fetchBitcoinPrice() {
-  const change = (Math.random() - 0.5) * 0.008  // ±0.4% per tick
+  const change = (Math.random() - 0.5) * 0.008
   _btcPrice = Math.max(50000, _btcPrice * (1 + change))
   return _btcPrice
 }
@@ -122,9 +229,7 @@ function latencyCategory(status, duration) {
   return 'normal'
 }
 
-function getLatencyInstance(url) {
-  // hostname فقط كـ id — نظيف ومختصر
-  const id = 'latency:' + new URL(url).hostname
+function getLatencyInstance(id) {
   return getInstance(id, {
     resolution:      200,
     cycle:           3000,
@@ -138,7 +243,7 @@ router.get('/latency/tick', async (req, res) => {
   const { duration, status } = await fetchLatency(endpoint)
   const category = latencyCategory(status, duration)
 
-  const result   = getLatencyInstance(endpoint).observe(duration)
+  const result   = getLatencyInstance('latency:health').observe(duration)
   const decision = await layer.evaluate(result, {
     type: 'latency',
     endpoint,
@@ -151,12 +256,13 @@ router.get('/latency/tick', async (req, res) => {
   res.json({ value: duration, unit: 'ms', endpoint, status, category, ...result, decision })
 })
 
+// ── latency/spike — يستدعي /celf/slow داخلياً (تأخير حقيقي 2.5s)
 router.get('/latency/spike', async (req, res) => {
-  const endpoint = 'https://diginetz-api-production.up.railway.app/celf/benchmark'
+  const endpoint = 'https://diginetz-api-production.up.railway.app/celf/slow'
   const { duration, status } = await fetchLatency(endpoint)
   const category = latencyCategory(status, duration)
 
-  const result   = getLatencyInstance(endpoint).observe(duration)
+  const result   = getLatencyInstance('latency:health').observe(duration)
   const decision = await layer.evaluate(result, {
     type: 'latency_spike',
     endpoint,
