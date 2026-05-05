@@ -377,4 +377,51 @@ router.get('/instances', (req, res) => {
   res.json({ instances: list, total: list.length, max: MAX_INSTANCES })
 })
 
+// ─────────────────────────────────────────────
+// Memory — إثبات ثبات الذاكرة مع الوقت
+// ─────────────────────────────────────────────
+router.get('/memory', (req, res) => {
+  const stats = []
+
+  for (const [id, engine] of instances.entries()) {
+    const step        = engine.getStep()
+    const spaceLen    = engine.getSpace().length
+    const spaceSizeKB = Math.round((spaceLen * 4) / 1024 * 1000) / 1000
+    const traditionalKB = Math.round((step * 8) / 1024 * 1000) / 1000
+
+    stats.push({
+      id,
+      step,
+      celf: {
+        spaceSizeKB,
+        resolution: spaceLen,
+        note: 'ثابت بغض النظر عن عدد الخطوات'
+      },
+      traditional: {
+        estimatedKB: traditionalKB,
+        note: 'يكبر مع كل خطوة'
+      },
+      savingKB:      Math.max(0, Math.round((traditionalKB - spaceSizeKB) * 1000) / 1000),
+      savingPercent: traditionalKB > 0
+        ? Math.round((1 - spaceSizeKB / traditionalKB) * 100)
+        : 0
+    })
+  }
+
+  const totalCelfKB        = Math.round(stats.reduce((s, r) => s + r.celf.spaceSizeKB, 0) * 1000) / 1000
+  const totalTraditionalKB = Math.round(stats.reduce((s, r) => s + r.traditional.estimatedKB, 0) * 1000) / 1000
+
+  res.json({
+    instances: stats,
+    total: {
+      celfKB:        totalCelfKB,
+      traditionalKB: totalTraditionalKB,
+      savingKB:      Math.round((totalTraditionalKB - totalCelfKB) * 1000) / 1000,
+      savingPercent: totalTraditionalKB > 0
+        ? Math.round((1 - totalCelfKB / totalTraditionalKB) * 100)
+        : 0
+    }
+  })
+})
+
 export default router
