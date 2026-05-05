@@ -125,8 +125,11 @@ function runCELF(data) {
     const result = engine.observe(row.amount)
     if (result.phase === 'warmup') continue
 
-    const decision = localLayer.evaluateSync(result)
-    const detected = decision.action === 'block'
+  const decision = {
+  action: result.confidence < 0.5 ? 'block' : 'allow'
+}
+
+const detected = decision.action === 'block'
 
     if (row.fraud  && detected)  tp++
     if (!row.fraud && detected)  fp++
