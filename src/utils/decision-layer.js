@@ -68,7 +68,7 @@ class TemporalAnomalyFilter {
 }
 
 // ─────────────────────────────────────────────
-// LLM — 
+// LLM 
 // ─────────────────────────────────────────────
 async function analyzeWithLLM(event, celfResult, context) {
   const controller = new AbortController()
