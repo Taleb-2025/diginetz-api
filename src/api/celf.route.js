@@ -62,15 +62,18 @@ function getBitcoinInstance() {
   })
 }
 
-async function fetchBitcoinPrice() {
-  const r    = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd')
-  const data = await r.json()
-  return data.bitcoin.usd
+// سعر Bitcoin داخلي — لا يحتاج API خارجي
+let _btcPrice = 95000 + Math.random() * 5000
+
+function fetchBitcoinPrice() {
+  const change = (Math.random() - 0.5) * 0.008  // ±0.4% per tick
+  _btcPrice = Math.max(50000, _btcPrice * (1 + change))
+  return _btcPrice
 }
 
 router.get('/bitcoin/tick', async (req, res) => {
   try {
-    const value    = await fetchBitcoinPrice()
+    const value    = fetchBitcoinPrice()
     const result   = getBitcoinInstance().observe(value)
     const decision = await layer.evaluate(result, { type: 'bitcoin_tick', value })
 
@@ -83,7 +86,7 @@ router.get('/bitcoin/tick', async (req, res) => {
 
 router.get('/bitcoin/spike', async (req, res) => {
   try {
-    const base   = await fetchBitcoinPrice()
+    const base   = fetchBitcoinPrice()
     const spike  = (Math.random() * 0.08 + 0.03) * (Math.random() > 0.5 ? 1 : -1)
     const value  = base * (1 + spike)
     const result   = getBitcoinInstance().observe(value)
@@ -131,7 +134,7 @@ function getLatencyInstance(url) {
 }
 
 router.get('/latency/tick', async (req, res) => {
-  const endpoint = 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd'
+  const endpoint = 'https://diginetz-api-production.up.railway.app/health'
   const { duration, status } = await fetchLatency(endpoint)
   const category = latencyCategory(status, duration)
 
