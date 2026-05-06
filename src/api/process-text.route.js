@@ -1,15 +1,63 @@
 /**
  * CELF AI — /celf/process-text endpoint
  * Add to server.js: app.use('/celf', processTextRoute)
- * (already covered by existing /celf route mount)
  */
 
 import express from 'express'
-import { parse }              from '../utils/lightweight-parser.js'
-import { feed, getSessionSummary, clearSession } from '../utils/celf-adapter.js'
-import { build }              from '../utils/context-builder.js'
+import { parse }  from '../utils/lightweight-parser.js'
+import { build }  from '../utils/context-builder.js'
+import { CELF_Engine_V8 } from '../engines/CELF_Engine_V8.js'
 
 const router = express.Router()
+
+// ─────────────────────────────────────────────
+// Session Engine Pool (adapter inlined)
+// ─────────────────────────────────────────────
+const MAX_SESSIONS = 500
+const sessions     = new Map()
+
+function getEngine(sessionId) {
+  if (sessions.has(sessionId)) {
+    const engine = sessions.get(sessionId)
+    sessions.delete(sessionId)
+    sessions.set(sessionId, engine)
+    return engine
+  }
+
+  if (sessions.size >= MAX_SESSIONS) {
+    const oldest = sessions.keys().next().value
+    sessions.delete(oldest)
+  }
+
+  const engine = new CELF_Engine_V8({
+    resolution:      200,
+    cycle:           1000,
+    windowSize:      64,
+    thresholdFactor: 2.2,
+    decayRate:       0.995,
+    reinforceRate:   0.05,
+    eliminationRate: 0.20
+  })
+
+  sessions.set(sessionId, engine)
+  return engine
+}
+
+function feed(sessionId, signals) {
+  if (!signals.valid) {
+    return { ok: false, reason: 'invalid_signals', passToLLM: false, celfResult: null }
+  }
+
+  const engine = getEngine(sessionId)
+  const result = engine.observe(signals.numeric)
+
+  const passToLLM =
+    signals.intent === 'greeting'                    ? true  :
+    result.phase   === 'warmup'                      ? true  :
+    result.impossible && result.confidence < 0.3     ? false : true
+
+  return { ok: true, passToLLM, signals, celfResult: result }
+}
 
 // ─────────────────────────────────────────────
 // POST /celf/process-text
@@ -24,40 +72,19 @@ router.post('/process-text', async (req, res) => {
 
   const sid = sessionId || 'default'
 
-  // ── Step 1: Parse ──────────────────────────
-  const signals = parse(text)
-
-  // ── Step 2: CELF ───────────────────────────
+  const signals       = parse(text)
   const adapterOutput = feed(sid, signals)
+  const built         = build(adapterOutput)
 
-  // ── Step 3: Build Context ──────────────────
-  const built = build(adapterOutput)
-
-  // ── Step 4: Blocked? ──────────────────────
   if (built.blocked) {
-    return res.status(422).json({
-      blocked:    true,
-      reason:     'anomaly_detected',
-      context:    built.context
-    })
+    return res.status(422).json({ blocked: true, reason: 'anomaly_detected', context: built.context })
   }
 
-  // ── Step 5: Call Claude API ────────────────
   if (!built.passToLLM) {
-    return res.json({
-      reply:      null,
-      skippedLLM: true,
-      context:    built.context,
-      reason:     'filtered_by_celf'
-    })
+    return res.json({ reply: null, skippedLLM: true, context: built.context, reason: 'filtered_by_celf' })
   }
 
   try {
-    const messages = [
-      ...history.map(h => ({ role: h.role, content: h.content })),
-      { role: 'user', content: text }
-    ]
-
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method:  'POST',
       headers: {
@@ -78,12 +105,7 @@ router.post('/process-text', async (req, res) => {
     const data  = await response.json()
     const reply = data?.choices?.[0]?.message?.content ?? null
 
-    return res.json({
-      reply,
-      context:    built.context,
-      celf:       adapterOutput.celfResult,
-      signals:    adapterOutput.signals
-    })
+    return res.json({ reply, context: built.context, celf: adapterOutput.celfResult, signals: adapterOutput.signals })
 
   } catch (err) {
     return res.status(500).json({ error: 'llm_failed', detail: err.message })
@@ -94,16 +116,15 @@ router.post('/process-text', async (req, res) => {
 // GET /celf/session/:id
 // ─────────────────────────────────────────────
 router.get('/session/:id', (req, res) => {
-  const summary = getSessionSummary(req.params.id)
-  if (!summary) return res.status(404).json({ error: 'session not found' })
-  res.json(summary)
+  if (!sessions.has(req.params.id)) return res.status(404).json({ error: 'session not found' })
+  res.json(sessions.get(req.params.id).getSummary())
 })
 
 // ─────────────────────────────────────────────
 // DELETE /celf/session/:id
 // ─────────────────────────────────────────────
 router.delete('/session/:id', (req, res) => {
-  clearSession(req.params.id)
+  sessions.delete(req.params.id)
   res.json({ ok: true })
 })
 
