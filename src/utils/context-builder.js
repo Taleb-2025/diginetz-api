@@ -76,10 +76,12 @@ function buildSystemHint(ctx, signals) {
   // Language instruction
   if (ctx.lang === 'ar') {
     lines.push('الرد يجب أن يكون باللغة العربية.')
+  } else if (ctx.lang === 'de') {
+    lines.push('Antworte immer auf Deutsch.')
   } else if (ctx.lang === 'mixed') {
     lines.push('Respond in the same language as the user.')
   } else {
-    lines.push('Respond in English.')
+    lines.push('Respond in the same language as the user.')
   }
 
   // Intent guidance
