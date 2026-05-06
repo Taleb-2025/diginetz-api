@@ -14,13 +14,22 @@ const router = express.Router()
 // Session Engine Pool (adapter inlined)
 // ─────────────────────────────────────────────
 const MAX_SESSIONS = 500
+
 const sessions = new Map()
 
+// ─────────────────────────────────────────────
+// Metrics Store
+// ─────────────────────────────────────────────
+const metricsStore = new Map()
+
 function getEngine(sessionId) {
+
   if (sessions.has(sessionId)) {
     const engine = sessions.get(sessionId)
+
     sessions.delete(sessionId)
     sessions.set(sessionId, engine)
+
     return engine
   }
 
@@ -40,10 +49,12 @@ function getEngine(sessionId) {
   })
 
   sessions.set(sessionId, engine)
+
   return engine
 }
 
 function feed(sessionId, signals) {
+
   if (!signals.valid) {
     return {
       ok: false,
@@ -54,6 +65,7 @@ function feed(sessionId, signals) {
   }
 
   const engine = getEngine(sessionId)
+
   const result = engine.observe(signals.numeric)
 
   const passToLLM =
@@ -78,6 +90,7 @@ function feed(sessionId, signals) {
 // Body: { text, sessionId, history? }
 // ─────────────────────────────────────────────
 router.post('/process-text', async (req, res) => {
+
   const { text, sessionId, history = [] } = req.body
 
   if (!text || typeof text !== 'string') {
@@ -96,6 +109,7 @@ router.post('/process-text', async (req, res) => {
   // Blocked by CELF
   // ─────────────────────────────────────────────
   if (built.blocked) {
+
     return res.status(422).json({
       blocked: true,
       reason: 'anomaly_detected',
@@ -107,6 +121,7 @@ router.post('/process-text', async (req, res) => {
   // Filtered before LLM
   // ─────────────────────────────────────────────
   if (!built.passToLLM) {
+
     return res.json({
       reply: null,
       skippedLLM: true,
@@ -124,7 +139,10 @@ router.post('/process-text', async (req, res) => {
       Math.ceil((built.systemHint?.length || 0) / 4)
 
     const historyChars =
-      history.reduce((s, h) => s + (h.content?.length || 0), 0)
+      history.reduce(
+        (s, h) => s + (h.content?.length || 0),
+        0
+      )
 
     const rawInputChars =
       text.length + historyChars
@@ -139,7 +157,20 @@ router.post('/process-text', async (req, res) => {
           )
         : 0
 
+    // ─────────────────────────────────────────────
+    // Save Metrics
+    // ─────────────────────────────────────────────
+    metricsStore.set(sid, {
+      sessionId: sid,
+      rawInputChars,
+      compressedChars,
+      compressionRatio,
+      estimatedSystemTokens: systemTokensEstimate,
+      updatedAt: new Date().toISOString()
+    })
+
     console.log({
+      sessionId: sid,
       rawInputChars,
       compressedChars,
       compressionRatio,
@@ -153,14 +184,20 @@ router.post('/process-text', async (req, res) => {
       'https://api.groq.com/openai/v1/chat/completions',
       {
         method: 'POST',
+
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
+          'Authorization':
+            `Bearer ${process.env.GROQ_API_KEY}`
         },
+
         body: JSON.stringify({
           model: 'llama-3.3-70b-versatile',
+
           max_tokens: 1024,
+
           messages: [
+
             {
               role: 'system',
               content: built.systemHint
@@ -181,9 +218,12 @@ router.post('/process-text', async (req, res) => {
     )
 
     const data  = await response.json()
-    const reply = data?.choices?.[0]?.message?.content ?? null
+
+    const reply =
+      data?.choices?.[0]?.message?.content ?? null
 
     return res.json({
+
       reply,
 
       context: built.context,
@@ -215,6 +255,7 @@ router.post('/process-text', async (req, res) => {
 router.get('/session/:id', (req, res) => {
 
   if (!sessions.has(req.params.id)) {
+
     return res.status(404).json({
       error: 'session not found'
     })
@@ -226,11 +267,31 @@ router.get('/session/:id', (req, res) => {
 })
 
 // ─────────────────────────────────────────────
+// GET /celf/metrics/:id
+// ─────────────────────────────────────────────
+router.get('/metrics/:id', (req, res) => {
+
+  const metrics =
+    metricsStore.get(req.params.id)
+
+  if (!metrics) {
+
+    return res.status(404).json({
+      error: 'metrics not found'
+    })
+  }
+
+  res.json(metrics)
+})
+
+// ─────────────────────────────────────────────
 // DELETE /celf/session/:id
 // ─────────────────────────────────────────────
 router.delete('/session/:id', (req, res) => {
 
   sessions.delete(req.params.id)
+
+  metricsStore.delete(req.params.id)
 
   res.json({
     ok: true
