@@ -5,6 +5,7 @@ import cycleguardRoute        from './api/cycleguard.route.js'
 import cycleguardSessionRoute from './api/cycleguard-session.route.js'
 import identityRoute          from './api/identity.route.js'
 import celfRoute              from './api/celf.route.js'
+import processTextRoute from './api/process-text.route.js'
 
 import { CELF_Engine_V8 }     from './engines/CELF_Engine_V8.js'
 
@@ -135,7 +136,7 @@ app.use('/api/cycleguard', cycleguardRoute)
 app.use('/api/cg-session', cycleguardSessionRoute)
 app.use('/api/identity',   identityRoute)
 app.use('/celf',           celfRoute)
-
+app.use('/celf', processTextRoute)
 // ─────────────────────────────────────────────
 // Monitor endpoint
 // ─────────────────────────────────────────────
