@@ -4,8 +4,8 @@
  */
 
 import express from 'express'
-import { parse }  from '../utils/lightweight-parser.js'
-import { build }  from '../utils/context-builder.js'
+import { parse } from '../utils/lightweight-parser.js'
+import { build } from '../utils/context-builder.js'
 import { CELF_Engine_V8 } from '../engines/CELF_Engine_V8.js'
 
 const router = express.Router()
@@ -14,7 +14,7 @@ const router = express.Router()
 // Session Engine Pool (adapter inlined)
 // ─────────────────────────────────────────────
 const MAX_SESSIONS = 500
-const sessions     = new Map()
+const sessions = new Map()
 
 function getEngine(sessionId) {
   if (sessions.has(sessionId)) {
@@ -45,18 +45,32 @@ function getEngine(sessionId) {
 
 function feed(sessionId, signals) {
   if (!signals.valid) {
-    return { ok: false, reason: 'invalid_signals', passToLLM: false, celfResult: null }
+    return {
+      ok: false,
+      reason: 'invalid_signals',
+      passToLLM: false,
+      celfResult: null
+    }
   }
 
   const engine = getEngine(sessionId)
   const result = engine.observe(signals.numeric)
 
   const passToLLM =
-    signals.intent === 'greeting'                    ? true  :
-    result.phase   === 'warmup'                      ? true  :
-    result.impossible && result.confidence < 0.3     ? false : true
+    signals.intent === 'greeting'
+      ? true
+      : result.phase === 'warmup'
+        ? true
+        : result.impossible && result.confidence < 0.3
+          ? false
+          : true
 
-  return { ok: true, passToLLM, signals, celfResult: result }
+  return {
+    ok: true,
+    passToLLM,
+    signals,
+    celfResult: result
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -67,7 +81,9 @@ router.post('/process-text', async (req, res) => {
   const { text, sessionId, history = [] } = req.body
 
   if (!text || typeof text !== 'string') {
-    return res.status(400).json({ error: 'missing text' })
+    return res.status(400).json({
+      error: 'missing text'
+    })
   }
 
   const sid = sessionId || 'default'
@@ -76,39 +92,120 @@ router.post('/process-text', async (req, res) => {
   const adapterOutput = feed(sid, signals)
   const built         = build(adapterOutput)
 
+  // ─────────────────────────────────────────────
+  // Blocked by CELF
+  // ─────────────────────────────────────────────
   if (built.blocked) {
-    return res.status(422).json({ blocked: true, reason: 'anomaly_detected', context: built.context })
+    return res.status(422).json({
+      blocked: true,
+      reason: 'anomaly_detected',
+      context: built.context
+    })
   }
 
+  // ─────────────────────────────────────────────
+  // Filtered before LLM
+  // ─────────────────────────────────────────────
   if (!built.passToLLM) {
-    return res.json({ reply: null, skippedLLM: true, context: built.context, reason: 'filtered_by_celf' })
+    return res.json({
+      reply: null,
+      skippedLLM: true,
+      context: built.context,
+      reason: 'filtered_by_celf'
+    })
   }
 
   try {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method:  'POST',
-      headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
-      },
-      body: JSON.stringify({
-        model:      'llama-3.3-70b-versatile',
-        max_tokens: 1024,
-        messages: [
-          { role: 'system', content: built.systemHint },
-          ...history.map(h => ({ role: h.role, content: h.content })),
-          { role: 'user', content: text }
-        ]
-      })
+
+    // ─────────────────────────────────────────────
+    // Prompt Size Metrics
+    // ─────────────────────────────────────────────
+    const systemTokensEstimate =
+      Math.ceil((built.systemHint?.length || 0) / 4)
+
+    const historyChars =
+      history.reduce((s, h) => s + (h.content?.length || 0), 0)
+
+    const rawInputChars =
+      text.length + historyChars
+
+    const compressedChars =
+      (built.systemHint?.length || 0) + text.length
+
+    const compressionRatio =
+      rawInputChars > 0
+        ? Math.round(
+            (1 - (compressedChars / rawInputChars)) * 100
+          )
+        : 0
+
+    console.log({
+      rawInputChars,
+      compressedChars,
+      compressionRatio,
+      estimatedSystemTokens: systemTokensEstimate
     })
+
+    // ─────────────────────────────────────────────
+    // LLM Request
+    // ─────────────────────────────────────────────
+    const response = await fetch(
+      'https://api.groq.com/openai/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          max_tokens: 1024,
+          messages: [
+            {
+              role: 'system',
+              content: built.systemHint
+            },
+
+            ...history.map(h => ({
+              role: h.role,
+              content: h.content
+            })),
+
+            {
+              role: 'user',
+              content: text
+            }
+          ]
+        })
+      }
+    )
 
     const data  = await response.json()
     const reply = data?.choices?.[0]?.message?.content ?? null
 
-    return res.json({ reply, context: built.context, celf: adapterOutput.celfResult, signals: adapterOutput.signals })
+    return res.json({
+      reply,
+
+      context: built.context,
+
+      celf: adapterOutput.celfResult,
+
+      signals: adapterOutput.signals,
+
+      metrics: {
+        rawInputChars,
+        compressedChars,
+        compressionRatio,
+        estimatedSystemTokens: systemTokensEstimate
+      }
+    })
 
   } catch (err) {
-    return res.status(500).json({ error: 'llm_failed', detail: err.message })
+
+    return res.status(500).json({
+      error: 'llm_failed',
+      detail: err.message
+    })
   }
 })
 
@@ -116,16 +213,28 @@ router.post('/process-text', async (req, res) => {
 // GET /celf/session/:id
 // ─────────────────────────────────────────────
 router.get('/session/:id', (req, res) => {
-  if (!sessions.has(req.params.id)) return res.status(404).json({ error: 'session not found' })
-  res.json(sessions.get(req.params.id).getSummary())
+
+  if (!sessions.has(req.params.id)) {
+    return res.status(404).json({
+      error: 'session not found'
+    })
+  }
+
+  res.json(
+    sessions.get(req.params.id).getSummary()
+  )
 })
 
 // ─────────────────────────────────────────────
 // DELETE /celf/session/:id
 // ─────────────────────────────────────────────
 router.delete('/session/:id', (req, res) => {
+
   sessions.delete(req.params.id)
-  res.json({ ok: true })
+
+  res.json({
+    ok: true
+  })
 })
 
 export default router
