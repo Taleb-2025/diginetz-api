@@ -58,23 +58,25 @@ router.post('/process-text', async (req, res) => {
       { role: 'user', content: text }
     ]
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method:  'POST',
       headers: {
-        'Content-Type':      'application/json',
-        'x-api-key':         process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
+        'Content-Type':  'application/json',
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
       },
       body: JSON.stringify({
-        model:      'claude-sonnet-4-6',
+        model:      'llama-3.3-70b-versatile',
         max_tokens: 1024,
-        system:     built.systemHint,
-        messages
+        messages: [
+          { role: 'system', content: built.systemHint },
+          ...history.map(h => ({ role: h.role, content: h.content })),
+          { role: 'user', content: text }
+        ]
       })
     })
 
     const data  = await response.json()
-    const reply = data?.content?.[0]?.text ?? null
+    const reply = data?.choices?.[0]?.message?.content ?? null
 
     return res.json({
       reply,
