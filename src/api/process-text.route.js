@@ -3,15 +3,27 @@
  */
 
 import express from 'express'
-import { CELF_Engine_AI } from '../engines/celf-engine.js'
 
-const router = express.Router()
+import { CELF_Engine_AI }
+from '../engines/celf-engine.js'
 
-const MAX_SESSIONS = 500
+import { parse }
+from '../utils/lightweight-parser.js'
 
-const sessions = new Map()
+import { build }
+from '../utils/context-builder.js'
 
-const metricsStore = new Map()
+const router =
+  express.Router()
+
+const MAX_SESSIONS =
+  500
+
+const sessions =
+  new Map()
+
+const metricsStore =
+  new Map()
 
 function getEngine(sessionId) {
 
@@ -45,6 +57,17 @@ function getEngine(sessionId) {
 
 function feed(sessionId, text) {
 
+  const signals =
+    parse(text)
+
+  if (!signals.valid) {
+
+    return {
+      ok: false,
+      reason: 'invalid_signals'
+    }
+  }
+
   const engine =
     getEngine(sessionId)
 
@@ -65,49 +88,28 @@ function feed(sessionId, text) {
     )
 
   const passToLLM =
+
     coherence > 0.15 ||
-    fieldStrength > 0.15
+
+    fieldStrength > 0.15 ||
+
+    signals.intent === 'greeting'
 
   return {
+
     ok: true,
+
     passToLLM,
+
+    signals,
+
     result
   }
 }
 
-function buildSystemHint(result) {
-
-  const refined =
-    result?.refined ?? {}
-
-  const relation =
-    result?.relation ?? {}
-
-  const attractor =
-    result?.attractor ?? {}
-
-  return `
-You are operating inside a persistent semantic field.
-
-Maintain continuity with the evolving field structure.
-
-Current semantic coherence:
-${refined.refinedCoherence ?? 0}
-
-Current field stability:
-${attractor.attractorStability ?? 0}
-
-Current semantic relation:
-${relation.relation ?? 'emergent'}
-
-Avoid fragmented responses.
-Preserve structural continuity.
-Reinforce semantic alignment.
-`
-}
-
 router.post(
   '/process-text',
+
   async (req, res) => {
 
     const {
@@ -120,6 +122,7 @@ router.post(
       !text ||
       typeof text !== 'string'
     ) {
+
       return res.status(400).json({
         error: 'missing_text'
       })
@@ -133,31 +136,85 @@ router.post(
 
     if (!processed.ok) {
 
-      return res.status(500).json({
-        error: 'processing_failed'
+      return res.status(422).json({
+
+        error:
+          processed.reason || 'processing_failed'
       })
     }
 
-    if (!processed.passToLLM) {
+    const built =
+      build({
+
+        ok: true,
+
+        signals:
+          processed.signals,
+
+        celfResult: {
+
+          phase:
+            processed.result?.relation?.relation ||
+            'emergent',
+
+          confidence:
+            processed.result?.refined?.refinedCoherence || 0,
+
+          maturityScore:
+            processed.result?.attractor?.attractorStability || 0,
+
+          impossible:
+            false,
+
+          aliveRatio:
+            processed.result?.convergence?.fieldConvergence || 0
+        },
+
+        passToLLM:
+          processed.passToLLM
+      })
+
+    if (built.blocked) {
+
+      return res.status(422).json({
+
+        blocked: true,
+
+        reason:
+          'semantic_constraint',
+
+        context:
+          built.context
+      })
+    }
+
+    if (!built.passToLLM) {
 
       return res.json({
+
         reply: null,
+
         skippedLLM: true,
-        reason: 'weak_semantic_field',
-        celf: processed.result
+
+        reason:
+          'weak_semantic_field',
+
+        context:
+          built.context,
+
+        celf:
+          processed.result
       })
     }
-
-    const systemHint =
-      buildSystemHint(
-        processed.result
-      )
 
     try {
 
+      const systemHint =
+        built.systemHint || ''
+
       const systemTokensEstimate =
         Math.ceil(
-          (systemHint.length || 0) / 4
+          systemHint.length / 4
         )
 
       const historyChars =
@@ -179,6 +236,7 @@ router.post(
 
       const compressionRatio =
         rawInputChars > 0
+
           ? Math.round(
               (
                 1 -
@@ -188,11 +246,13 @@ router.post(
                 )
               ) * 100
             )
+
           : 0
 
       metricsStore.set(sid, {
 
-        sessionId: sid,
+        sessionId:
+          sid,
 
         rawInputChars,
 
@@ -211,9 +271,11 @@ router.post(
         await fetch(
           'https://api.groq.com/openai/v1/chat/completions',
           {
+
             method: 'POST',
 
             headers: {
+
               'Content-Type':
                 'application/json',
 
@@ -226,7 +288,8 @@ router.post(
               model:
                 'llama-3.3-70b-versatile',
 
-              max_tokens: 1024,
+              max_tokens:
+                1024,
 
               messages: [
 
@@ -260,6 +323,9 @@ router.post(
 
         reply,
 
+        context:
+          built.context,
+
         celf:
           processed.result,
 
@@ -280,7 +346,8 @@ router.post(
 
       return res.status(500).json({
 
-        error: 'llm_failed',
+        error:
+          'llm_failed',
 
         detail:
           err.message
@@ -291,11 +358,13 @@ router.post(
 
 router.get(
   '/session/:id',
+
   (req, res) => {
 
     if (
       !sessions.has(req.params.id)
     ) {
+
       return res.status(404).json({
         error: 'session_not_found'
       })
@@ -322,6 +391,7 @@ router.get(
 
 router.get(
   '/metrics/:id',
+
   (req, res) => {
 
     const metrics =
@@ -342,6 +412,7 @@ router.get(
 
 router.delete(
   '/session/:id',
+
   (req, res) => {
 
     sessions.delete(req.params.id)
