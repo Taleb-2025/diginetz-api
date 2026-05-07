@@ -3,7 +3,7 @@
  */
 
 import express from 'express'
-import { CELF_Engine_AI } from '../engines/self-engine.js'
+import { CELF_Engine_AI } from '../engines/celf-engine.js'
 
 const router = express.Router()
 
