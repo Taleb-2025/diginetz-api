@@ -326,6 +326,9 @@ router.post(
         context:
           built.context,
 
+        signals:
+          processed.signals,
+
         celf:
           processed.result,
 
@@ -407,6 +410,65 @@ router.get(
     }
 
     return res.json(metrics)
+  }
+)
+
+router.get(
+  '/debug/:id',
+
+  (req, res) => {
+
+    if (
+      !sessions.has(req.params.id)
+    ) {
+
+      return res.status(404).json({
+        error: 'session_not_found'
+      })
+    }
+
+    const engine =
+      sessions.get(req.params.id)
+
+    const metrics =
+      metricsStore.get(
+        req.params.id
+      )
+
+    const latest =
+      engine.previousField || {}
+
+    return res.json({
+
+      metrics,
+
+      totalFields:
+        engine.space?.fields?.length || 0,
+
+      latestField:
+        latest,
+
+      runtime: {
+
+        coherence:
+          latest?.refinedCoherence || 0,
+
+        fieldStrength:
+          latest?.refinedField || 0,
+
+        drift:
+          latest?.drift || 0,
+
+        continuity:
+          latest?.continuity || 0,
+
+        abstraction:
+          latest?.abstraction || 0,
+
+        noise:
+          latest?.noise || false
+      }
+    })
   }
 )
 
