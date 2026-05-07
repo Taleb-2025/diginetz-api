@@ -1,7 +1,3 @@
-/**
- * CELF AI — /celf/process-text
- */
-
 import express from 'express'
 
 import { CELF_Engine_AI }
@@ -15,6 +11,9 @@ from '../utils/context-builder.js'
 
 const router =
   express.Router()
+
+const CELF_ENABLED =
+  false
 
 const MAX_SESSIONS =
   500
@@ -131,8 +130,29 @@ router.post(
     const sid =
       sessionId || 'default'
 
-    const processed =
-      feed(sid, text)
+    let processed
+
+    if (CELF_ENABLED) {
+
+      processed =
+        feed(sid, text)
+
+    } else {
+
+      processed = {
+
+        ok: true,
+
+        passToLLM: true,
+
+        signals: {
+
+          bypassed: true
+        },
+
+        result: null
+      }
+    }
 
     if (!processed.ok) {
 
@@ -143,36 +163,54 @@ router.post(
       })
     }
 
-    const built =
-      build({
+    let built
 
-        ok: true,
+    if (CELF_ENABLED) {
 
-        signals:
-          processed.signals,
+      built =
+        build({
 
-        celfResult: {
+          ok: true,
 
-          phase:
-            processed.result?.relation?.relation ||
-            'emergent',
+          signals:
+            processed.signals,
 
-          confidence:
-            processed.result?.refined?.refinedCoherence || 0,
+          celfResult: {
 
-          maturityScore:
-            processed.result?.attractor?.attractorStability || 0,
+            phase:
+              processed.result?.relation?.relation ||
+              'emergent',
 
-          impossible:
-            false,
+            confidence:
+              processed.result?.refined?.refinedCoherence || 0,
 
-          aliveRatio:
-            processed.result?.convergence?.fieldConvergence || 0
-        },
+            maturityScore:
+              processed.result?.attractor?.attractorStability || 0,
 
-        passToLLM:
-          processed.passToLLM
-      })
+            impossible:
+              false,
+
+            aliveRatio:
+              processed.result?.convergence?.fieldConvergence || 0
+          },
+
+          passToLLM:
+            processed.passToLLM
+        })
+
+    } else {
+
+      built = {
+
+        passToLLM: true,
+
+        blocked: false,
+
+        context: null,
+
+        systemHint: ''
+      }
+    }
 
     if (built.blocked) {
 
@@ -263,6 +301,9 @@ router.post(
         estimatedSystemTokens:
           systemTokensEstimate,
 
+        celfEnabled:
+          CELF_ENABLED,
+
         updatedAt:
           new Date().toISOString()
       })
@@ -332,6 +373,9 @@ router.post(
         celf:
           processed.result,
 
+        celfEnabled:
+          CELF_ENABLED,
+
         metrics: {
 
           rawInputChars,
@@ -387,7 +431,10 @@ router.get(
         engine.space?.fields?.length ?? 0,
 
       latestField:
-        engine.previousField ?? null
+        engine.previousField ?? null,
+
+      celfEnabled:
+        CELF_ENABLED
     })
   }
 )
@@ -439,6 +486,9 @@ router.get(
       engine.previousField || {}
 
     return res.json({
+
+      celfEnabled:
+        CELF_ENABLED,
 
       metrics,
 
