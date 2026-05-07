@@ -74,7 +74,7 @@ function feed(sessionId, text) {
   const intent         = semanticField?.intent ?? 'statement'
   const confidence     = Number(semanticField?.confidence    ?? 1)
 
-  const passToLLM = true
+  const passToLLM = 
     coherence     > 0.15 ||
     fieldStrength > 0.15 ||
     resonance     > 0.20 ||
