@@ -16,12 +16,12 @@ export class CELF_Engine_AI_V5 {
     this.semanticDimensions = options.semanticDimensions ?? 16
     this.routingLimit = options.routingLimit ?? 8
     this.massTarget = options.massTarget ?? null
-
-    // ── V5.1 additions ──────────────────────────
-    this.localizationThreshold  = options.localizationThreshold  ?? 0.012
-    this.decayRate              = options.decayRate              ?? 0.25
-    this.contradictionThreshold = options.contradictionThreshold ?? 0.22
-    // ────────────────────────────────────────────
+    this.localizationThreshold   = options.localizationThreshold   ?? 0.012
+    this.decayRate               = options.decayRate               ?? 0.25
+    this.contradictionThreshold  = options.contradictionThreshold  ?? 0.22
+    this.credibilityLearningRate = options.credibilityLearningRate ?? 0.08
+    this.manifoldDimensions      = options.manifoldDimensions      ?? 32
+    this.metaAttractorThreshold  = options.metaAttractorThreshold  ?? 0.65
 
     this.field = {
       signature: 0,
@@ -46,12 +46,14 @@ export class CELF_Engine_AI_V5 {
       noveltyPressure: 0,
       semanticMemory: [],
       archivedContinuity: [],
-      // ── V5.1 additions ──────────────────────
       localization: 0,
       coherenceRadius: 0,
       signalType: "noise",
-      lastSourceWeight: 1.0
-      // ────────────────────────────────────────
+      lastSourceWeight: 1.0,
+      manifold: new Float32Array(this.manifoldDimensions * this.manifoldDimensions),
+      manifoldAge: new Float32Array(this.manifoldDimensions * this.manifoldDimensions),
+      metaAttractors: [],
+      avgFieldCredibility: 1.0
     }
 
     this.rings = Array.from({ length: this.ringCount }, (_, r) =>
@@ -67,7 +69,7 @@ export class CELF_Engine_AI_V5 {
         semanticTrace: 0,
         intentTrace: 0,
         active: true,
-        credibility: 1.0  // ── V5.1
+        credibility: 1.0
       }))
     )
 
@@ -83,27 +85,21 @@ export class CELF_Engine_AI_V5 {
       attractors: [],
       history: [],
       archive: [],
-      // ── V5.1 additions ──────────────────────
       lastSourceWeight: 1.0,
-      lastPerturbationVector: []
-      // ────────────────────────────────────────
+      lastPerturbationVector: [],
+      attractorCredibilityLog: []
     }
 
     this.massTarget = this.massTarget ?? this.state.totalMass
   }
 
-  // ─────────────────────────────────────────────
-  //  process — V5.1: يقبل options.sourceWeight
-  // ─────────────────────────────────────────────
   process(input, options = {}) {
-    // ── V5.1 ──────────────────────────────────
     const sourceWeight = this.clamp01(options.sourceWeight ?? 1.0)
     this.state.lastSourceWeight = sourceWeight
     this.field.lastSourceWeight = sourceWeight
-    // ──────────────────────────────────────────
 
     const perturbation = this.perturb(input)
-    perturbation.sourceWeight = sourceWeight  // ── V5.1
+    perturbation.sourceWeight = sourceWeight
 
     const delta = this.deltaP(perturbation)
     const contained = this.containDelta(delta)
@@ -112,18 +108,19 @@ export class CELF_Engine_AI_V5 {
     this.diffuse()
     this.applyAttractors()
     this.conserveMass()
-    this.updateAttractors(perturbation)       // ── V5.1: يمرر perturbation
+    this.updateAttractors(perturbation)
     this.updateResiduals()
     this.updateConstraintDensity()
     this.updateActivity()
     this.updatePhase()
     this.updateFieldIdentity()
     this.updateSemanticField(perturbation)
-    this.updateSignalMetrics()                // ── V5.1: جديد
+    this.updateSignalMetrics()
+    this.updateManifold(perturbation)
+    this.updateEmergentCredibility(perturbation)
+    this.updateRecursiveCognition()
 
-    // ── V5.1 ──────────────────────────────────
     this.state.lastPerturbationVector = [...perturbation.semantic.vector]
-    // ──────────────────────────────────────────
 
     const snapshot = this.snapshot(perturbation, delta, contained)
     this.commit(snapshot)
@@ -166,7 +163,7 @@ export class CELF_Engine_AI_V5 {
       h2: Math.abs(h2 >>> 0),
       h3: Math.abs(h3 >>> 0),
       timestamp: Date.now(),
-      sourceWeight: 1.0  // ── V5.1: يُعيَّن في process()
+      sourceWeight: 1.0
     }
   }
 
@@ -320,13 +317,10 @@ export class CELF_Engine_AI_V5 {
     }
   }
 
-  // ─────────────────────────────────────────────
-  //  applyDelta — V5.1: يطبق sourceWeight
-  // ─────────────────────────────────────────────
   applyDelta(delta, perturbation = null) {
     const radius = Math.max(2, Math.floor(3 + delta.intensity * 32))
     const semanticWeight = delta.semanticWeight ?? 0
-    const sourceWeight = perturbation?.sourceWeight ?? 1.0  // ── V5.1
+    const sourceWeight = perturbation?.sourceWeight ?? 1.0
 
     const intentWeight = perturbation?.semantic
       ? this.clamp01(
@@ -362,7 +356,7 @@ export class CELF_Engine_AI_V5 {
           (1 - pressure) *
           (1 - density) *
           (1 + semanticWeight * 0.20) *
-          sourceWeight  // ── V5.1
+          sourceWeight
 
         const narrowing =
           pressure *
@@ -375,26 +369,24 @@ export class CELF_Engine_AI_V5 {
 
         cell.memory = this.clamp01(
           cell.memory * 0.985 +
-          proximity * ringDelta * 0.013 * sourceWeight +  // ── V5.1
+          proximity * ringDelta * 0.013 * sourceWeight +
           proximity * semanticWeight * 0.004
         )
 
         cell.semanticTrace = this.clamp01(
           (cell.semanticTrace ?? 0) * 0.992 +
-          proximity * semanticWeight * 0.008 * sourceWeight  // ── V5.1
+          proximity * semanticWeight * 0.008 * sourceWeight
         )
 
         cell.intentTrace = this.clamp01(
           (cell.intentTrace ?? 0) * 0.990 +
-          proximity * intentWeight * 0.010 * sourceWeight    // ── V5.1
+          proximity * intentWeight * 0.010 * sourceWeight
         )
 
-        // ── V5.1: credibility تتراكم مرجّحة بالمصدر ──
         cell.credibility = this.clamp01(
           (cell.credibility ?? 1.0) * 0.99 +
           proximity * sourceWeight * 0.01
         )
-        // ────────────────────────────────────────────
       }
     }
   }
@@ -480,10 +472,6 @@ export class CELF_Engine_AI_V5 {
     }
   }
 
-  // ─────────────────────────────────────────────
-  //  updateAttractors — V5.1: signal filter + decay
-  //  يقبل perturbation كمعامل اختياري
-  // ─────────────────────────────────────────────
   updateAttractors(perturbation = null) {
     const candidates = []
 
@@ -512,9 +500,12 @@ export class CELF_Engine_AI_V5 {
             constraintDensity: cell.constraintDensity,
             semanticWeight: cell.semanticTrace ?? 0,
             intentWeight: cell.intentTrace ?? 0,
-            credibility: cell.credibility ?? 1.0,          // ── V5.1
+            credibility: cell.credibility ?? 1.0,
+            emergentCredibility: cell.credibility ?? 1.0,
             strength: score,
-            semanticVector: [...(perturbation?.semantic?.vector ?? [])]  // ── V5.1
+            semanticVector: [...(perturbation?.semantic?.vector ?? [])],
+            predictionScore: 0,
+            predictionCount: 0
           })
         }
       }
@@ -522,12 +513,10 @@ export class CELF_Engine_AI_V5 {
 
     candidates.sort((a, b) => b.strength - a.strength)
 
-    // ── V5.1: signal discrimination ──────────────
     const L = this.field.localization
     const signalFactor = this.field.signalType === "signal"
       ? 1.0
       : 0.4 + L * 0.6
-    // ─────────────────────────────────────────────
 
     const selected = []
 
@@ -536,16 +525,13 @@ export class CELF_Engine_AI_V5 {
         a.r === c.r && this.circularIndexDistance(a.i, c.i) < 6
       )
       if (!tooClose) {
-        // ── V5.1: تطبيق عامل الإشارة والمصداقية ──
         c.strength *= signalFactor
-        c.strength *= (c.credibility ?? 1.0)
-        // ──────────────────────────────────────────
+        c.strength *= (c.emergentCredibility ?? 1.0)
         selected.push(c)
       }
       if (selected.length >= this.attractorLimit) break
     }
 
-    // ── V5.1: attractor decay عند التناقض ────────
     if (perturbation?.semantic?.vector?.length) {
       const newVec = perturbation.semantic.vector
       for (const a of selected) {
@@ -560,10 +546,12 @@ export class CELF_Engine_AI_V5 {
           a.stability  = a.stability
             ? a.stability * (1 - this.decayRate * 0.8)
             : 0
+          a.emergentCredibility = this.clamp01(
+            (a.emergentCredibility ?? 1.0) - this.credibilityLearningRate * 1.5
+          )
         }
       }
     }
-    // ─────────────────────────────────────────────
 
     this.state.attractors = this.interactAttractors(selected)
   }
@@ -676,10 +664,8 @@ export class CELF_Engine_AI_V5 {
 
     if (this.state.t < 8) {
       phase = "warmup"
-    // ── V5.1: طور noise جديد ──────────────────
     } else if (this.field.signalType === "noise" && m.entropy > 0.70) {
       phase = "noise"
-    // ──────────────────────────────────────────
     } else if (m.pressure > 0.70 && m.entropy > 0.65) {
       phase = "turbulent"
     } else if (m.aliveRatio < 0.25) {
@@ -768,7 +754,8 @@ export class CELF_Engine_AI_V5 {
         i: a.i,
         strength: this.round4(a.strength),
         semanticWeight: this.round4(a.semanticWeight ?? 0),
-        credibility: this.round4(a.credibility ?? 1.0)  // ── V5.1
+        credibility: this.round4(a.credibility ?? 1.0),
+        emergentCredibility: this.round4(a.emergentCredibility ?? 1.0)
       }))
     })
 
@@ -855,8 +842,8 @@ export class CELF_Engine_AI_V5 {
       coherence: this.field.semanticCoherence,
       novelty: this.field.noveltyPressure,
       phase: this.state.phase,
-      signalType: this.field.signalType,           // ── V5.1
-      sourceWeight: perturbation.sourceWeight ?? 1.0  // ── V5.1
+      signalType: this.field.signalType,
+      sourceWeight: perturbation.sourceWeight ?? 1.0
     }
 
     this.field.semanticMemory.push(record)
@@ -869,7 +856,7 @@ export class CELF_Engine_AI_V5 {
         grounding: old.grounding,
         coherence: old.coherence,
         phase: old.phase,
-        signalType: old.signalType  // ── V5.1
+        signalType: old.signalType
       })
     }
 
@@ -878,10 +865,6 @@ export class CELF_Engine_AI_V5 {
     }
   }
 
-  // ─────────────────────────────────────────────
-  //  V5.1 — updateSignalMetrics (دالة جديدة)
-  //  تُحسب بعد كل process()
-  // ─────────────────────────────────────────────
   updateSignalMetrics() {
     const ps = []
     for (const ring of this.rings)
@@ -896,10 +879,6 @@ export class CELF_Engine_AI_V5 {
     this.field.signalType      = L > this.localizationThreshold ? "signal" : "noise"
   }
 
-  // ─────────────────────────────────────────────
-  //  V5.1 — computeCoherenceRadius (دالة جديدة)
-  //  نصف قطر الإشارة حول أقوى جاذب
-  // ─────────────────────────────────────────────
   computeCoherenceRadius() {
     const top = this.state.attractors[0]
     if (!top) return 0
@@ -912,6 +891,160 @@ export class CELF_Engine_AI_V5 {
       radius = i
     }
     return radius
+  }
+
+  updateManifold(perturbation) {
+    const vec = perturbation.semantic.vector
+    const D   = this.manifoldDimensions
+    const sw  = perturbation.sourceWeight ?? 1.0
+
+    const cx = Math.min(Math.abs(Math.floor((vec[0] ?? 0) * (D - 1))), D - 1)
+    const cy = Math.min(Math.abs(Math.floor((vec[1] ?? 0) * (D - 1))), D - 1)
+    const radius = Math.max(1, Math.floor(2 + this.field.semanticCoherence * 4))
+
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dy = -radius; dy <= radius; dy++) {
+        const nx = ((cx + dx) % D + D) % D
+        const ny = ((cy + dy) % D + D) % D
+        const dist = Math.sqrt(dx * dx + dy * dy)
+        const proximity = Math.max(0, 1 - dist / (radius + 1))
+        const idx = nx * D + ny
+
+        this.field.manifold[idx] = this.clamp01(
+          this.field.manifold[idx] * 0.97 +
+          proximity * sw * 0.03
+        )
+        this.field.manifoldAge[idx] = this.clamp01(
+          (this.field.manifoldAge[idx] ?? 0) * 0.995 +
+          proximity * 0.005
+        )
+      }
+    }
+
+    const last = this.field.semanticMemory.at(-2)
+    if (last?.vector) {
+      const bx = Math.min(Math.abs(Math.floor((last.vector[0] ?? 0) * (D - 1))), D - 1)
+      const by = Math.min(Math.abs(Math.floor((last.vector[1] ?? 0) * (D - 1))), D - 1)
+      const steps = 4
+      for (let s = 1; s <= steps; s++) {
+        const lx = Math.round(bx + (cx - bx) * s / steps)
+        const ly = Math.round(by + (cy - by) * s / steps)
+        const lidx = lx * D + ly
+        this.field.manifold[lidx] = this.clamp01(
+          (this.field.manifold[lidx] ?? 0) + 0.008 * sw
+        )
+      }
+    }
+  }
+
+  updateEmergentCredibility(perturbation) {
+    const currentVec = perturbation.semantic.vector
+    const prevVec    = this.state.lastPerturbationVector
+    const sw         = perturbation.sourceWeight ?? 1.0
+
+    if (!prevVec.length || !this.state.attractors.length) return
+
+    for (const a of this.state.attractors) {
+      if (!a.semanticVector?.length) continue
+
+      const alignedWithCurrent = this.cosineSimilarity(currentVec, a.semanticVector)
+      const alignedWithPrev    = this.cosineSimilarity(prevVec,    a.semanticVector)
+      const predictionAccuracy = this.clamp01(1 - Math.abs(alignedWithCurrent - alignedWithPrev))
+
+      const wasCorrect = predictionAccuracy > 0.65
+      const reward = wasCorrect
+        ? this.credibilityLearningRate * sw
+        : -this.credibilityLearningRate * 1.2 * (1 - sw + 0.1)
+
+      a.emergentCredibility = this.clamp01(
+        (a.emergentCredibility ?? 1.0) + reward
+      )
+
+      a.predictionScore = this.round4(predictionAccuracy)
+      a.predictionCount = (a.predictionCount ?? 0) + 1
+
+      const cell = this.rings[a.r]?.[a.i]
+      if (cell) {
+        cell.credibility = this.clamp01(
+          cell.credibility * 0.92 +
+          (a.emergentCredibility ?? 1.0) * 0.08
+        )
+      }
+    }
+
+    const credibilities = this.state.attractors.map(a => a.emergentCredibility ?? 1.0)
+    this.field.avgFieldCredibility = credibilities.length
+      ? this.round4(this.average(credibilities))
+      : 1.0
+
+    this.state.attractorCredibilityLog.push({
+      t:   this.state.t,
+      avg: this.field.avgFieldCredibility
+    })
+
+    if (this.state.attractorCredibilityLog.length > 64) {
+      this.state.attractorCredibilityLog.shift()
+    }
+  }
+
+  updateRecursiveCognition() {
+    const attractors = this.state.attractors
+    if (attractors.length < 2) return
+
+    for (let x = 0; x < attractors.length; x++) {
+      for (let y = x + 1; y < attractors.length; y++) {
+        const a = attractors[x]
+        const b = attractors[y]
+
+        if (!a.semanticVector?.length || !b.semanticVector?.length) continue
+
+        const semantic = this.cosineSimilarity(a.semanticVector, b.semanticVector)
+
+        if (semantic < this.contradictionThreshold) {
+          const stronger = (a.emergentCredibility ?? 1) >= (b.emergentCredibility ?? 1) ? a : b
+          const weaker   = stronger === a ? b : a
+          weaker.strength  = this.clamp01(weaker.strength  * (1 - 0.12 * (stronger.emergentCredibility ?? 1)))
+          weaker.stability = this.clamp01((weaker.stability ?? 0) * (1 - 0.10 * (stronger.emergentCredibility ?? 1)))
+        }
+
+        if (semantic > 0.75) {
+          const boost = 0.06 * Math.min(a.emergentCredibility ?? 1, b.emergentCredibility ?? 1)
+          a.strength = this.clamp01(a.strength + boost)
+          b.strength = this.clamp01(b.strength + boost)
+        }
+      }
+    }
+
+    const metaCandidates = []
+    for (let x = 0; x < attractors.length; x++) {
+      for (let y = x + 1; y < attractors.length; y++) {
+        const a = attractors[x]
+        const b = attractors[y]
+        if (!a.semanticVector?.length || !b.semanticVector?.length) continue
+
+        const sim = this.cosineSimilarity(a.semanticVector, b.semanticVector)
+        const jointStrength    = (a.strength + b.strength) / 2
+        const jointCredibility = ((a.emergentCredibility ?? 1) + (b.emergentCredibility ?? 1)) / 2
+
+        if (
+          sim > 0.70 &&
+          jointStrength > this.metaAttractorThreshold &&
+          jointCredibility > 0.55
+        ) {
+          metaCandidates.push({
+            sourceA:            x,
+            sourceB:            y,
+            strength:           this.round4(jointStrength),
+            emergentCredibility: this.round4(jointCredibility),
+            semanticVector:     a.semanticVector.map((v, i) => (v + (b.semanticVector[i] ?? 0)) / 2),
+            theta:              (a.theta + b.theta) / 2,
+            similarity:         this.round4(sim)
+          })
+        }
+      }
+    }
+
+    this.field.metaAttractors = metaCandidates.slice(0, 4)
   }
 
   metrics() {
@@ -956,11 +1089,9 @@ export class CELF_Engine_AI_V5 {
         )
       : 0
 
-    // ── V5.1: localization ──────────────────────
     const maxP = Math.max(...ps)
     const sumP = ps.reduce((a, b) => a + b, 0)
     const localization = sumP > 0 ? maxP / sumP : 0
-    // ────────────────────────────────────────────
 
     return {
       mean: this.round4(mean),
@@ -975,11 +1106,11 @@ export class CELF_Engine_AI_V5 {
       intentMass: this.round4(intentMass),
       totalMass: this.round4(this.totalMass()),
       massError: this.round4(Math.abs(this.totalMass() - this.massTarget)),
-      // ── V5.1 additions ──────────────────────
-      localization:    this.round4(localization),
-      coherenceRadius: this.field.coherenceRadius ?? 0,
-      signalType:      this.field.signalType       ?? "noise"
-      // ────────────────────────────────────────
+      localization:        this.round4(localization),
+      coherenceRadius:     this.field.coherenceRadius ?? 0,
+      signalType:          this.field.signalType       ?? "noise",
+      avgFieldCredibility: this.field.avgFieldCredibility ?? 1.0,
+      metaAttractorCount:  this.field.metaAttractors?.length ?? 0
     }
   }
 
@@ -994,7 +1125,7 @@ export class CELF_Engine_AI_V5 {
         numeric: perturbation.numeric,
         rupture: perturbation.rupture,
         spread: perturbation.spread,
-        sourceWeight: perturbation.sourceWeight ?? 1.0,  // ── V5.1
+        sourceWeight: perturbation.sourceWeight ?? 1.0,
         semantic: {
           words: perturbation.semantic.words,
           unique: perturbation.semantic.unique,
@@ -1025,14 +1156,17 @@ export class CELF_Engine_AI_V5 {
       semantic: this.getSemanticState(),
       control: this.getControlGuidance(),
       metrics: this.metrics(),
-      // ── V5.1: signal block ──────────────────
       signal: {
         localization:    this.field.localization,
         coherenceRadius: this.field.coherenceRadius,
         signalType:      this.field.signalType,
         sourceWeight:    this.field.lastSourceWeight
       },
-      // ────────────────────────────────────────
+      cognition: {
+        avgFieldCredibility: this.field.avgFieldCredibility,
+        metaAttractors:      this.field.metaAttractors,
+        credibilityLog:      this.state.attractorCredibilityLog.slice(-8)
+      },
       attractors: this.state.attractors.map(a => ({
         r: a.r,
         i: a.i,
@@ -1043,7 +1177,10 @@ export class CELF_Engine_AI_V5 {
         constraintDensity: this.round4(a.constraintDensity ?? 0),
         semanticWeight: this.round4(a.semanticWeight ?? 0),
         intentWeight: this.round4(a.intentWeight ?? 0),
-        credibility: this.round4(a.credibility ?? 1.0)  // ── V5.1
+        credibility: this.round4(a.credibility ?? 1.0),
+        emergentCredibility: this.round4(a.emergentCredibility ?? 1.0),
+        predictionScore: this.round4(a.predictionScore ?? 0),
+        predictionCount: a.predictionCount ?? 0
       }))
     }
   }
@@ -1062,7 +1199,8 @@ export class CELF_Engine_AI_V5 {
         fieldCurvature: old?.metrics?.fieldCurvature ?? 0,
         semanticMass: old?.metrics?.semanticMass ?? 0,
         semanticGrounding: old?.field?.semanticGrounding ?? 0,
-        signalType: old?.signal?.signalType ?? "noise",  // ── V5.1
+        signalType: old?.signal?.signalType ?? "noise",
+        avgFieldCredibility: old?.cognition?.avgFieldCredibility ?? 1.0,
         phase: old?.phase ?? null,
         t: old?.t ?? 0
       })
@@ -1097,7 +1235,7 @@ export class CELF_Engine_AI_V5 {
         phase: item.phase,
         theta: item.theta,
         signature: item.signature,
-        signalType: item.signalType ?? "noise",  // ── V5.1
+        signalType: item.signalType ?? "noise",
         score: this.round4(
           this.cosineSimilarity(vector, item.vector) * 0.55 +
           item.grounding * 0.18 +
@@ -1115,7 +1253,7 @@ export class CELF_Engine_AI_V5 {
       this.state.phase === "drift"     ? "clarify"  :
       this.state.phase === "emergent"  ? "explore"  :
       this.state.phase === "locked"    ? "compress" :
-      this.state.phase === "noise"     ? "filter"   :  // ── V5.1
+      this.state.phase === "noise"     ? "filter"   :
       "balance"
 
     const depth =
@@ -1126,15 +1264,14 @@ export class CELF_Engine_AI_V5 {
     return {
       mode,
       depth,
-      contextUse:         this.round4(this.clamp01(this.field.routingPressure)),
-      compression:        this.round4(this.clamp01(this.field.compressionPressure)),
-      recall:             this.round4(this.clamp01(this.field.recallPotential)),
-      grounding:          this.round4(this.clamp01(this.field.semanticGrounding)),
-      executionReadiness: this.round4(this.clamp01(this.field.executionReadiness)),
-      // ── V5.1 additions ──────────────────────
-      signalType:   this.field.signalType,
-      localization: this.field.localization
-      // ────────────────────────────────────────
+      contextUse:          this.round4(this.clamp01(this.field.routingPressure)),
+      compression:         this.round4(this.clamp01(this.field.compressionPressure)),
+      recall:              this.round4(this.clamp01(this.field.recallPotential)),
+      grounding:           this.round4(this.clamp01(this.field.semanticGrounding)),
+      executionReadiness:  this.round4(this.clamp01(this.field.executionReadiness)),
+      signalType:          this.field.signalType,
+      localization:        this.field.localization,
+      avgFieldCredibility: this.field.avgFieldCredibility
     }
   }
 
@@ -1175,12 +1312,12 @@ export class CELF_Engine_AI_V5 {
       lastStablePhase:     this.field.lastStablePhase,
       phaseHistory:        [...this.field.phaseHistory],
       attractorTrace:      [...this.field.attractorTrace],
-      // ── V5.1 additions ──────────────────────
-      localization:     this.field.localization,
-      coherenceRadius:  this.field.coherenceRadius,
-      signalType:       this.field.signalType,
-      lastSourceWeight: this.field.lastSourceWeight
-      // ────────────────────────────────────────
+      localization:        this.field.localization,
+      coherenceRadius:     this.field.coherenceRadius,
+      signalType:          this.field.signalType,
+      lastSourceWeight:    this.field.lastSourceWeight,
+      avgFieldCredibility: this.field.avgFieldCredibility,
+      metaAttractorCount:  this.field.metaAttractors?.length ?? 0
     }
   }
 
@@ -1194,7 +1331,7 @@ export class CELF_Engine_AI_V5 {
         constraintDensity: this.round4(c.constraintDensity ?? 0),
         semanticTrace:     this.round4(c.semanticTrace ?? 0),
         intentTrace:       this.round4(c.intentTrace ?? 0),
-        credibility:       this.round4(c.credibility  ?? 1.0),  // ── V5.1
+        credibility:       this.round4(c.credibility  ?? 1.0),
         active:            c.active
       }))
     )
@@ -1202,28 +1339,30 @@ export class CELF_Engine_AI_V5 {
 
   getSummary() {
     return {
-      version:       "CELF-V5",
-      phase:         this.state.phase,
-      t:             this.state.t,
-      cycle:         this.cycle,
-      resolution:    this.resolution,
-      ringCount:     this.ringCount,
-      signature:     this.round4(this.state.signature),
-      cycleCount:    this.state.cycleCount,
-      field:         this.getFieldIdentity(),
-      semantic:      this.getSemanticState(),
-      control:       this.getControlGuidance(),
-      metrics:       this.metrics(),
+      version:        "CELF-V5",
+      phase:          this.state.phase,
+      t:              this.state.t,
+      cycle:          this.cycle,
+      resolution:     this.resolution,
+      ringCount:      this.ringCount,
+      signature:      this.round4(this.state.signature),
+      cycleCount:     this.state.cycleCount,
+      field:          this.getFieldIdentity(),
+      semantic:       this.getSemanticState(),
+      control:        this.getControlGuidance(),
+      metrics:        this.metrics(),
       attractorCount: this.state.attractors.length,
-      archiveSize:   this.state.archive.length,
-      // ── V5.1 additions ──────────────────────
+      archiveSize:    this.state.archive.length,
       signal: {
         localization:     this.field.localization,
         coherenceRadius:  this.field.coherenceRadius,
         signalType:       this.field.signalType,
         lastSourceWeight: this.field.lastSourceWeight
+      },
+      cognition: {
+        avgFieldCredibility: this.field.avgFieldCredibility,
+        metaAttractorCount:  this.field.metaAttractors?.length ?? 0
       }
-      // ────────────────────────────────────────
     }
   }
 
@@ -1254,10 +1393,9 @@ export class CELF_Engine_AI_V5 {
       residualRetention: noisy.residualMass,
       curvatureShift:    this.round4(noisy.fieldCurvature - clean.fieldCurvature),
       semanticShift:     this.round4(noisy.semanticMass - clean.semanticMass),
-      // ── V5.1 ──────────────────────────────
       localizationShift: this.round4(noisy.localization - clean.localization),
-      signalType:        noisy.signalType
-      // ──────────────────────────────────────
+      signalType:        noisy.signalType,
+      credibilityShift:  this.round4((noisy.avgFieldCredibility ?? 1) - (clean.avgFieldCredibility ?? 1))
     }
   }
 
@@ -1359,7 +1497,7 @@ export class CELF_Engine_AI_V5 {
         c.constraintDensity = 0
         c.semanticTrace = 0
         c.intentTrace = 0
-        c.credibility = 1.0  // ── V5.1
+        c.credibility = 1.0
         c.active = true
       }
     }
@@ -1375,10 +1513,12 @@ export class CELF_Engine_AI_V5 {
       recallPotential: 0, routingPressure: 0,
       compressionPressure: 0, noveltyPressure: 0,
       semanticMemory: [], archivedContinuity: [],
-      // ── V5.1 ──────────────────────────────
       localization: 0, coherenceRadius: 0,
-      signalType: "noise", lastSourceWeight: 1.0
-      // ──────────────────────────────────────
+      signalType: "noise", lastSourceWeight: 1.0,
+      manifold: new Float32Array(this.manifoldDimensions * this.manifoldDimensions),
+      manifoldAge: new Float32Array(this.manifoldDimensions * this.manifoldDimensions),
+      metaAttractors: [],
+      avgFieldCredibility: 1.0
     }
 
     this.state = {
@@ -1386,10 +1526,9 @@ export class CELF_Engine_AI_V5 {
       cycleCount: 0, lastTheta: 0, lastIndex: 0,
       lastDeltaTheta: 0, totalMass: this.totalMass(),
       attractors: [], history: [], archive: [],
-      // ── V5.1 ──────────────────────────────
       lastSourceWeight: 1.0,
-      lastPerturbationVector: []
-      // ──────────────────────────────────────
+      lastPerturbationVector: [],
+      attractorCredibilityLog: []
     }
 
     this.massTarget = this.totalMass()
