@@ -1,13 +1,14 @@
 /**
- * lightweight-parser.js — v2.0
+ * lightweight-parser.js — v2.1
  *
  * دور محدود ومقصود:
- * 1. noise guard  — رفض الإدخال الفارغ أو غير القابل للمعالجة
+ * 1. noise guard        — رفض الإدخال الفارغ أو غير القابل للمعالجة
  * 2. language detection — ar / en / mixed
- * 3. حساب numericSeed أولي للـ logging
+ * 3. numericSeed        — للـ logging فقط
+ * 4. rupture detection  — جديد V2.1 — يوحّد مصدر الكشف مع V5
  *
  * كل التحليل العميق (intent, drift, continuity, abstraction...)
- * يحدث داخل CELF_Engine_AI.buildSemanticField — لا تكرار هنا.
+ * يحدث داخل CELF_Engine_AI_V5 — لا تكرار هنا.
  */
 
 // ─────────────────────────────────────────────
@@ -27,7 +28,7 @@ function isNoise(text, tokens) {
 
 function detectLanguage(text) {
   const arabicChars = (text.match(/[\u0600-\u06FF]/g) || []).length
-  const latinChars  = (text.match(/[a-zA-Z]/g) || []).length
+  const latinChars  = (text.match(/[a-zA-Z]/g)        || []).length
   const totalChars  = text.replace(/\s/g, '').length
 
   if (totalChars === 0) return 'unknown'
@@ -36,8 +37,8 @@ function detectLanguage(text) {
   const enRatio = latinChars  / totalChars
 
   if (arRatio > 0.4 && enRatio > 0.1) return 'mixed'
-  if (arRatio > 0.4) return 'ar'
-  if (arRatio > 0.1) return 'mixed'
+  if (arRatio > 0.4)                   return 'ar'
+  if (arRatio > 0.1)                   return 'mixed'
   return 'en'
 }
 
@@ -52,6 +53,18 @@ function computeNumericSeed(tokens, lang) {
 }
 
 // ─────────────────────────────────────────────
+//  Rupture detection — v2.1
+//  يُوحِّد الكشف مع ما يحسبه CELF_Engine_AI_V5
+//  داخل perturb() لتجنب التضارب
+// ─────────────────────────────────────────────
+
+function detectRupture(text) {
+  return (
+    text.match(/[!?@#]{2,}|ERROR|timeout|retry|fail|panic|فشل|خطأ/gi) ?? []
+  ).length
+}
+
+// ─────────────────────────────────────────────
 //  Main export
 // ─────────────────────────────────────────────
 
@@ -60,9 +73,9 @@ export function parse(text) {
     return { valid: false, reason: 'empty_input' }
   }
 
-  const trimmed  = text.trim()
-  const tokens   = trimmed.split(/\s+/).filter(Boolean)
-  const noise    = isNoise(trimmed, tokens)
+  const trimmed = text.trim()
+  const tokens  = trimmed.split(/\s+/).filter(Boolean)
+  const noise   = isNoise(trimmed, tokens)
 
   if (noise) {
     return { valid: false, reason: 'noise' }
@@ -70,14 +83,16 @@ export function parse(text) {
 
   const lang        = detectLanguage(trimmed)
   const numericSeed = computeNumericSeed(tokens, lang)
+  const rupture     = detectRupture(trimmed)   // v2.1
 
   return {
     valid:      true,
     lang,
     wordCount:  tokens.length,
     charCount:  trimmed.length,
-    numericSeed
+    numericSeed,
+    rupture                                    // v2.1 — للـ logging والـ severity
     // intent / topic / drift / continuity / abstraction
-    // → computed by CELF_Engine_AI internally
+    // → computed by CELF_Engine_AI_V5 internally
   }
 }
