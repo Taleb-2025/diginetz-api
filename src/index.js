@@ -1,15 +1,15 @@
 import express from 'express'
 import cors from 'cors'
 
-import cycleguardRoute        from './api/cycleguard.route.js'
+import cycleguardRoute from './api/cycleguard.route.js'
 import cycleguardSessionRoute from './api/cycleguard-session.route.js'
-import identityRoute          from './api/identity.route.js'
-import celfRoute              from './api/celf.route.js'
-import processTextRoute       from './api/process-text.route.js'
+import identityRoute from './api/identity.route.js'
+import celfRoute from './api/celf.route.js'
+import processTextRoute from './api/process-text.route.js'
 
-import { CELF_Engine_V8 }     from './engines/CELF_Engine_V8.js'
+import { CELF_Engine_AI_V5 } from './engines/celf-engine-v5.js'
 
-const app  = express()
+const app = express()
 
 const PORT =
   process.env.PORT || 8080
@@ -45,15 +45,11 @@ function getMonitor(key) {
   }
 
   const engine =
-    new CELF_Engine_V8({
+    new CELF_Engine_AI_V5({
 
       resolution: 400,
 
-      cycle: 3000,
-
-      windowSize: 128,
-
-      thresholdFactor: 2.0
+      cycle: 3000
     })
 
   monitors.set(key, engine)
@@ -148,19 +144,40 @@ app.use((req, res, next) => {
       getMonitor(key)
 
     const result =
-      monitor.observe(value)
+      monitor.process({
+
+        value,
+
+        route:
+          req.path,
+
+        method:
+          req.method,
+
+        status:
+          res.statusCode,
+
+        duration
+      })
 
     if (result.phase === 'warmup') {
       return
     }
 
+    const confidence =
+      Number(
+        result.field?.semanticGrounding ?? 1
+      )
+
     const isAnomaly =
 
-      result.impossible ||
+      result.phase === 'turbulent' ||
+
+      result.phase === 'drift' ||
 
       (
-        result.confidence < 0.25 &&
-        result.phase === 'active'
+        confidence < 0.25 &&
+        result.phase !== 'locked'
       )
 
     if (!isAnomaly) {
@@ -195,17 +212,20 @@ app.use((req, res, next) => {
       phase:
         result.phase,
 
-      maturityScore:
-        result.maturityScore,
+      coherence:
+        result.field?.coherence,
 
-      confidence:
-        result.confidence,
+      drift:
+        result.field?.drift,
 
-      threshold:
-        result.threshold,
+      resonance:
+        result.field?.resonance,
 
-      jump:
-        result.jump
+      entropy:
+        result.metrics?.entropy,
+
+      signalType:
+        result.signal?.signalType
     })
 
     if (list.length > 50) {
@@ -299,7 +319,7 @@ app.get('/', (_req, res) => {
       'DigiNetz TSL Core',
 
     engine:
-      'TSL + CPSE + CELF AI',
+      'CELF_Engine_AI_V5',
 
     status:
       'RUNNING'
