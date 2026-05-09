@@ -1,170 +1,130 @@
-/**
- * context-builder.js — v3.0
- *
- * مُكيَّف بالكامل مع CELF_Engine_AI_V5 snapshot:
- *   snapshot.phase          — الطور المحسوب مباشرة
- *   snapshot.field          — coherence, drift, resonance, emergence, noveltyPressure...
- *   snapshot.metrics        — entropy, attractorStrength, pressure, aliveRatio...
- *   snapshot.control        — mode, depth, contextUse, recall, grounding, executionReadiness
- *   snapshot.perturbation   — semantic.intent, semantic.question, semantic.command...
- *   snapshot.attractors     — قائمة الجذابات النشطة
- *
- * V5 يحسب الطور داخلياً → نثق به مباشرة بدون إعادة حساب.
- */
-
-// ─────────────────────────────────────────────
-//  Intent mapping — من perturbation.semantic
-// ─────────────────────────────────────────────
-
 function mapIntent(celfResult) {
-  const s = celfResult.perturbation?.semantic
+  const s = celfResult?.perturbation?.semantic
   if (!s) return 'statement'
-  if (s.question)        return 'question'
+  if (s.question) return 'question'
   if (s.intent?.execute) return 'command'
-  if (s.error)           return 'complaint'
-  if (s.emotional)       return 'emotional'
+  if (s.error) return 'complaint'
+  if (s.emotional) return 'emotional'
   return 'statement'
 }
 
-// ─────────────────────────────────────────────
-//  Reasoning mode — من perturbation.semantic
-// ─────────────────────────────────────────────
-
 function mapReasoningMode(celfResult) {
-  const s = celfResult.perturbation?.semantic
+  const s = celfResult?.perturbation?.semantic
   if (!s) return 'neutral'
   if (s.reasoning) return 'analytical'
-  if (s.code)      return 'generative'
+  if (s.code) return 'generative'
   if (s.emotional) return 'reflective'
-  if (s.data)      return 'analytical'
+  if (s.data) return 'analytical'
   return 'neutral'
 }
-
-// ─────────────────────────────────────────────
-//  Severity — كم النظام مستقر؟ (V5 fields)
-// ─────────────────────────────────────────────
 
 function resolveSeverity(celfResult) {
   if (!celfResult) return 'low'
 
-  const resonance      = Number(celfResult.field?.resonance         ?? 0)
-  const stability      = Number(celfResult.metrics?.attractorStrength ?? 0)
-  const topicPressure  = Number(celfResult.field?.topicPressure     ?? 0)
-  const entropy        = Number(celfResult.metrics?.entropy          ?? 0)
+  const resonance = Number(celfResult.field?.resonance ?? 0)
+  const stability = Number(celfResult.metrics?.attractorStrength ?? 0)
+  const topicPressure = Number(celfResult.field?.topicPressure ?? 0)
+  const entropy = Number(celfResult.metrics?.entropy ?? 0)
 
-  // ضغط عالٍ + فوضى + رنين منخفض = غير مستقر
   if (topicPressure > 0.65 && entropy > 0.6 && resonance < 0.35) return 'high'
-  if (topicPressure > 0.50 && resonance < 0.45)                   return 'medium'
-  if (stability > 0.75 && resonance > 0.55)                       return 'low'
+  if (topicPressure > 0.5 && resonance < 0.45) return 'medium'
+  if (stability > 0.75 && resonance > 0.55) return 'low'
 
   return 'low'
 }
 
-// ─────────────────────────────────────────────
-//  Pattern — طبيعة الحالة الحالية (V5)
-// ─────────────────────────────────────────────
-
 function resolvePattern(celfResult) {
   if (!celfResult) return 'stable'
 
-  // V5 يُنتج phase — نشتق منه pattern
-  const phase   = celfResult.phase                          ?? 'stable'
-  const momentum= Number(celfResult.field?.momentum         ?? 0)
-  const drift   = Number(celfResult.field?.drift            ?? 0)
-  const emergence= Number(celfResult.field?.emergence       ?? 0)
-  const novelty = Number(celfResult.field?.noveltyPressure  ?? 0)
-  const intent  = mapIntent(celfResult)
+  const phase = celfResult.phase ?? 'stable'
+  const momentum = Number(celfResult.field?.momentum ?? 0)
+  const drift = Number(celfResult.field?.drift ?? 0)
+  const emergence = Number(celfResult.field?.emergence ?? 0)
+  const novelty = Number(celfResult.field?.noveltyPressure ?? 0)
+  const intent = mapIntent(celfResult)
 
-  // خريطة مباشرة من phase إلى pattern
-  if (phase === 'turbulent')  return 'unstable'
-  if (phase === 'drift')      return 'shifting'
-  if (phase === 'emergent')   return 'emerging'
-  if (phase === 'locked')     return 'stable'
+  if (phase === 'noise') return 'noise'
+  if (phase === 'turbulent') return 'unstable'
+  if (phase === 'drift') return 'shifting'
+  if (phase === 'emergent') return 'emerging'
+  if (phase === 'locked') return 'stable'
   if (phase === 'compressed') return 'compressed'
-
-  // fallback من المقاييس
   if (momentum > 0.7 && drift > 0.5) return 'shifting'
-  if (emergence > 0.55)              return 'emerging'
-  if (novelty > 0.6)                 return 'exploring'
-  if (intent === 'greeting')         return 'social'
+  if (emergence > 0.55) return 'emerging'
+  if (novelty > 0.6) return 'exploring'
+  if (intent === 'greeting') return 'social'
 
   return 'stable'
 }
 
-// ─────────────────────────────────────────────
-//  Phase — V5 يحسبه مباشرة، نثق به
-// ─────────────────────────────────────────────
-
 function resolvePhase(celfResult) {
   if (!celfResult) return 'warmup'
 
-  // V5 phase مباشرة — أدق من إعادة الحساب
-  const v5phase = celfResult.phase
-  if (v5phase) return v5phase
+  const phase = celfResult.phase
+  if (phase) return phase
 
-  // fallback
   const stability = Number(celfResult.metrics?.attractorStrength ?? 0)
-  const emergence = Number(celfResult.field?.emergence           ?? 0)
-  const t         = Number(celfResult.t                          ?? 0)
+  const emergence = Number(celfResult.field?.emergence ?? 0)
+  const t = Number(celfResult.t ?? 0)
 
-  if (t < 8)                              return 'warmup'
+  if (t < 8) return 'warmup'
   if (emergence > 0.55 && stability > 0.55) return 'crystallizing'
-  if (stability > 0.7)                    return 'mature'
+  if (stability > 0.7) return 'mature'
+
   return 'emergent'
 }
 
-// ─────────────────────────────────────────────
-//  Main build()
-// ─────────────────────────────────────────────
-
-export function build(adapterOutput) {
-  const { ok, signals, celfResult, passToLLM } = adapterOutput
+export function build(adapterOutput = {}) {
+  const {
+    ok = false,
+    signals = {},
+    celfResult = {},
+    passToLLM = true
+  } = adapterOutput
 
   if (!ok) {
-    return { passToLLM: false, reason: 'invalid_input', context: null, systemHint: null }
+    return {
+      passToLLM: false,
+      reason: 'invalid_input',
+      context: null,
+      systemHint: null
+    }
   }
 
   const severity = resolveSeverity(celfResult)
-  const pattern  = resolvePattern(celfResult)
-  const phase    = resolvePhase(celfResult)
-  const intent   = mapIntent(celfResult)
+  const pattern = resolvePattern(celfResult)
+  const phase = resolvePhase(celfResult)
+  const intent = mapIntent(celfResult)
   const reasoningMode = mapReasoningMode(celfResult)
 
   const context = {
-    // من parser
-    lang:      signals.lang,
-    wordCount: signals.wordCount,
-    rupture:   signals.rupture ?? 0,           // v2.1
-
-    // intent & mode (مشتق من V5 perturbation)
+    lang: signals.lang ?? 'unknown',
+    wordCount: signals.wordCount ?? 0,
+    rupture: signals.rupture ?? 0,
     intent,
     reasoningMode,
-
-    // من V5 field
-    drift:              Number(celfResult.field?.drift              ?? 0),
-    driftAcceleration:  Number(celfResult.field?.momentum           ?? 0), // تقريب
-    coherence:          Number(celfResult.field?.coherence          ?? 0),
-    entropy:            Number(celfResult.metrics?.entropy          ?? 0),
-    confidence:         Number(celfResult.field?.semanticGrounding  ?? 0),
-    resonance:          Number(celfResult.field?.resonance          ?? 0),
-    emergence:          Number(celfResult.field?.emergence          ?? 0),
-    noveltyPotential:   Number(celfResult.field?.noveltyPressure    ?? 0),
-    momentum:           Number(celfResult.field?.momentum           ?? 0),
-    persistence:        Number(celfResult.field?.persistence        ?? 0),
-
-    // من V5 metrics
-    attractorStability:   Number(celfResult.metrics?.attractorStrength ?? 0),
-    convergencePotential: Number(celfResult.field?.continuity          ?? 0),
-    fieldResistance:      Number(celfResult.metrics?.pressure          ?? 0),
-
-    // من V5 control
-    pullStrength:        Number(celfResult.control?.contextUse         ?? 0),
-    recall:              Number(celfResult.control?.recall             ?? 0),
-    grounding:           Number(celfResult.control?.grounding          ?? 0),
-    executionReadiness:  Number(celfResult.control?.executionReadiness ?? 0),
-    compression:         Number(celfResult.control?.compression        ?? 0),
-
-    // مشتق
+    drift: Number(celfResult.field?.drift ?? 0),
+    driftAcceleration: Number(celfResult.field?.momentum ?? 0),
+    coherence: Number(celfResult.field?.coherence ?? 0),
+    entropy: Number(celfResult.metrics?.entropy ?? 0),
+    confidence: Number(celfResult.field?.semanticGrounding ?? 0),
+    resonance: Number(celfResult.field?.resonance ?? 0),
+    emergence: Number(celfResult.field?.emergence ?? 0),
+    noveltyPotential: Number(celfResult.field?.noveltyPressure ?? 0),
+    momentum: Number(celfResult.field?.momentum ?? 0),
+    persistence: Number(celfResult.field?.persistence ?? 0),
+    attractorStability: Number(celfResult.metrics?.attractorStrength ?? 0),
+    convergencePotential: Number(celfResult.field?.continuity ?? 0),
+    fieldResistance: Number(celfResult.metrics?.pressure ?? 0),
+    pullStrength: Number(celfResult.control?.contextUse ?? 0),
+    recall: Number(celfResult.control?.recall ?? 0),
+    grounding: Number(celfResult.control?.grounding ?? 0),
+    executionReadiness: Number(celfResult.control?.executionReadiness ?? 0),
+    compression: Number(celfResult.control?.compression ?? 0),
+    localization: Number(celfResult.signal?.localization ?? celfResult.metrics?.localization ?? 0),
+    coherenceRadius: Number(celfResult.signal?.coherenceRadius ?? celfResult.metrics?.coherenceRadius ?? 0),
+    signalType: celfResult.signal?.signalType ?? celfResult.metrics?.signalType ?? 'unknown',
+    sourceWeight: Number(celfResult.signal?.sourceWeight ?? celfResult.perturbation?.sourceWeight ?? 1),
     severity,
     pattern,
     phase
@@ -180,14 +140,9 @@ export function build(adapterOutput) {
   }
 }
 
-// ─────────────────────────────────────────────
-//  System Hint builder — V5 signals
-// ─────────────────────────────────────────────
-
 function buildSystemHint(ctx) {
   const lines = []
 
-  // ── Language ──────────────────────────────
   if (ctx.lang === 'ar') {
     lines.push('Respond in Arabic. Use natural Arabic conversational style.')
   } else if (ctx.lang === 'mixed') {
@@ -196,73 +151,71 @@ function buildSystemHint(ctx) {
     lines.push('Respond in the same language as the user.')
   }
 
-  // ── Intent ────────────────────────────────
-  if (ctx.intent === 'question')  lines.push('Prioritize direct, clear semantic relevance.')
-  if (ctx.intent === 'command')   lines.push('Prioritize actionable, executable response.')
+  if (ctx.intent === 'question') lines.push('Prioritize direct, clear semantic relevance.')
+  if (ctx.intent === 'command') lines.push('Prioritize actionable, executable response.')
   if (ctx.intent === 'complaint') lines.push('Prioritize issue resolution with empathy.')
-  if (ctx.intent === 'greeting')  lines.push('Prioritize warm, natural conversational continuity.')
+  if (ctx.intent === 'greeting') lines.push('Prioritize warm, natural conversational continuity.')
   if (ctx.intent === 'emotional') lines.push('Prioritize emotional attunement and support.')
 
-  // ── Reasoning mode ────────────────────────
   if (ctx.reasoningMode === 'analytical') lines.push('Apply structured analytical reasoning.')
   if (ctx.reasoningMode === 'generative') lines.push('Engage creative generative mode.')
   if (ctx.reasoningMode === 'reflective') lines.push('Engage reflective exploratory mode.')
 
-  // ── Phase (V5 native) ─────────────────────
-  if (ctx.phase === 'warmup')      lines.push('Context is early — be open and broad.')
-  if (ctx.phase === 'metastable')  lines.push('Context is forming — maintain coherence carefully.')
-  if (ctx.phase === 'emergent')    lines.push('New structure is emerging — support it without forcing.')
-  if (ctx.phase === 'locked')      lines.push('Context is locked — be precise and reinforce structure.')
-  if (ctx.phase === 'turbulent')   lines.push('Context is turbulent — ground the conversation first.')
-  if (ctx.phase === 'drift')       lines.push('Significant drift detected — anchor to last stable intent.')
-  if (ctx.phase === 'compressed')  lines.push('Context is compressed — prioritize continuity.')
-  if (ctx.phase === 'stable')      lines.push('Context is stable — be direct and efficient.')
+  if (ctx.phase === 'warmup') lines.push('Context is early — be open and broad.')
+  if (ctx.phase === 'metastable') lines.push('Context is forming — maintain coherence carefully.')
+  if (ctx.phase === 'emergent') lines.push('New structure is emerging — support it without forcing.')
+  if (ctx.phase === 'locked') lines.push('Context is locked — be precise and reinforce structure.')
+  if (ctx.phase === 'turbulent') lines.push('Context is turbulent — ground the conversation first.')
+  if (ctx.phase === 'drift') lines.push('Significant drift detected — anchor to last stable intent.')
+  if (ctx.phase === 'compressed') lines.push('Context is compressed — prioritize continuity.')
+  if (ctx.phase === 'stable') lines.push('Context is stable — be direct and efficient.')
+  if (ctx.phase === 'noise') lines.push('Noise detected — filter weak signals and avoid reinforcing unstable patterns.')
 
-  // ── Pattern ───────────────────────────────
-  if (ctx.pattern === 'shifting')   lines.push('Topic is shifting — verify alignment before proceeding.')
-  if (ctx.pattern === 'emerging')   lines.push('New structure is emerging — build on it carefully.')
-  if (ctx.pattern === 'exploring')  lines.push('User is exploring — give space, avoid over-narrowing.')
-  if (ctx.pattern === 'unstable')   lines.push('Increase contextual grounding and verification.')
+  if (ctx.pattern === 'noise') lines.push('Treat the current input as low-signal unless the user confirms its importance.')
+  if (ctx.pattern === 'shifting') lines.push('Topic is shifting — verify alignment before proceeding.')
+  if (ctx.pattern === 'emerging') lines.push('New structure is emerging — build on it carefully.')
+  if (ctx.pattern === 'exploring') lines.push('User is exploring — give space, avoid over-narrowing.')
+  if (ctx.pattern === 'unstable') lines.push('Increase contextual grounding and verification.')
   if (ctx.pattern === 'compressed') lines.push('Prioritize continuity preservation.')
 
-  // ── Drift ─────────────────────────────────
+  if (ctx.signalType === 'noise') {
+    lines.push('Current field signal appears diffuse — avoid treating it as a stable topic.')
+  }
+
+  if (ctx.signalType === 'signal' && ctx.localization > 0.012) {
+    lines.push('Current field signal is localized — preserve the active focus.')
+  }
+
   if (ctx.drift > 0.55) {
     lines.push('Significant semantic drift — verify topic alignment before proceeding.')
   } else if (ctx.momentum > 0.6) {
     lines.push('Conversation is moving fast — stay adaptive.')
   }
 
-  // ── Emergence ─────────────────────────────
   if (ctx.emergence > 0.55) {
     lines.push('A new stable structure is emerging — build on it.')
   }
 
-  // ── Novelty ───────────────────────────────
   if (ctx.noveltyPotential > 0.6) {
     lines.push('High novelty input — do not collapse to familiar patterns prematurely.')
   }
 
-  // ── Attractor stability ───────────────────
   if (ctx.attractorStability > 0.75) {
     lines.push('Conversation has stable attractors — stay on established track.')
   }
 
-  // ── Rupture guard ─────────────────────────
   if (ctx.rupture > 2) {
-    lines.push('High signal rupture detected — user may be under stress. Prioritize clarity and calm.')
+    lines.push('High signal rupture detected — prioritize clarity and calm.')
   }
 
-  // ── Execution readiness ───────────────────
   if (ctx.executionReadiness > 0.7) {
     lines.push('User intent is execution-ready — provide actionable output directly.')
   }
 
-  // ── Confidence guard ─────────────────────
   if (ctx.confidence < 0.3) {
     lines.push('Input is sparse or low-confidence — ask for clarification if needed.')
   }
 
-  // ── Universal ─────────────────────────────
   lines.push('Maintain natural communication style.')
   lines.push('Do not alter response personality unless necessary.')
 
