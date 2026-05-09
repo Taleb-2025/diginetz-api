@@ -1,12 +1,9 @@
 import express from 'express'
-import { CyclicProcessorEngine } from "../engines/CyclicProcessorEngine.js"
-import { DecisionLayer }   from '../utils/decision-layer.js'
+import { CyclicProcessorEngine } from '../engines/CyclicProcessorEngine.js'
+import { DecisionLayer }         from '../utils/decision-layer.js'
 
 const router = express.Router()
 
-// ─────────────────────────────────────────────
-// Instances — LRU, حد أقصى 100
-// ─────────────────────────────────────────────
 const MAX_INSTANCES = 100
 const instances     = new Map()
 
@@ -23,23 +20,17 @@ function getInstance(id, options = {}) {
     instances.delete(oldest)
   }
 
-  const engine = new CELF_Engine_V8(options)
+  const engine = new CyclicProcessorEngine(options)
   instances.set(id, engine)
   return engine
 }
 
-// ─────────────────────────────────────────────
-// Decision Layer
-// ─────────────────────────────────────────────
 const layer = new DecisionLayer({
   windowSize:     10,
   useLLM:         false,
   llmMinSeverity: 'high'
 })
 
-// ─────────────────────────────────────────────
-// Block helper
-// ─────────────────────────────────────────────
 function handleDecision(res, decision) {
   if (decision?.action === 'block') {
     return res.status(403).json({
@@ -50,9 +41,6 @@ function handleDecision(res, decision) {
   return null
 }
 
-// ─────────────────────────────────────────────
-// Benchmark
-// ─────────────────────────────────────────────
 function generateBenchmarkData() {
   const data = []
   for (let i = 0; i < 9800; i++) {
@@ -69,7 +57,7 @@ function generateBenchmarkData() {
 }
 
 function runCELF(data) {
-  const engine     = new CELF_Engine_V8({
+  const engine = new CyclicProcessorEngine({
     resolution: 1000, cycle: 6000, windowSize: 128, thresholdFactor: 2.0
   })
   const localLayer = new DecisionLayer({ windowSize: 10, useLLM: false })
@@ -77,7 +65,7 @@ function runCELF(data) {
   let tp = 0, fp = 0, tn = 0, fn = 0
 
   for (const row of data) {
-    const result = engine.observe(row.amount)
+    const result   = engine.observe(row.amount)
     if (result.phase === 'warmup') continue
 
     const decision = localLayer.evaluateSync(result)
@@ -149,18 +137,12 @@ router.get('/benchmark', (req, res) => {
   })
 })
 
-// ─────────────────────────────────────────────
-// Slow endpoint — تأخير حقيقي للاختبار
-// ─────────────────────────────────────────────
 router.get('/slow', async (req, res) => {
   const delay = parseInt(req.query.ms) || 2500
   await new Promise(r => setTimeout(r, delay))
   res.json({ ok: true, delayed: delay })
 })
 
-// ─────────────────────────────────────────────
-// Bitcoin
-// ─────────────────────────────────────────────
 function getBitcoinInstance() {
   return getInstance('bitcoin-demo', {
     resolution:      1000,
@@ -193,9 +175,9 @@ router.get('/bitcoin/tick', async (req, res) => {
 
 router.get('/bitcoin/spike', async (req, res) => {
   try {
-    const base   = fetchBitcoinPrice()
-    const spike  = (Math.random() * 0.08 + 0.03) * (Math.random() > 0.5 ? 1 : -1)
-    const value  = base * (1 + spike)
+    const base     = fetchBitcoinPrice()
+    const spike    = (Math.random() * 0.08 + 0.03) * (Math.random() > 0.5 ? 1 : -1)
+    const value    = base * (1 + spike)
     const result   = getBitcoinInstance().observe(value)
     const decision = await layer.evaluate(result, { type: 'bitcoin_spike', value })
 
@@ -206,9 +188,6 @@ router.get('/bitcoin/spike', async (req, res) => {
   }
 })
 
-// ─────────────────────────────────────────────
-// Latency
-// ─────────────────────────────────────────────
 async function fetchLatency(url) {
   const start = Date.now()
   try {
@@ -239,45 +218,33 @@ function getLatencyInstance(id) {
 }
 
 router.get('/latency/tick', async (req, res) => {
-  const endpoint = 'https://diginetz-api-production.up.railway.app/health'
+  const endpoint             = 'https://diginetz-api-production.up.railway.app/health'
   const { duration, status } = await fetchLatency(endpoint)
-  const category = latencyCategory(status, duration)
+  const category             = latencyCategory(status, duration)
 
   const result   = getLatencyInstance('latency:health').observe(duration)
   const decision = await layer.evaluate(result, {
-    type: 'latency',
-    endpoint,
-    duration,
-    status,
-    category
+    type: 'latency', endpoint, duration, status, category
   })
 
   if (handleDecision(res, decision)) return
   res.json({ value: duration, unit: 'ms', endpoint, status, category, ...result, decision })
 })
 
-// ── latency/spike — يستدعي /celf/slow داخلياً (تأخير حقيقي 2.5s)
 router.get('/latency/spike', async (req, res) => {
-  const endpoint = 'https://diginetz-api-production.up.railway.app/celf/slow'
+  const endpoint             = 'https://diginetz-api-production.up.railway.app/celf/slow'
   const { duration, status } = await fetchLatency(endpoint)
-  const category = latencyCategory(status, duration)
+  const category             = latencyCategory(status, duration)
 
   const result   = getLatencyInstance('latency:health').observe(duration)
   const decision = await layer.evaluate(result, {
-    type: 'latency_spike',
-    endpoint,
-    duration,
-    status,
-    category
+    type: 'latency_spike', endpoint, duration, status, category
   })
 
   if (handleDecision(res, decision)) return
   res.json({ value: duration, unit: 'ms', endpoint, status, category, ...result, decision })
 })
 
-// ─────────────────────────────────────────────
-// Observe
-// ─────────────────────────────────────────────
 router.post('/observe', async (req, res) => {
   const { id, value, options, event } = req.body
 
@@ -291,9 +258,6 @@ router.post('/observe', async (req, res) => {
   res.json({ ...result, decision })
 })
 
-// ─────────────────────────────────────────────
-// Test
-// ─────────────────────────────────────────────
 router.post('/test', (req, res) => {
   const { id, value } = req.body
 
@@ -307,9 +271,6 @@ router.post('/test', (req, res) => {
   res.json({ ...result, decision })
 })
 
-// ─────────────────────────────────────────────
-// Filter
-// ─────────────────────────────────────────────
 router.post('/filter', (req, res) => {
   const { id, values } = req.body
 
@@ -325,9 +286,6 @@ router.post('/filter', (req, res) => {
   })
 })
 
-// ─────────────────────────────────────────────
-// Reverse
-// ─────────────────────────────────────────────
 router.post('/reverse', (req, res) => {
   const { id, value } = req.body
 
@@ -337,9 +295,6 @@ router.post('/reverse', (req, res) => {
   res.json({ candidates: getInstance(id).reverseInfer(value) })
 })
 
-// ─────────────────────────────────────────────
-// Summary / Space / Weights
-// ─────────────────────────────────────────────
 router.get('/summary/:id', (req, res) => {
   if (!instances.has(req.params.id)) return res.status(404).json({ error: 'instance not found' })
   res.json(getInstance(req.params.id).getSummary())
@@ -355,9 +310,6 @@ router.get('/weights/:id', (req, res) => {
   res.json(getInstance(req.params.id).getWeights())
 })
 
-// ─────────────────────────────────────────────
-// Reset / Delete / List
-// ─────────────────────────────────────────────
 router.post('/reset/:id', (req, res) => {
   if (!instances.has(req.params.id)) return res.status(404).json({ error: 'instance not found' })
   instances.delete(req.params.id)
@@ -377,16 +329,13 @@ router.get('/instances', (req, res) => {
   res.json({ instances: list, total: list.length, max: MAX_INSTANCES })
 })
 
-// ─────────────────────────────────────────────
-// Memory — إثبات ثبات الذاكرة مع الوقت
-// ─────────────────────────────────────────────
 router.get('/memory', (req, res) => {
   const stats = []
 
   for (const [id, engine] of instances.entries()) {
-    const step        = engine.getStep()
-    const spaceLen    = engine.getSpace().length
-    const spaceSizeKB = Math.round((spaceLen * 4) / 1024 * 1000) / 1000
+    const step          = engine.getStep()
+    const spaceLen      = engine.getSpace().length
+    const spaceSizeKB   = Math.round((spaceLen * 4) / 1024 * 1000) / 1000
     const traditionalKB = Math.round((step * 8) / 1024 * 1000) / 1000
 
     stats.push({
@@ -395,12 +344,12 @@ router.get('/memory', (req, res) => {
       celf: {
         spaceSizeKB,
         resolution: spaceLen,
-        note:  'fixed regardless of steps'
+        note: 'fixed regardless of steps'
       },
       traditional: {
         estimatedKB: traditionalKB,
-        note:  'grows with every step'
-          },
+        note: 'grows with every step'
+      },
       savingKB:      Math.max(0, Math.round((traditionalKB - spaceSizeKB) * 1000) / 1000),
       savingPercent: traditionalKB > 0
         ? Math.round((1 - spaceSizeKB / traditionalKB) * 100)
