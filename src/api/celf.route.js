@@ -50,18 +50,25 @@ function observe(engine, value) {
   const result   = engine.process(value)
   const analysis = engine.shadowAnalyze(value)
 
-  const phase = result.semantic?.state === 'idle'
-    ? 'warmup'
-    : result.semantic?.state ?? 'warmup'
+  const semanticState = result.semantic?.state ?? 'idle'
+  const phase         = semanticState === 'idle' ? 'warmup' : semanticState
+
+  const historyLen = engine.getHistory().length
+  const isReady    = historyLen >= 20
+  const isAnomaly  = analysis.status === 'CRITICAL'
+  const impossible = isReady && isAnomaly
+
+  const rawConfidence = (analysis.confidence ?? 0) / 100
+  const confidence    = isReady ? rawConfidence : rawConfidence * (historyLen / 20)
 
   return {
     ...result,
     phase,
-    impossible:    analysis.status !== 'NORMAL',
-    confidence:    (analysis.confidence  ?? 0) / 100,
+    impossible,
+    confidence,
     maturityScore: (analysis.behaviorVector?.behavior ?? 0) / 100,
     aliveRatio:    1,
-    jump:          analysis.avgStep ?? 0,
+    jump:          analysis.avgStep   ?? 0,
     threshold:     analysis.threshold ?? 0,
     inferredFrom:  result.field?.attractors?.[0]?.hits ?? 0
   }
