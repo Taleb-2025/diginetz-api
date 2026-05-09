@@ -1,333 +1,346 @@
-/**
- * CELF AI — /celf/process-text  (router v3.0)
- *
- * يعمل مع:
- *   CELF_Engine_AI_V5   — حلقات × دقة
- *   lightweight-parser  v2.1
- *   context-builder     v3.0
- *
- * التغييرات عن v2.0:
- *   - قراءة V5 snapshot (field, metrics, control, perturbation)
- *   - إصلاح bug: passToLLM كان = true دائماً
- *   - دعم image (base64) في الطلب
- *   - metrics محدّثة لـ V5
- */
-
 import express from 'express'
-import { CELF_Engine_AI_V5 } from '../engines/celf-engine-v5.js'
-import { parse }              from '../utils/lightweight-parser.js'
-import { build }              from '../utils/context-builder.js'
+import cors from 'cors'
 
-const router = express.Router()
+import cycleguardRoute from './api/cycleguard.route.js'
+import cycleguardSessionRoute from './api/cycleguard-session.route.js'
+import identityRoute from './api/identity.route.js'
+import celfRoute from './api/celf.route.js'
+import processTextRoute from './api/process-text.route.js'
 
-// ─────────────────────────────────────────────
-//  Session management — LRU Map, max 500
-// ─────────────────────────────────────────────
+import { CELF_Engine_AI_V5 } from './engines/celf-engine-v5.js'
 
-const MAX_SESSIONS = 500
-const sessions     = new Map()   // sessionId → CELF_Engine_AI_V5
-const metricsStore = new Map()   // sessionId → metrics
+const app = express()
 
-function getEngine(sessionId) {
-  if (sessions.has(sessionId)) {
-    const engine = sessions.get(sessionId)
-    sessions.delete(sessionId)
-    sessions.set(sessionId, engine)
+const PORT =
+  process.env.PORT || 8080
+
+const MAX_MONITORS = 200
+
+const monitors =
+  new Map()
+
+const monitorLog =
+  new Map()
+
+function getMonitor(key) {
+
+  if (monitors.has(key)) {
+
+    const engine =
+      monitors.get(key)
+
+    monitors.delete(key)
+
+    monitors.set(key, engine)
+
     return engine
   }
 
-  if (sessions.size >= MAX_SESSIONS) {
-    sessions.delete(sessions.keys().next().value)
+  if (monitors.size >= MAX_MONITORS) {
+
+    const oldest =
+      monitors.keys().next().value
+
+    monitors.delete(oldest)
   }
 
-  const engine = new CELF_Engine_AI_V5({
-    resolution:  360,
-    ringCount:   5,
-    cycle:       360,
-    diffusionRate:   0.08,
-    constraintRate:  0.12,
-    attractorLimit:  12
-  })
+  const engine =
+    new CELF_Engine_AI_V5({
 
-  sessions.set(sessionId, engine)
+      resolution: 400,
+
+      cycle: 3000
+    })
+
+  monitors.set(key, engine)
+
   return engine
 }
 
-// ─────────────────────────────────────────────
-//  Intent helper — يقرأ من V5 perturbation
-// ─────────────────────────────────────────────
+app.use(cors({
 
-function mapIntent(snapshot) {
-  const s = snapshot?.perturbation?.semantic
-  if (!s) return 'statement'
-  if (s.question)        return 'question'
-  if (s.intent?.execute) return 'command'
-  if (s.error)           return 'complaint'
-  if (s.emotional)       return 'emotional'
-  return 'statement'
-}
+  origin: [
 
-// ─────────────────────────────────────────────
-//  feed() — parser + V5 engine + adapter
-// ─────────────────────────────────────────────
+    'https://diginetz-template.com',
 
-function feed(sessionId, text) {
-  // Layer 1: noise + language gate
-  const signals = parse(text)
+    'https://www.diginetz-template.com'
+  ],
 
-  if (!signals.valid) {
-    return { ok: false, reason: signals.reason ?? 'invalid_signals' }
-  }
+  methods: [
+    'GET',
+    'POST',
+    'OPTIONS',
+    'DELETE'
+  ],
 
-  // Layer 2: V5 engine
-  const engine   = getEngine(sessionId)
-  const snapshot = engine.process(text)
+  allowedHeaders: [
 
-  // ── V5 snapshot fields ────────────────────
-  const field        = snapshot.field        ?? {}
-  const metrics      = snapshot.metrics      ?? {}
-  const control      = snapshot.control      ?? {}
-  const perturbation = snapshot.perturbation ?? {}
-  const attractors   = snapshot.attractors   ?? []
+    'Content-Type',
 
-  // ── passToLLM — إصلاح الـ bug (كان = true دائماً) ──
-  const coherence    = Number(field.coherence         ?? 0)
-  const fieldStrength= Number(field.resonance         ?? 0)
-  const resonance    = Number(field.resonance         ?? 0)
-  const confidence   = Number(field.semanticGrounding ?? 0)
-  const intent       = mapIntent(snapshot)
+    'x-reference-id',
 
-  const passToLLM =
-    coherence     > 0.15 ||
-    fieldStrength > 0.15 ||
-    resonance     > 0.20 ||
-    intent        === 'greeting' ||
-    intent        === 'emotional' ||
-    confidence    < 0.4    // sparse → LLM يطلب توضيحاً
+    'x-agent-key',
 
-  return {
-    ok: true,
-    passToLLM,
-    signals,
-    result: snapshot,
-    // celfResult مُهيكَل لـ context-builder v3.0
-    celfResult: {
-      phase:       snapshot.phase,
-      t:           snapshot.t,
-      field,
-      metrics,
-      control,
-      perturbation,
-      attractors
-    }
-  }
-}
+    'x-cg-api-key',
 
-// ─────────────────────────────────────────────
-//  POST /process-text
-// ─────────────────────────────────────────────
+    'x-cg-pub-token'
+  ]
+}))
 
-router.post('/process-text', async (req, res) => {
-  const {
-    text      = '',
-    sessionId,
-    history   = [],
-    image     = null,        // base64 string أو null — جديد
-    imageMimeType = 'image/jpeg'
-  } = req.body
-
-  // نقبل إذا في نص أو صورة
-  const hasText  = typeof text === 'string' && text.trim().length > 0
-  const hasImage = typeof image === 'string' && image.length > 0
-
-  if (!hasText && !hasImage) {
-    return res.status(400).json({ error: 'missing_input' })
-  }
-
-  const sid        = sessionId || 'default'
-  const inputText  = hasText ? text : '(image)'   // نمرر للـ engine دائماً
-  const processed  = feed(sid, inputText)
-
-  if (!processed.ok) {
-    return res.status(422).json({
-      error: processed.reason || 'processing_failed'
-    })
-  }
-
-  // build context + systemHint
-  const built = build({
-    ok:         true,
-    signals:    processed.signals,
-    celfResult: processed.celfResult,
-    passToLLM:  processed.passToLLM
+app.use(
+  express.json({
+    limit: '10mb'
   })
+)
 
-  if (built.blocked) {
-    return res.status(422).json({
-      blocked: true,
-      reason:  'semantic_constraint',
-      context: built.context
-    })
-  }
+app.use(
+  express.raw({
+    type: 'application/octet-stream',
+    limit: '1mb'
+  })
+)
 
-  if (!built.passToLLM && !hasImage) {
-    return res.json({
-      reply:      null,
-      skippedLLM: true,
-      reason:     'weak_semantic_field',
-      context:    built.context,
-      celf:       processed.result
-    })
-  }
+app.use(
+  express.static('public')
+)
 
-  // ── Call LLM ─────────────────────────────
-  try {
-    const systemHint = built.systemHint || ''
+app.use((req, res, next) => {
 
-    // بناء محتوى الرسالة (نص + صورة)
-    let userContent
-    if (hasImage) {
-      userContent = [
-        {
-          type:      'image_url',
-          image_url: { url: `data:${imageMimeType};base64,${image}` }
-        },
-        ...(hasText ? [{ type: 'text', text }] : [])
-      ]
-    } else {
-      userContent = text
+  const start =
+    Date.now()
+
+  res.on('finish', () => {
+
+    const duration =
+      Date.now() - start
+
+    if (res.statusCode >= 500) {
+      return
     }
 
-    // Metrics
-    const historyChars    = history.reduce((s, h) => s + (h.content?.length || 0), 0)
-    const rawInputChars   = text.length + historyChars
-    const compressedChars = systemHint.length + text.length
-    const compressionRatio = rawInputChars > 0
-      ? Math.round((1 - compressedChars / rawInputChars) * 100)
-      : 0
+    const routePath =
 
-    // V5 metrics store
-    metricsStore.set(sid, {
-      sessionId:              sid,
-      rawInputChars,
-      compressedChars,
-      compressionRatio,
-      estimatedSystemTokens:  Math.ceil(systemHint.length / 4),
-      // V5 fields
-      phase:        processed.celfResult.phase                    ?? 'warmup',
-      resonance:    processed.celfResult.field?.resonance         ?? 0,
-      emergence:    processed.celfResult.field?.emergence         ?? 0,
-      coherence:    processed.celfResult.field?.coherence         ?? 0,
-      momentum:     processed.celfResult.field?.momentum          ?? 0,
-      novelty:      processed.celfResult.field?.noveltyPressure   ?? 0,
-      continuity:   processed.celfResult.field?.continuity        ?? 0,
-      persistence:  processed.celfResult.field?.persistence       ?? 0,
-      attractors:   processed.celfResult.attractors?.length       ?? 0,
-      hasImage:     hasImage,
-      updatedAt:    new Date().toISOString()
-    })
+      req.baseUrl &&
+      req.route?.path
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method:  'POST',
-      headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
-      },
-      body: JSON.stringify({
-        model:      'llama-3.3-70b-versatile',
-        max_tokens: 1024,
-        messages: [
-          { role: 'system',    content: systemHint },
-          ...history.map(h => ({ role: h.role, content: h.content })),
-          { role: 'user',      content: userContent }
-        ]
+        ? req.baseUrl + req.route.path
+
+        : req.baseUrl + req.path
+
+    const key =
+      req.method + ':' + routePath
+
+    let value =
+      duration
+
+    if (res.statusCode >= 400) {
+      value += 300
+    }
+
+    value =
+      Math.min(value, 5000)
+
+    const monitor =
+      getMonitor(key)
+
+    const result =
+      monitor.process({
+
+        value,
+
+        route:
+          req.path,
+
+        method:
+          req.method,
+
+        status:
+          res.statusCode,
+
+        duration
       })
+
+    if (result.phase === 'warmup') {
+      return
+    }
+
+    const confidence =
+      Number(
+        result.field?.semanticGrounding ?? 1
+      )
+
+    const isAnomaly =
+
+      result.phase === 'turbulent' ||
+
+      result.phase === 'drift' ||
+
+      (
+        confidence < 0.25 &&
+        result.phase !== 'locked'
+      )
+
+    if (!isAnomaly) {
+      return
+    }
+
+    if (!monitorLog.has(key)) {
+      monitorLog.set(key, [])
+    }
+
+    const list =
+      monitorLog.get(key)
+
+    list.unshift({
+
+      time:
+        new Date().toISOString(),
+
+      key,
+
+      path:
+        req.path,
+
+      method:
+        req.method,
+
+      status:
+        res.statusCode,
+
+      duration,
+
+      phase:
+        result.phase,
+
+      coherence:
+        result.field?.coherence,
+
+      drift:
+        result.field?.drift,
+
+      resonance:
+        result.field?.resonance,
+
+      entropy:
+        result.metrics?.entropy,
+
+      signalType:
+        result.signal?.signalType
     })
 
-    const data  = await response.json()
-    const reply = data?.choices?.[0]?.message?.content ?? null
+    if (list.length > 50) {
+      list.pop()
+    }
+  })
 
-    // أعد حقن الرد في الـ engine (Feedback Loop)
-    if (reply) {
-      const engine = getEngine(sid)
-      engine.process(reply)   // Field Continuity Update
+  next()
+})
+
+app.use(
+  '/api/cycleguard',
+  cycleguardRoute
+)
+
+app.use(
+  '/api/cg-session',
+  cycleguardSessionRoute
+)
+
+app.use(
+  '/api/identity',
+  identityRoute
+)
+
+app.use(
+  '/celf',
+  celfRoute
+)
+
+app.use(
+  '/celf',
+  processTextRoute
+)
+
+app.get(
+  '/celf/monitor',
+  (req, res) => {
+
+    const summaries = []
+
+    for (
+      const [key, engine]
+      of monitors.entries()
+    ) {
+
+      summaries.push({
+
+        key,
+
+        ...engine.getSummary()
+      })
+    }
+
+    const anomalies = []
+
+    for (
+      const [key, list]
+      of monitorLog.entries()
+    ) {
+
+      anomalies.push({
+
+        key,
+
+        entries: list
+      })
     }
 
     return res.json({
-      reply,
-      context: built.context,
-      signals: processed.signals,
-      celf:    processed.result,
-      metrics: {
-        rawInputChars,
-        compressedChars,
-        compressionRatio,
-        estimatedSystemTokens: Math.ceil(systemHint.length / 4)
-      }
+
+      totalMonitors:
+        monitors.size,
+
+      maxMonitors:
+        MAX_MONITORS,
+
+      monitors:
+        summaries,
+
+      anomalies
     })
-
-  } catch (err) {
-    return res.status(500).json({ error: 'llm_failed', detail: err.message })
   }
-})
+)
 
-// ─────────────────────────────────────────────
-//  GET /session/:id
-// ─────────────────────────────────────────────
-
-router.get('/session/:id', (req, res) => {
-  if (!sessions.has(req.params.id)) {
-    return res.status(404).json({ error: 'session_not_found' })
-  }
-
-  const engine   = sessions.get(req.params.id)
-  const summary  = engine.getSummary?.() ?? {}
+app.get('/', (_req, res) => {
 
   return res.json({
-    ok:        true,
-    sessionId: req.params.id,
-    summary
+
+    service:
+      'DigiNetz TSL Core',
+
+    engine:
+      'CELF_Engine_AI_V5',
+
+    status:
+      'RUNNING'
   })
 })
 
-// ─────────────────────────────────────────────
-//  GET /metrics/:id
-// ─────────────────────────────────────────────
+app.get('/health', (_req, res) => {
 
-router.get('/metrics/:id', (req, res) => {
-  const metrics = metricsStore.get(req.params.id)
-  if (!metrics) return res.status(404).json({ error: 'metrics_not_found' })
-  return res.json(metrics)
-})
-
-// ─────────────────────────────────────────────
-//  GET /debug/:id
-// ─────────────────────────────────────────────
-
-router.get('/debug/:id', (req, res) => {
-  if (!sessions.has(req.params.id)) {
-    return res.status(404).json({ error: 'session_not_found' })
-  }
-
-  const engine  = sessions.get(req.params.id)
-  const metrics = metricsStore.get(req.params.id)
-  const summary = engine.getSummary?.() ?? {}
-
-  return res.json({
-    metrics,
-    summary,
-    rings: engine.getRings?.() ?? []
+  return res.status(200).json({
+    ok: true
   })
 })
 
-// ─────────────────────────────────────────────
-//  DELETE /session/:id
-// ─────────────────────────────────────────────
+app.listen(
+  PORT,
+  '0.0.0.0',
+  () => {
 
-router.delete('/session/:id', (req, res) => {
-  sessions.delete(req.params.id)
-  metricsStore.delete(req.params.id)
-  return res.json({ ok: true })
-})
-
-export default router
+    console.log(
+      'DIGINETZ CORE RUNNING ON PORT ' +
+      PORT
+    )
+  }
+)
