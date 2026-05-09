@@ -41,6 +41,15 @@ app.use('/api/identity',   identityRoute)
 app.use('/celf',           celfRoute)
 app.use('/celf',           processTextRoute)
 
+app.get('/celf/monitor', (_req, res) => {
+  return res.json({
+    totalMonitors: 0,
+    maxMonitors:   0,
+    monitors:      [],
+    anomalies:     []
+  })
+})
+
 app.get('/', (_req, res) => {
   return res.json({
     service: 'DigiNetz TSL Core',
