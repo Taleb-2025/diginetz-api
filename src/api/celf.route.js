@@ -42,15 +42,29 @@ function handleDecision(res, decision) {
 }
 
 // ─────────────────────────────────────────────
-// phase bridge — CyclicProcessorEngine يضع phase
-// داخل context.raw.phase بدل المستوى الأعلى
-// DecisionLayer يقرأ celfResult.phase مباشرة
+// observe() bridge
+// CyclicProcessorEngine uses process() + shadowAnalyze()
+// DecisionLayer needs: impossible, confidence, maturityScore, aliveRatio, phase
 // ─────────────────────────────────────────────
-function bridgePhase(result) {
-  if (!result.phase) {
-    result.phase = result.context?.raw?.phase ?? 'warmup'
+function observe(engine, value) {
+  const result   = engine.process(value)
+  const analysis = engine.shadowAnalyze(value)
+
+  const phase = result.semantic?.state === 'idle'
+    ? 'warmup'
+    : result.semantic?.state ?? 'warmup'
+
+  return {
+    ...result,
+    phase,
+    impossible:    analysis.status !== 'NORMAL',
+    confidence:    (analysis.confidence  ?? 0) / 100,
+    maturityScore: (analysis.behaviorVector?.behavior ?? 0) / 100,
+    aliveRatio:    1,
+    jump:          analysis.avgStep ?? 0,
+    threshold:     analysis.threshold ?? 0,
+    inferredFrom:  result.field?.attractors?.[0]?.hits ?? 0
   }
-  return result
 }
 
 function generateBenchmarkData() {
@@ -77,7 +91,7 @@ function runCELF(data) {
   let tp = 0, fp = 0, tn = 0, fn = 0
 
   for (const row of data) {
-    const result = bridgePhase(engine.observe(row.amount))
+    const result = observe(engine, row.amount)
     if (result.phase === 'warmup') continue
 
     const decision = localLayer.evaluateSync(result)
@@ -89,11 +103,13 @@ function runCELF(data) {
     if (row.fraud  && !detected) fn++
   }
 
-  const fraudTotal = data.filter(r => r.fraud).length
-  const precision  = tp / (tp + fp) || 0
-  const recall     = tp / fraudTotal || 0
-  const f1         = 2 * (precision * recall) / (precision + recall) || 0
-  return { tp, fp, tn, fn, precision, recall, f1, aliveRatio: engine.getAliveRatio() }
+  const fraudTotal  = data.filter(r => r.fraud).length
+  const precision   = tp / (tp + fp) || 0
+  const recall      = tp / fraudTotal || 0
+  const f1          = 2 * (precision * recall) / (precision + recall) || 0
+  const aliveRatio  = engine.getFieldState?.()?.attractors?.length > 0 ? 1 : 0
+
+  return { tp, fp, tn, fn, precision, recall, f1, aliveRatio }
 }
 
 function runZScore(data) {
@@ -174,31 +190,29 @@ function fetchBitcoinPrice() {
 
 router.get('/bitcoin/tick', async (req, res) => {
   try {
-    const value  = fetchBitcoinPrice()
-    const result = bridgePhase(getBitcoinInstance().observe(value))
-
+    const value    = fetchBitcoinPrice()
+    const result   = observe(getBitcoinInstance(), value)
     const decision = await layer.evaluate(result, { type: 'bitcoin_tick', value })
 
     if (handleDecision(res, decision)) return
     res.json({ value, pair: 'BTC/USDT', ...result, decision })
-  } catch {
-    res.status(500).json({ error: 'fetch failed' })
+  } catch (err) {
+    res.status(500).json({ error: 'fetch failed', detail: err.message })
   }
 })
 
 router.get('/bitcoin/spike', async (req, res) => {
   try {
-    const base   = fetchBitcoinPrice()
-    const spike  = (Math.random() * 0.08 + 0.03) * (Math.random() > 0.5 ? 1 : -1)
-    const value  = base * (1 + spike)
-    const result = bridgePhase(getBitcoinInstance().observe(value))
-
+    const base     = fetchBitcoinPrice()
+    const spike    = (Math.random() * 0.08 + 0.03) * (Math.random() > 0.5 ? 1 : -1)
+    const value    = base * (1 + spike)
+    const result   = observe(getBitcoinInstance(), value)
     const decision = await layer.evaluate(result, { type: 'bitcoin_spike', value })
 
     if (handleDecision(res, decision)) return
     res.json({ value, base, spike, pair: 'BTC/USDT', ...result, decision })
-  } catch {
-    res.status(500).json({ error: 'fetch failed' })
+  } catch (err) {
+    res.status(500).json({ error: 'fetch failed', detail: err.message })
   }
 })
 
@@ -236,7 +250,7 @@ router.get('/latency/tick', async (req, res) => {
   const { duration, status } = await fetchLatency(endpoint)
   const category             = latencyCategory(status, duration)
 
-  const result   = bridgePhase(getLatencyInstance('latency:health').observe(duration))
+  const result   = observe(getLatencyInstance('latency:health'), duration)
   const decision = await layer.evaluate(result, {
     type: 'latency', endpoint, duration, status, category
   })
@@ -250,7 +264,7 @@ router.get('/latency/spike', async (req, res) => {
   const { duration, status } = await fetchLatency(endpoint)
   const category             = latencyCategory(status, duration)
 
-  const result   = bridgePhase(getLatencyInstance('latency:health').observe(duration))
+  const result   = observe(getLatencyInstance('latency:health'), duration)
   const decision = await layer.evaluate(result, {
     type: 'latency_spike', endpoint, duration, status, category
   })
@@ -265,7 +279,7 @@ router.post('/observe', async (req, res) => {
   if (!id)                     return res.status(400).json({ error: 'missing id' })
   if (!Number.isFinite(value)) return res.status(400).json({ error: 'invalid value' })
 
-  const result   = bridgePhase(getInstance(id, options ?? {}).observe(value))
+  const result   = observe(getInstance(id, options ?? {}), value)
   const decision = await layer.evaluate(result, event ?? null)
 
   if (handleDecision(res, decision)) return
@@ -278,7 +292,7 @@ router.post('/test', (req, res) => {
   if (!id)                     return res.status(400).json({ error: 'missing id' })
   if (!Number.isFinite(value)) return res.status(400).json({ error: 'invalid value' })
 
-  const result   = bridgePhase(getInstance(id).test(value))
+  const result   = observe(getInstance(id), value)
   const decision = layer.evaluateSync(result)
 
   if (handleDecision(res, decision)) return
@@ -292,7 +306,13 @@ router.post('/filter', (req, res) => {
   if (!Array.isArray(values)) return res.status(400).json({ error: 'values must be array' })
 
   const engine   = getInstance(id)
-  const filtered = engine.filter(values)
+  const results  = values.map(v => {
+    if (!Number.isFinite(v)) return null
+    const r = observe(engine, v)
+    return r.impossible ? null : v
+  })
+  const filtered = results.filter(v => v !== null)
+
   res.json({
     filtered,
     blocked: values.filter(v => !filtered.includes(v)),
@@ -306,22 +326,42 @@ router.post('/reverse', (req, res) => {
   if (!id)                     return res.status(400).json({ error: 'missing id' })
   if (!Number.isFinite(value)) return res.status(400).json({ error: 'invalid value' })
 
-  res.json({ candidates: getInstance(id).reverseInfer(value) })
+  const engine     = getInstance(id)
+  const candidates = []
+  const steps      = [-10, -5, -2, -1, 0, 1, 2, 5, 10]
+
+  for (const s of steps) {
+    const projected = engine.project(1, s)
+    candidates.push({ step: s, projected })
+  }
+
+  res.json({ candidates })
 })
 
 router.get('/summary/:id', (req, res) => {
   if (!instances.has(req.params.id)) return res.status(404).json({ error: 'instance not found' })
-  res.json(getInstance(req.params.id).getSummary())
+  const engine = getInstance(req.params.id)
+  res.json({
+    state:      engine.getState(),
+    cycle:      engine.getCycle(),
+    cycleCount: engine.getCycleCount(),
+    field:      engine.getFieldState(),
+    semantic:   engine.getSemanticState()
+  })
 })
 
 router.get('/space/:id', (req, res) => {
   if (!instances.has(req.params.id)) return res.status(404).json({ error: 'instance not found' })
-  res.json({ space: getInstance(req.params.id).getSpace() })
+  res.json({ space: getInstance(req.params.id).getFieldState() })
 })
 
 router.get('/weights/:id', (req, res) => {
   if (!instances.has(req.params.id)) return res.status(404).json({ error: 'instance not found' })
-  res.json(getInstance(req.params.id).getWeights())
+  const engine = getInstance(req.params.id)
+  res.json({
+    attractors: engine.getFieldState().attractors,
+    field:      engine.getFieldState()
+  })
 })
 
 router.post('/reset/:id', (req, res) => {
@@ -338,7 +378,14 @@ router.delete('/instance/:id', (req, res) => {
 router.get('/instances', (req, res) => {
   const list = []
   for (const [id, engine] of instances.entries()) {
-    list.push({ id, ...engine.getSummary() })
+    list.push({
+      id,
+      state:      engine.getState(),
+      cycle:      engine.getCycle(),
+      cycleCount: engine.getCycleCount(),
+      field:      engine.getFieldState(),
+      semantic:   engine.getSemanticState()
+    })
   }
   res.json({ instances: list, total: list.length, max: MAX_INSTANCES })
 })
@@ -347,9 +394,11 @@ router.get('/memory', (req, res) => {
   const stats = []
 
   for (const [id, engine] of instances.entries()) {
-    const step          = engine.getStep()
-    const spaceLen      = engine.getSpace().length
-    const spaceSizeKB   = Math.round((spaceLen * 4) / 1024 * 1000) / 1000
+    const history       = engine.getHistory()
+    const step          = history.length
+    const fieldState    = engine.getFieldState()
+    const attractorLen  = fieldState.attractors?.length ?? 0
+    const spaceSizeKB   = Math.round((attractorLen * 4) / 1024 * 1000) / 1000
     const traditionalKB = Math.round((step * 8) / 1024 * 1000) / 1000
 
     stats.push({
@@ -357,7 +406,7 @@ router.get('/memory', (req, res) => {
       step,
       celf: {
         spaceSizeKB,
-        resolution: spaceLen,
+        resolution: attractorLen,
         note: 'fixed regardless of steps'
       },
       traditional: {
