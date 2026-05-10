@@ -4,7 +4,7 @@ import cors from 'cors'
 import cycleguardRoute        from './api/cycleguard.route.js'
 import cycleguardSessionRoute from './api/cycleguard-session.route.js'
 import identityRoute          from './api/identity.route.js'
-import celfRoute              from './api/celf.route.js'
+import celfRoute, { getMonitorData } from './api/celf.route.js'
 import processTextRoute       from './api/process-text.route.js'
 
 const app = express()
@@ -42,12 +42,7 @@ app.use('/celf',           celfRoute)
 app.use('/celf',           processTextRoute)
 
 app.get('/celf/monitor', (_req, res) => {
-  return res.json({
-    totalMonitors: 0,
-    maxMonitors:   0,
-    monitors:      [],
-    anomalies:     []
-  })
+  return res.json(getMonitorData())
 })
 
 app.get('/', (_req, res) => {
