@@ -47,11 +47,12 @@ function handleDecision(res, decision) {
 // DecisionLayer needs: impossible, confidence, maturityScore, aliveRatio, phase
 // ─────────────────────────────────────────────
 function observe(engine, value) {
-  const result   = engine.process(value)
-  const analysis = engine.shadowAnalyze(value)
+  const analysis = engine.analyze(value, { mutate: true })
 
-  const semanticState = result.semantic?.state ?? 'idle'
-  const phase         = semanticState === 'idle' ? 'warmup' : semanticState
+  const semanticState = analysis.containment?.semantic?.state
+    ?? analysis.semantic?.state
+    ?? 'idle'
+  const phase = semanticState === 'idle' ? 'warmup' : semanticState
 
   const historyLen = engine.getHistory().length
   const isReady    = historyLen >= 20
@@ -59,18 +60,33 @@ function observe(engine, value) {
   const impossible = isReady && isAnomaly
 
   const rawConfidence = (analysis.confidence ?? 0) / 100
-  const confidence    = isReady ? rawConfidence : rawConfidence * (historyLen / 20)
+  const confidence    = isReady
+    ? rawConfidence
+    : rawConfidence * (historyLen / 20)
 
   return {
-    ...result,
+    type:            'process',
+    previous:        analysis.previous         ?? 0,
+    next:            analysis.projected        ?? 0,
+    step:            analysis.avgStep          ?? 0,
+    requestedStep:   analysis.avgStep          ?? 0,
+    rawStep:         analysis.avgStep          ?? 0,
+    cycleCount:      engine.getCycleCount(),
+    memorySignature: engine.getMemorySignature(),
+    field:           analysis.field            ?? {},
+    semantic:        analysis.semantic         ?? {},
+    input:           value,
+    output:          [],
+    cycle:           engine.getCycle(),
+    timestamp:       Date.now(),
     phase,
     impossible,
     confidence,
-    maturityScore: (analysis.behaviorVector?.behavior ?? 0) / 100,
-    aliveRatio:    1,
-    jump:          analysis.avgStep   ?? 0,
-    threshold:     analysis.threshold ?? 0,
-    inferredFrom:  result.field?.attractors?.[0]?.hits ?? 0
+    maturityScore:   (analysis.behaviorVector?.behavior ?? 0) / 100,
+    aliveRatio:      1,
+    jump:            analysis.avgStep          ?? 0,
+    threshold:       analysis.threshold        ?? 0,
+    inferredFrom:    analysis.field?.attractors?.[0]?.hits ?? 0
   }
 }
 
