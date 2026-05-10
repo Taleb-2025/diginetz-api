@@ -6,6 +6,50 @@ const router = express.Router()
 
 const MAX_INSTANCES = 100
 const instances     = new Map()
+const monitorLog    = new Map()
+
+export function getMonitorData() {
+  const monitors = []
+  for (const [id, engine] of instances.entries()) {
+    const field    = engine.getFieldState()
+    const semantic = engine.getSemanticState()
+    const az       = engine.getAnalyzerSeverity()
+    const topAttr  = field.attractors[0] ?? null
+
+    monitors.push({
+      key:          id,
+      phase:        topAttr ? (topAttr.hits >= 20 ? 'active' : 'learning') : 'warmup',
+      step:         engine.getCycleCount(),
+      aliveRatio:   1,
+      maturityScore: topAttr ? Math.min(1, topAttr.hits / 100) : 0,
+      sigContexts:  field.attractors.length,
+      confidence:   topAttr ? Math.min(0.99, topAttr.hits / 100) : 0,
+      pressure:     field.pressure,
+      resistance:   field.resistance,
+      concept:      semantic.state ?? 'idle',
+      attractors:   field.attractors.length,
+    })
+  }
+
+  const anomalies = []
+  for (const [key, entries] of monitorLog.entries()) {
+    if (entries.length > 0) anomalies.push({ key, entries })
+  }
+
+  return {
+    totalMonitors: instances.size,
+    maxMonitors:   MAX_INSTANCES,
+    monitors,
+    anomalies
+  }
+}
+
+export function logAnomaly(id, entry) {
+  if (!monitorLog.has(id)) monitorLog.set(id, [])
+  const list = monitorLog.get(id)
+  list.unshift(entry)
+  if (list.length > 50) list.pop()
+}
 
 function getInstance(id, options = {}) {
   if (instances.has(id)) {
@@ -279,6 +323,21 @@ router.get('/latency/tick', async (req, res) => {
   })
 
   if (handleDecision(res, decision)) return
+
+  if (result.impossible) {
+    logAnomaly('latency:health', {
+      time:       new Date().toISOString(),
+      key:        'GET:/celf/latency/tick',
+      path:       '/celf/latency/tick',
+      method:     'GET',
+      status:     200,
+      duration,
+      phase:      result.phase,
+      confidence: result.confidence,
+      jump:       result.jump,
+    })
+  }
+
   res.json({ value: duration, unit: 'ms', endpoint, status, category, ...result, decision })
 })
 
