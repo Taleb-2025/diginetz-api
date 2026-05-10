@@ -93,10 +93,11 @@ function handleDecision(res, decision) {
 function observe(engine, value) {
   const analysis = engine.analyze(value, { mutate: true })
 
-  const semanticState = analysis.containment?.semantic?.state
-    ?? analysis.semantic?.state
-    ?? 'idle'
-  const phase = semanticState === 'idle' ? 'warmup' : semanticState
+  const topHitsForPhase = engine.getFieldState().attractors[0]?.hits ?? 0
+  const phase =
+    topHitsForPhase >= 100 ? 'active'   :
+    topHitsForPhase >= 20  ? 'learning' :
+    'warmup'
 
   const topHits    = engine.getFieldState().attractors[0]?.hits ?? 0
   const isReady    = topHits >= 20
