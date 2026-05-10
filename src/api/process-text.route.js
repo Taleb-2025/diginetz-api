@@ -1,20 +1,19 @@
 /**
- * CELF AI — /celf/process-text  (router v3.0)
+ * CELF AI — /celf/process-text  (router v3.1)
  *
  * يعمل مع:
- *   CELF_Engine_AI_V5   — حلقات × دقة
+ *   CELF_Engine_AI_V5   — async process() + real OpenAI embeddings
  *   lightweight-parser  v2.1
  *   context-builder     v3.0
  *
- * التغييرات عن v2.0:
- *   - قراءة V5 snapshot (field, metrics, control, perturbation)
- *   - إصلاح bug: passToLLM كان = true دائماً
- *   - دعم image (base64) في الطلب
- *   - metrics محدّثة لـ V5
+ * التغييرات عن v3.0:
+ *   - feed() → async (لأن engine.process() أصبح async)
+ *   - await engine.process(text)
+ *   - await engine.process(reply)  — feedback loop
  */
 
 import express from 'express'
-import { CELF_Engine_AI_V5 } from '../engines/celf-engine-v5.js'
+import { CELF_Engine_AI_V5 } from '../engines/CELF_Engine_AI_V5.js'
 import { parse }              from '../utils/lightweight-parser.js'
 import { build }              from '../utils/context-builder.js'
 
@@ -25,8 +24,8 @@ const router = express.Router()
 // ─────────────────────────────────────────────
 
 const MAX_SESSIONS = 500
-const sessions     = new Map()   // sessionId → CELF_Engine_AI_V5
-const metricsStore = new Map()   // sessionId → metrics
+const sessions     = new Map()
+const metricsStore = new Map()
 
 function getEngine(sessionId) {
   if (sessions.has(sessionId)) {
@@ -41,9 +40,9 @@ function getEngine(sessionId) {
   }
 
   const engine = new CELF_Engine_AI_V5({
-    resolution:  360,
-    ringCount:   5,
-    cycle:       360,
+    resolution:      360,
+    ringCount:       5,
+    cycle:           360,
     diffusionRate:   0.08,
     constraintRate:  0.12,
     attractorLimit:  12
@@ -68,10 +67,10 @@ function mapIntent(snapshot) {
 }
 
 // ─────────────────────────────────────────────
-//  feed() — parser + V5 engine + adapter
+//  feed() — async (engine.process is async)
 // ─────────────────────────────────────────────
 
-function feed(sessionId, text) {
+async function feed(sessionId, text) {
   // Layer 1: noise + language gate
   const signals = parse(text)
 
@@ -79,38 +78,36 @@ function feed(sessionId, text) {
     return { ok: false, reason: signals.reason ?? 'invalid_signals' }
   }
 
-  // Layer 2: V5 engine
+  // Layer 2: V5 engine — await required
   const engine   = getEngine(sessionId)
-  const snapshot = engine.process(text)
+  const snapshot = await engine.process(text)   // ← FIX: await
 
-  // ── V5 snapshot fields ────────────────────
   const field        = snapshot.field        ?? {}
   const metrics      = snapshot.metrics      ?? {}
   const control      = snapshot.control      ?? {}
   const perturbation = snapshot.perturbation ?? {}
   const attractors   = snapshot.attractors   ?? []
 
-  // ── passToLLM — إصلاح الـ bug (كان = true دائماً) ──
-  const coherence    = Number(field.coherence         ?? 0)
-  const fieldStrength= Number(field.resonance         ?? 0)
-  const resonance    = Number(field.resonance         ?? 0)
-  const confidence   = Number(field.semanticGrounding ?? 0)
-  const intent       = mapIntent(snapshot)
+  // passToLLM gate
+  const coherence     = Number(field.coherence         ?? 0)
+  const fieldStrength = Number(field.resonance         ?? 0)
+  const resonance     = Number(field.resonance         ?? 0)
+  const confidence    = Number(field.semanticGrounding ?? 0)
+  const intent        = mapIntent(snapshot)
 
   const passToLLM =
     coherence     > 0.15 ||
     fieldStrength > 0.15 ||
     resonance     > 0.20 ||
-    intent        === 'greeting' ||
+    intent        === 'greeting'  ||
     intent        === 'emotional' ||
-    confidence    < 0.4    // sparse → LLM يطلب توضيحاً
+    confidence    < 0.4
 
   return {
     ok: true,
     passToLLM,
     signals,
     result: snapshot,
-    // celfResult مُهيكَل لـ context-builder v3.0
     celfResult: {
       phase:       snapshot.phase,
       t:           snapshot.t,
@@ -129,24 +126,25 @@ function feed(sessionId, text) {
 
 router.post('/process-text', async (req, res) => {
   const {
-    text      = '',
+    text          = '',
     sessionId,
-    history   = [],
-    image     = null,        // base64 string أو null — جديد
+    history       = [],
+    image         = null,
     imageMimeType = 'image/jpeg'
   } = req.body
 
-  // نقبل إذا في نص أو صورة
-  const hasText  = typeof text === 'string' && text.trim().length > 0
+  const hasText  = typeof text  === 'string' && text.trim().length  > 0
   const hasImage = typeof image === 'string' && image.length > 0
 
   if (!hasText && !hasImage) {
     return res.status(400).json({ error: 'missing_input' })
   }
 
-  const sid        = sessionId || 'default'
-  const inputText  = hasText ? text : '(image)'   // نمرر للـ engine دائماً
-  const processed  = feed(sid, inputText)
+  const sid       = sessionId || 'default'
+  const inputText = hasText ? text : '(image)'
+
+  // ← FIX: await feed()
+  const processed = await feed(sid, inputText)
 
   if (!processed.ok) {
     return res.status(422).json({
@@ -154,7 +152,6 @@ router.post('/process-text', async (req, res) => {
     })
   }
 
-  // build context + systemHint
   const built = build({
     ok:         true,
     signals:    processed.signals,
@@ -184,7 +181,6 @@ router.post('/process-text', async (req, res) => {
   try {
     const systemHint = built.systemHint || ''
 
-    // بناء محتوى الرسالة (نص + صورة)
     let userContent
     if (hasImage) {
       userContent = [
@@ -198,32 +194,43 @@ router.post('/process-text', async (req, res) => {
       userContent = text
     }
 
-    // Metrics
-    const historyChars    = history.reduce((s, h) => s + (h.content?.length || 0), 0)
-    const rawInputChars   = text.length + historyChars
-    const compressedChars = systemHint.length + text.length
+    // ── CELF routeContext — بديل الـ history الكامل ──────────
+    // CELF يختار أكثر 5 رسائل صلة بالسؤال الحالي
+    // بدلاً من إرسال كل الـ history للـ LLM
+    const engine        = getEngine(sid)
+    const routedContext = engine.routeContext(text, 5)
+
+    // نحوّل routedContext لصيغة messages قابلة للإرسال
+    const contextMessages = routedContext.map(item => ({
+      role:    'assistant',
+      content: `[context t=${item.t} phase=${item.phase} score=${item.score}]`
+    }))
+
+    // Metrics — نقارن حجم history الكامل بما أرسله CELF فعلاً
+    const historyChars     = history.reduce((s, h) => s + (h.content?.length || 0), 0)
+    const rawInputChars    = text.length + historyChars
+    const compressedChars  = systemHint.length + text.length +
+                             contextMessages.reduce((s, m) => s + m.content.length, 0)
     const compressionRatio = rawInputChars > 0
       ? Math.round((1 - compressedChars / rawInputChars) * 100)
       : 0
 
-    // V5 metrics store
     metricsStore.set(sid, {
-      sessionId:              sid,
+      sessionId:             sid,
       rawInputChars,
       compressedChars,
       compressionRatio,
-      estimatedSystemTokens:  Math.ceil(systemHint.length / 4),
-      // V5 fields
-      phase:        processed.celfResult.phase                    ?? 'warmup',
-      resonance:    processed.celfResult.field?.resonance         ?? 0,
-      emergence:    processed.celfResult.field?.emergence         ?? 0,
-      coherence:    processed.celfResult.field?.coherence         ?? 0,
-      momentum:     processed.celfResult.field?.momentum          ?? 0,
-      novelty:      processed.celfResult.field?.noveltyPressure   ?? 0,
-      continuity:   processed.celfResult.field?.continuity        ?? 0,
-      persistence:  processed.celfResult.field?.persistence       ?? 0,
-      attractors:   processed.celfResult.attractors?.length       ?? 0,
-      hasImage:     hasImage,
+      estimatedSystemTokens: Math.ceil(systemHint.length / 4),
+      phase:        processed.celfResult.phase                  ?? 'warmup',
+      resonance:    processed.celfResult.field?.resonance       ?? 0,
+      emergence:    processed.celfResult.field?.emergence       ?? 0,
+      coherence:    processed.celfResult.field?.coherence       ?? 0,
+      momentum:     processed.celfResult.field?.momentum        ?? 0,
+      novelty:      processed.celfResult.field?.noveltyPressure ?? 0,
+      continuity:   processed.celfResult.field?.continuity      ?? 0,
+      persistence:  processed.celfResult.field?.persistence     ?? 0,
+      attractors:   processed.celfResult.attractors?.length     ?? 0,
+      hasImage,
       updatedAt:    new Date().toISOString()
     })
 
@@ -237,9 +244,9 @@ router.post('/process-text', async (req, res) => {
         model:      'llama-3.3-70b-versatile',
         max_tokens: 1024,
         messages: [
-          { role: 'system',    content: systemHint },
-          ...history.map(h => ({ role: h.role, content: h.content })),
-          { role: 'user',      content: userContent }
+          { role: 'system', content: systemHint },
+          ...contextMessages,   // CELF routed context — not full history
+          { role: 'user',   content: userContent }
         ]
       })
     })
@@ -247,10 +254,9 @@ router.post('/process-text', async (req, res) => {
     const data  = await response.json()
     const reply = data?.choices?.[0]?.message?.content ?? null
 
-    // أعد حقن الرد في الـ engine (Feedback Loop)
+    // Feedback loop — الرد يُحقن في CELF لتحديث البصمة
     if (reply) {
-      const engine = getEngine(sid)
-      engine.process(reply)   // Field Continuity Update
+      await engine.process(reply)
     }
 
     return res.json({
@@ -280,14 +286,10 @@ router.get('/session/:id', (req, res) => {
     return res.status(404).json({ error: 'session_not_found' })
   }
 
-  const engine   = sessions.get(req.params.id)
-  const summary  = engine.getSummary?.() ?? {}
+  const engine  = sessions.get(req.params.id)
+  const summary = engine.getSummary?.() ?? {}
 
-  return res.json({
-    ok:        true,
-    sessionId: req.params.id,
-    summary
-  })
+  return res.json({ ok: true, sessionId: req.params.id, summary })
 })
 
 // ─────────────────────────────────────────────
