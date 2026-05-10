@@ -13,7 +13,7 @@
  */
 
 import express from 'express'
-import { CELF_Engine_AI_V5 } from '../engines/CELF_Engine-AI-V5.js'
+import { CELF_Engine_AI_V5 } from '../engines/celf-engine-v5.js'
 import { parse }              from '../utils/lightweight-parser.js'
 import { build }              from '../utils/context-builder.js'
 
