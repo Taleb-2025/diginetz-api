@@ -54,15 +54,15 @@ function observe(engine, value) {
     ?? 'idle'
   const phase = semanticState === 'idle' ? 'warmup' : semanticState
 
-  const historyLen = engine.getHistory().length
-  const isReady    = historyLen >= 20
+  const topHits    = engine.getFieldState().attractors[0]?.hits ?? 0
+  const isReady    = topHits >= 20
   const isAnomaly  = analysis.status === 'CRITICAL'
   const impossible = isReady && isAnomaly
 
   const rawConfidence = (analysis.confidence ?? 0) / 100
   const confidence    = isReady
     ? rawConfidence
-    : rawConfidence * (historyLen / 20)
+    : rawConfidence * (topHits / 20)
 
   return {
     type:            'process',
