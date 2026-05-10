@@ -17,6 +17,9 @@ export class CyclicProcessorEngine {
   #listeners
   #plugins
   #semantic
+  #checkpoints
+  #attractorVersion
+  #checkpointInterval
 
   constructor(options = {}) {
     const cycle = Number.isFinite(options.cycle) ? Number(options.cycle) : 360
@@ -35,6 +38,9 @@ export class CyclicProcessorEngine {
     this.#processors = []
     this.#history = []
     this.#archive = []
+    this.#checkpoints = []
+    this.#attractorVersion = 0
+    this.#checkpointInterval = options.checkpointInterval ?? 100
 
     const field = options.field ?? {}
 
@@ -193,9 +199,9 @@ export class CyclicProcessorEngine {
   }
 
   #buildSemanticReport(state) {
-    const stateConcept = this.#resolveStateConcept(state)
+    const stateConcept  = this.#resolveStateConcept(state)
     const fieldConcepts = this.#resolveFieldConcepts()
-    const trendConcept = this.#semantic.trendConceptMap[this.#getTrend()] ?? "unknown"
+    const trendConcept  = this.#semantic.trendConceptMap[this.#getTrend()] ?? "unknown"
     const attractorConcepts = this.#resolveAttractorConcepts()
 
     const dominant = this.#field.attractors.length > 0
@@ -213,9 +219,9 @@ export class CyclicProcessorEngine {
   }
 
   #updateSemanticState(state) {
-    const sem = this.#semantic
+    const sem     = this.#semantic
     const resolved = this.#resolveStateConcept(state)
-    const concept = resolved.concept
+    const concept  = resolved.concept
 
     if (concept !== sem.lastConcept) {
       const previous = sem.lastConcept
@@ -247,15 +253,16 @@ export class CyclicProcessorEngine {
     }
   }
 
-  getState() { return this.#state }
-  getCycle() { return this.#cycle }
-  getStep() { return this.#step }
-  getMaxVelocity() { return this.#maxVelocity }
-  getCycleCount() { return this.#cycleCount }
+  getState()           { return this.#state }
+  getCycle()           { return this.#cycle }
+  getStep()            { return this.#step }
+  getMaxVelocity()     { return this.#maxVelocity }
+  getCycleCount()      { return this.#cycleCount }
   getMemorySignature() { return this.#memorySignature }
-  getProcessors() { return [...this.#processors] }
-  getHistory() { return this.#history.map(e => ({ ...e })) }
-  getArchive() { return this.#archive.map(e => ({ ...e })) }
+  getProcessors()      { return [...this.#processors] }
+  getHistory()         { return this.#history.map(e => ({ ...e })) }
+  getArchive()         { return this.#archive.map(e => ({ ...e })) }
+  getCheckpoints()     { return this.#checkpoints.map(c => ({ ...c })) }
 
   getSemanticState() {
     return this.#buildSemanticReport(this.#state)
@@ -267,27 +274,27 @@ export class CyclicProcessorEngine {
 
   getFieldState() {
     return {
-      residual: this.#round4(this.#field.residual),
+      residual:          this.#round4(this.#field.residual),
       constraintDensity: this.#round4(this.#field.constraintDensity),
-      inertia: this.#round4(this.#field.inertia),
-      pressure: this.#round4(this.#field.pressure),
-      curvature: this.#round4(this.#field.curvature),
-      diffusion: this.#round4(this.#field.diffusion),
-      resistance: this.#round4(this.#field.resistance),
-      novelty: this.#round4(this.#field.novelty),
+      inertia:           this.#round4(this.#field.inertia),
+      pressure:          this.#round4(this.#field.pressure),
+      curvature:         this.#round4(this.#field.curvature),
+      diffusion:         this.#round4(this.#field.diffusion),
+      resistance:        this.#round4(this.#field.resistance),
+      novelty:           this.#round4(this.#field.novelty),
       lastEffectiveStep: this.#round4(this.#field.lastEffectiveStep),
-      attractors: this.#field.attractors.map(a => ({ ...a })),
+      attractors:        this.#field.attractors.map(a => ({ ...a })),
     }
   }
 
   getContainmentState() {
     return {
-      value: this.#state,
-      cycleCount: this.#cycleCount,
+      value:           this.#state,
+      cycleCount:      this.#cycleCount,
       memorySignature: this.#memorySignature,
-      layer: this.#cycleCount * this.#cycle + this.#state,
-      field: this.getFieldState(),
-      semantic: this.getSemanticState(),
+      layer:           this.#cycleCount * this.#cycle + this.#state,
+      field:           this.getFieldState(),
+      semantic:        this.getSemanticState(),
     }
   }
 
@@ -335,22 +342,22 @@ export class CyclicProcessorEngine {
   }
 
   process(input = null, options = {}) {
-    const now = this.#clock()
+    const now       = this.#clock()
     const deltaTime = Math.max(now - this.#lastTimestamp, 1)
     this.#lastTimestamp = now
 
-    const previous = this.#state
-    let totalStep = 0
-    const outputs = []
+    const previous  = this.#state
+    let totalStep   = 0
+    const outputs   = []
 
     const baseContext = {
-      engine: this,
-      cycle: this.#cycle,
-      step: this.#step,
-      cycleCount: this.#cycleCount,
+      engine:          this,
+      cycle:           this.#cycle,
+      step:            this.#step,
+      cycleCount:      this.#cycleCount,
       memorySignature: this.#memorySignature,
-      field: this.getFieldState(),
-      semantic: this.getSemanticState(),
+      field:           this.getFieldState(),
+      semantic:        this.getSemanticState(),
       deltaTime,
       input,
       options,
@@ -372,28 +379,28 @@ export class CyclicProcessorEngine {
     }
 
     const prepared = this.#prepareStep(previous, totalStep, deltaTime, now)
-    const next = this.#applyContainment(previous, prepared.appliedStep)
+    const next     = this.#applyContainment(previous, prepared.appliedStep)
 
     this.#state = next
     this.#updateField(previous, next, totalStep, prepared.appliedStep, deltaTime)
     this.#updateSemanticState(next)
 
     const entry = this.#record({
-      type: "process",
+      type:            "process",
       previous,
       next,
-      step: prepared.appliedStep,
-      requestedStep: totalStep,
-      rawStep: totalStep,
-      velocity: totalStep !== 0 ? prepared.velocity : undefined,
-      cycleCount: this.#cycleCount,
+      step:            prepared.appliedStep,
+      requestedStep:   totalStep,
+      rawStep:         totalStep,
+      velocity:        totalStep !== 0 ? prepared.velocity : undefined,
+      cycleCount:      this.#cycleCount,
       memorySignature: this.#memorySignature,
-      field: this.getFieldState(),
-      semantic: this.getSemanticState(),
+      field:           this.getFieldState(),
+      semantic:        this.getSemanticState(),
       input,
-      output: outputs,
-      cycle: this.#cycle,
-      timestamp: now,
+      output:          outputs,
+      cycle:           this.#cycle,
+      timestamp:       now,
     })
 
     this.#emit("process", entry)
@@ -410,32 +417,32 @@ export class CyclicProcessorEngine {
   force(step) {
     if (!Number.isFinite(step) || step === 0) throw new Error("CPE_INVALID_FORCE_STEP")
 
-    const now = this.#clock()
+    const now       = this.#clock()
     const deltaTime = Math.max(now - this.#lastTimestamp, 1)
     this.#lastTimestamp = now
 
     const previous = this.#state
     const prepared = this.#prepareStep(previous, step, deltaTime, now)
-    const next = this.#applyContainment(previous, prepared.appliedStep)
+    const next     = this.#applyContainment(previous, prepared.appliedStep)
 
     this.#state = next
     this.#updateField(previous, next, step, prepared.appliedStep, deltaTime)
     this.#updateSemanticState(next)
 
     const entry = this.#record({
-      type: "transition",
+      type:            "transition",
       previous,
       next,
-      step: prepared.appliedStep,
-      requestedStep: step,
-      rawStep: step,
-      velocity: prepared.velocity,
-      cycleCount: this.#cycleCount,
+      step:            prepared.appliedStep,
+      requestedStep:   step,
+      rawStep:         step,
+      velocity:        prepared.velocity,
+      cycleCount:      this.#cycleCount,
       memorySignature: this.#memorySignature,
-      field: this.getFieldState(),
-      semantic: this.getSemanticState(),
-      cycle: this.#cycle,
-      timestamp: now,
+      field:           this.getFieldState(),
+      semantic:        this.getSemanticState(),
+      cycle:           this.#cycle,
+      timestamp:       now,
     })
 
     this.#emit("transition", entry)
@@ -451,31 +458,21 @@ export class CyclicProcessorEngine {
 
   analyze(value, options = {}) {
     if (!Number.isFinite(value)) throw new Error("CPE_ANALYZER_INVALID_VALUE")
-
     const mutate = options.mutate ?? false
-
-    if (!mutate) {
-      return this.shadowAnalyze(value)
-    }
-
+    if (!mutate) return this.shadowAnalyze(value)
     return this.#analyzeMutable(value)
   }
 
   shadowAnalyze(value) {
     if (!Number.isFinite(value)) throw new Error("CPE_ANALYZER_INVALID_VALUE")
 
-    const prev = this.#state
-    const rawDelta = this.signedDistance(prev, value)
+    const prev          = this.#state
+    const rawDelta      = this.signedDistance(prev, value)
     const effectiveStep = this.#fieldAdjustedStep(rawDelta)
-    const projected = this.#normalize(prev + effectiveStep)
-    const diff = Math.abs(this.signedDistance(prev, projected))
+    const projected     = this.#normalize(prev + effectiveStep)
+    const diff          = Math.abs(this.signedDistance(prev, projected))
 
-    return this.#buildAnalyzerReport({
-      diff,
-      projected,
-      previous: prev,
-      mutated: false,
-    })
+    return this.#buildAnalyzerReport({ diff, projected, previous: prev, mutated: false })
   }
 
   learnPattern(values) {
@@ -487,18 +484,17 @@ export class CyclicProcessorEngine {
       if (!Number.isFinite(values[i]) || !Number.isFinite(values[i - 1])) {
         throw new Error("CPE_ANALYZER_INVALID_LEARN_VALUE_ENTRY")
       }
-
       steps.push(Math.abs(this.signedDistance(values[i - 1], values[i])))
     }
 
     const az = this.#az
-    az.learnedZScores = this.#zNormalize(steps)
+    az.learnedZScores    = this.#zNormalize(steps)
     az.adaptiveThreshold = az.baseThreshold
-    az.trendBuffer = []
-    az.anomalyStartTime = null
-    az.hasData = false
-    az.readingCount = 0
-    az.scoreHistory = []
+    az.trendBuffer       = []
+    az.anomalyStartTime  = null
+    az.hasData           = false
+    az.readingCount      = 0
+    az.scoreHistory      = []
 
     return this
   }
@@ -506,13 +502,13 @@ export class CyclicProcessorEngine {
   recalibrateAnalyzer() {
     const az = this.#az
     az.adaptiveThreshold = az.baseThreshold
-    az.learnedZScores = []
-    az.trendBuffer = []
-    az.anomalyStartTime = null
-    az.lastSeverity = 0
-    az.hasData = false
-    az.readingCount = 0
-    az.scoreHistory = []
+    az.learnedZScores    = []
+    az.trendBuffer       = []
+    az.anomalyStartTime  = null
+    az.lastSeverity      = 0
+    az.hasData           = false
+    az.readingCount      = 0
+    az.scoreHistory      = []
     return this
   }
 
@@ -530,11 +526,11 @@ export class CyclicProcessorEngine {
   signedDistance(from, to, options = {}) {
     if (!Number.isFinite(from) || !Number.isFinite(to)) throw new Error("CPE_INVALID_SIGNED_DISTANCE_VALUES")
 
-    const forward = this.distance(from, to)
+    const forward  = this.distance(from, to)
     if (forward === 0) return 0
 
     const backward = forward - this.#cycle
-    const prefer = options.prefer ?? "forward"
+    const prefer   = options.prefer ?? "forward"
 
     if (Math.abs(backward) === Math.abs(forward)) {
       return prefer === "backward" ? backward : forward
@@ -563,12 +559,12 @@ export class CyclicProcessorEngine {
     if (!Number.isInteger(steps) || steps <= 0) throw new Error("CPE_INVALID_REWIND_STEPS")
     if (steps > this.#history.length) throw new Error("CPE_REWIND_OUT_OF_RANGE")
 
-    const targetIndex = this.#history.length - steps
-    const entry = this.#history[targetIndex]
+    const targetIndex  = this.#history.length - steps
+    const entry        = this.#history[targetIndex]
     const previousEntry = this.#history[targetIndex - 1] ?? null
 
-    this.#state = entry.previous
-    this.#cycleCount = previousEntry?.cycleCount ?? 0
+    this.#state          = entry.previous
+    this.#cycleCount     = previousEntry?.cycleCount ?? 0
     this.#memorySignature = previousEntry?.memorySignature ?? 0
 
     if (previousEntry?.field) this.#restoreField(previousEntry.field)
@@ -580,14 +576,14 @@ export class CyclicProcessorEngine {
     this.#updateSemanticState(this.#state)
 
     const payload = {
-      type: "rewind",
-      previous: entry.next,
-      next: entry.previous,
+      type:      "rewind",
+      previous:  entry.next,
+      next:      entry.previous,
       steps,
-      cycle: this.#cycle,
+      cycle:     this.#cycle,
       timestamp: this.#lastTimestamp,
-      field: this.getFieldState(),
-      semantic: this.getSemanticState(),
+      field:     this.getFieldState(),
+      semantic:  this.getSemanticState(),
     }
 
     this.#emit("rewind", payload)
@@ -600,8 +596,8 @@ export class CyclicProcessorEngine {
 
     const entry = this.#history[index]
 
-    this.#state = entry.next
-    this.#cycleCount = entry.cycleCount ?? this.#cycleCount
+    this.#state           = entry.next
+    this.#cycleCount      = entry.cycleCount ?? this.#cycleCount
     this.#memorySignature = entry.memorySignature ?? this.#memorySignature
 
     if (entry.field) this.#restoreField(entry.field)
@@ -612,14 +608,14 @@ export class CyclicProcessorEngine {
     this.#updateSemanticState(this.#state)
 
     const payload = {
-      type: "travel",
-      previous: entry.previous,
-      next: entry.next,
+      type:      "travel",
+      previous:  entry.previous,
+      next:      entry.next,
       index,
-      cycle: this.#cycle,
+      cycle:     this.#cycle,
       timestamp: this.#lastTimestamp,
-      field: this.getFieldState(),
-      semantic: this.getSemanticState(),
+      field:     this.getFieldState(),
+      semantic:  this.getSemanticState(),
     }
 
     this.#emit("travel", payload)
@@ -637,21 +633,27 @@ export class CyclicProcessorEngine {
     return this
   }
 
+  clearCheckpoints() {
+    this.#checkpoints = []
+    return this
+  }
+
   snapshot() {
     const snap = {
-      version: "CPSE-3.0",
-      state: this.#state,
-      step: this.#step,
-      cycle: this.#cycle,
-      maxVelocity: this.#maxVelocity,
-      cycleCount: this.#cycleCount,
+      version:        "CPSE-3.1",
+      state:          this.#state,
+      step:           this.#step,
+      cycle:          this.#cycle,
+      maxVelocity:    this.#maxVelocity,
+      cycleCount:     this.#cycleCount,
       memorySignature: this.#memorySignature,
-      field: this.getFieldState(),
-      semantic: this.getSemanticState(),
+      field:          this.getFieldState(),
+      semantic:       this.getSemanticState(),
       conceptHistory: this.getConceptHistory(),
-      history: this.getHistory(),
-      archive: this.getArchive(),
-      timestamp: this.#clock(),
+      history:        this.getHistory(),
+      archive:        this.getArchive(),
+      checkpoints:    this.getCheckpoints(),
+      timestamp:      this.#clock(),
     }
 
     this.#emit("snapshot", snap)
@@ -669,12 +671,13 @@ export class CyclicProcessorEngine {
 
     const previous = this.#state
 
-    this.#state = this.#normalize(snapshot.state)
-    this.#step = Number(snapshot.step)
-    this.#cycleCount = Number.isFinite(snapshot.cycleCount) ? snapshot.cycleCount : 0
+    this.#state           = this.#normalize(snapshot.state)
+    this.#step            = Number(snapshot.step)
+    this.#cycleCount      = Number.isFinite(snapshot.cycleCount) ? snapshot.cycleCount : 0
     this.#memorySignature = Number.isFinite(snapshot.memorySignature) ? snapshot.memorySignature : 0
-    this.#history = snapshot.history.map(e => this.#sanitizeEntry(e))
-    this.#archive = Array.isArray(snapshot.archive) ? snapshot.archive.map(e => ({ ...e })) : []
+    this.#history         = snapshot.history.map(e => this.#sanitizeEntry(e))
+    this.#archive         = Array.isArray(snapshot.archive) ? snapshot.archive.map(e => ({ ...e })) : []
+    this.#checkpoints     = Array.isArray(snapshot.checkpoints) ? snapshot.checkpoints.map(c => ({ ...c })) : []
 
     if (snapshot.field) this.#restoreField(snapshot.field)
     else this.#resetField()
@@ -703,14 +706,14 @@ export class CyclicProcessorEngine {
 
     this.#emit("restore", {
       previous,
-      next: this.#state,
-      cycleCount: this.#cycleCount,
+      next:        this.#state,
+      cycleCount:  this.#cycleCount,
       memorySignature: this.#memorySignature,
       historySize: this.#history.length,
       archiveSize: this.#archive.length,
-      field: this.getFieldState(),
-      semantic: this.getSemanticState(),
-      timestamp: this.#lastTimestamp,
+      field:       this.getFieldState(),
+      semantic:    this.getSemanticState(),
+      timestamp:   this.#lastTimestamp,
     })
 
     return this
@@ -721,25 +724,27 @@ export class CyclicProcessorEngine {
 
     const previous = this.#state
 
-    this.#state = this.#normalize(state)
-    this.#history = []
-    this.#archive = []
-    this.#cycleCount = 0
+    this.#state           = this.#normalize(state)
+    this.#history         = []
+    this.#archive         = []
+    this.#checkpoints     = []
+    this.#attractorVersion = 0
+    this.#cycleCount      = 0
     this.#memorySignature = 0
-    this.#lastTimestamp = this.#clock()
+    this.#lastTimestamp   = this.#clock()
     this.#resetField()
     this.recalibrateAnalyzer()
-    this.#semantic.conceptHistory = []
-    this.#semantic.lastConcept = null
+    this.#semantic.conceptHistory    = []
+    this.#semantic.lastConcept       = null
     this.#semantic.lastFieldConcepts = {}
     this.#updateSemanticState(this.#state)
 
     this.#emit("reset", {
       previous,
-      next: this.#state,
-      cycle: this.#cycle,
-      field: this.getFieldState(),
-      semantic: this.getSemanticState(),
+      next:      this.#state,
+      cycle:     this.#cycle,
+      field:     this.getFieldState(),
+      semantic:  this.getSemanticState(),
       timestamp: this.#lastTimestamp,
     })
 
@@ -791,7 +796,7 @@ export class CyclicProcessorEngine {
 
   #prepareStep(previous, requestedStep, deltaTime, now) {
     let appliedStep = this.#fieldAdjustedStep(requestedStep)
-    let velocity = 0
+    let velocity    = 0
 
     if (appliedStep !== 0) {
       velocity = Math.abs(appliedStep) / deltaTime
@@ -800,18 +805,18 @@ export class CyclicProcessorEngine {
         const clamped = Math.sign(appliedStep) * this.#maxVelocity * deltaTime
 
         this.#emit("velocityExceeded", {
-          requested: requestedStep,
-          adjusted: appliedStep,
+          requested:   requestedStep,
+          adjusted:    appliedStep,
           clamped,
           velocity,
           maxVelocity: this.#maxVelocity,
           deltaTime,
-          field: this.getFieldState(),
-          timestamp: now,
+          field:       this.getFieldState(),
+          timestamp:   now,
         })
 
         appliedStep = clamped
-        velocity = Math.abs(appliedStep) / deltaTime
+        velocity    = Math.abs(appliedStep) / deltaTime
       }
     }
 
@@ -821,28 +826,28 @@ export class CyclicProcessorEngine {
   #fieldAdjustedStep(step) {
     if (!Number.isFinite(step) || step === 0) return 0
 
-    const sign = Math.sign(step)
-    const magnitude = Math.abs(step)
-    const density = this.#clamp01(this.#field.constraintDensity)
-    const inertia = this.#clamp01(this.#field.inertia)
-    const resistance = this.#clamp01(this.#field.resistance)
+    const sign          = Math.sign(step)
+    const magnitude     = Math.abs(step)
+    const density       = this.#clamp01(this.#field.constraintDensity)
+    const inertia       = this.#clamp01(this.#field.inertia)
+    const resistance    = this.#clamp01(this.#field.resistance)
     const attractorPull = this.#nearestAttractorPull(this.#normalize(this.#state + step))
 
-    const penalty = 1 + density * 0.55 + inertia * 0.35 + resistance * 0.35
-    const assist = 1 + attractorPull * 0.45
+    const penalty      = 1 + density * 0.55 + inertia * 0.35 + resistance * 0.35
+    const assist       = 1 + attractorPull * 0.45
     const noveltyBoost = 1 + Math.max(this.#field.noveltyFloor, this.#field.novelty) * 0.10
 
     return sign * (magnitude / penalty) * assist * noveltyBoost
   }
 
   #updateField(previous, next, requestedStep, appliedStep, deltaTime) {
-    const absRequested = Math.abs(Number(requestedStep) || 0)
-    const absApplied = Math.abs(Number(appliedStep) || 0)
+    const absRequested      = Math.abs(Number(requestedStep) || 0)
+    const absApplied        = Math.abs(Number(appliedStep) || 0)
     const normalizedApplied = this.#clamp01(absApplied / (this.#cycle / 2))
-    const loss = absRequested > 0 ? this.#clamp01(1 - absApplied / absRequested) : 0
+    const loss              = absRequested > 0 ? this.#clamp01(1 - absApplied / absRequested) : 0
 
     const nearestPull = this.#nearestAttractorPull(next)
-    const pressure = this.#clamp01(normalizedApplied * 0.55 + loss * 0.30 + nearestPull * 0.15)
+    const pressure    = this.#clamp01(normalizedApplied * 0.55 + loss * 0.30 + nearestPull * 0.15)
 
     this.#field.pressure = pressure
 
@@ -888,49 +893,53 @@ export class CyclicProcessorEngine {
   }
 
   #updateAttractors(position, motion, pressure) {
-    const theta = this.#normalize(position)
-    let matched = null
+    const theta   = this.#normalize(position)
+    let matched   = null
+    let changed   = false
 
     for (const a of this.#field.attractors) {
       const d = Math.abs(this.signedDistance(a.theta, theta))
-
-      if (d <= this.#cycle * 0.04) {
-        matched = a
-        break
-      }
+      if (d <= this.#cycle * 0.04) { matched = a; break }
     }
 
     for (const a of this.#field.attractors) {
       a.strength = this.#clamp01(a.strength * this.#field.attractorDecay)
-      a.age += 1
+      a.age     += 1
     }
 
     if (matched) {
-      matched.theta = this.#normalize((matched.theta * 0.85) + (theta * 0.15))
+      matched.theta    = this.#normalize((matched.theta * 0.85) + (theta * 0.15))
       matched.strength = this.#clamp01(matched.strength + this.#field.attractorGain + pressure * 0.02)
-      matched.hits += 1
+      matched.hits    += 1
       matched.lastSeen = this.#clock()
     } else {
       this.#field.attractors.push({
         theta,
         strength: this.#clamp01(this.#field.attractorGain + motion * 0.08),
-        hits: 1,
-        age: 0,
+        hits:     1,
+        age:      0,
         lastSeen: this.#clock(),
       })
+      changed = true
     }
+
+    const prevLen = this.#field.attractors.length
 
     this.#field.attractors = this.#field.attractors
       .filter(a => a.strength > 0.005)
       .sort((a, b) => b.strength - a.strength)
       .slice(0, this.#field.attractorLimit)
       .map(a => ({
-        theta: this.#round4(this.#normalize(a.theta)),
+        theta:    this.#round4(this.#normalize(a.theta)),
         strength: this.#round4(this.#clamp01(a.strength)),
-        hits: a.hits,
-        age: a.age,
+        hits:     a.hits,
+        age:      a.age,
         lastSeen: a.lastSeen,
       }))
+
+    if (changed || this.#field.attractors.length !== prevLen) {
+      this.#attractorVersion++
+    }
   }
 
   #nearestAttractorPull(theta) {
@@ -939,7 +948,7 @@ export class CyclicProcessorEngine {
     let best = 0
 
     for (const a of this.#field.attractors) {
-      const d = Math.abs(this.signedDistance(theta, a.theta))
+      const d         = Math.abs(this.signedDistance(theta, a.theta))
       const proximity = this.#clamp01(1 - d / (this.#cycle / 2))
       best = Math.max(best, proximity * a.strength)
     }
@@ -948,20 +957,15 @@ export class CyclicProcessorEngine {
   }
 
   #analyzeMutable(value) {
-    const prev = this.#state
+    const prev  = this.#state
     const delta = this.signedDistance(prev, value)
 
     if (delta !== 0) this.force(delta)
 
     const current = this.#state
-    const diff = Math.abs(this.signedDistance(prev, current))
+    const diff    = Math.abs(this.signedDistance(prev, current))
 
-    return this.#buildAnalyzerReport({
-      diff,
-      projected: current,
-      previous: prev,
-      mutated: true,
-    })
+    return this.#buildAnalyzerReport({ diff, projected: current, previous: prev, mutated: true })
   }
 
   #buildAnalyzerReport({ diff, projected, previous, mutated }) {
@@ -974,20 +978,20 @@ export class CyclicProcessorEngine {
     az.readingCount++
 
     const history = this.getHistory().slice(-az.historyWindow)
-    let avgStep = 0
-    let stdDev = 0
-    let steps = []
+    let avgStep   = 0
+    let stdDev    = 0
+    let steps     = []
 
     if (history.length > 1) {
-      steps = this.#extractSteps(history)
+      steps   = this.#extractSteps(history)
       avgStep = steps.reduce((s, v) => s + v, 0) / steps.length
 
       const variance = steps.reduce((s, v) => s + Math.pow(v - avgStep, 2), 0) / Math.max(steps.length - 1, 1)
       stdDev = Math.sqrt(variance)
 
-      const raw = avgStep + stdDev * 2.5
+      const raw        = avgStep + stdDev * 2.5
       const fieldBoost = 1 + this.#field.resistance + this.#field.curvature
-      const ceiling = Number.isFinite(this.#maxVelocity) ? this.#maxVelocity * 6 : az.baseThreshold * 10
+      const ceiling    = Number.isFinite(this.#maxVelocity) ? this.#maxVelocity * 6 : az.baseThreshold * 10
 
       az.adaptiveThreshold = Math.max(
         az.baseThreshold,
@@ -995,17 +999,16 @@ export class CyclicProcessorEngine {
       )
     }
 
-    const trend = this.#getTrend()
+    const trend     = this.#getTrend()
     const deviation = Math.abs(diff - avgStep)
     az.lastSeverity = Math.min(100, Math.round((deviation / (az.adaptiveThreshold * 2)) * 100))
 
-    const similarity = this.#slidingWindowSimilarity(steps, az.learnedZScores)
-    const confidence = similarity !== null
+    const similarity        = this.#slidingWindowSimilarity(steps, az.learnedZScores)
+    const confidence        = similarity !== null
       ? Math.min(99, Math.round(50 + similarity * 49))
       : Math.min(99, Math.round(40 + (history.length / az.historyWindow) * 50))
-
-    const confidenceSource = similarity !== null ? "pattern" : "history"
-    const eta = this.#estimateETA(trend, deviation)
+    const confidenceSource  = similarity !== null ? "pattern" : "history"
+    const eta               = this.#estimateETA(trend, deviation)
 
     let status = "NORMAL"
     if (deviation > az.adaptiveThreshold * 2) status = "CRITICAL"
@@ -1014,20 +1017,20 @@ export class CyclicProcessorEngine {
     if (status !== "NORMAL" && !az.anomalyStartTime) az.anomalyStartTime = Date.now()
     else if (status === "NORMAL") az.anomalyStartTime = null
 
-    const sinceSec = az.anomalyStartTime ? ((Date.now() - az.anomalyStartTime) / 1000).toFixed(1) : null
+    const sinceSec      = az.anomalyStartTime ? ((Date.now() - az.anomalyStartTime) / 1000).toFixed(1) : null
     const behaviorVector = this.#computeBehaviorVector(stdDev, deviation, similarity)
-    const health = this.#classifyHealth(behaviorVector.behavior)
+    const health         = this.#classifyHealth(behaviorVector.behavior)
 
     az.scoreHistory.push({ score: behaviorVector.behavior, time: Date.now() })
     if (az.scoreHistory.length > az.scoreHistorySize) az.scoreHistory.shift()
 
-    const forecast = this.#computeForecast(behaviorVector.behavior)
+    const forecast    = this.#computeForecast(behaviorVector.behavior)
     const containment = this.getContainmentState()
-    const semantic = this.getSemanticState()
+    const semantic    = this.getSemanticState()
 
     const report = {
       status,
-      severity: az.lastSeverity,
+      severity:        az.lastSeverity,
       trend,
       eta,
       confidence,
@@ -1035,22 +1038,24 @@ export class CyclicProcessorEngine {
       mutated,
       projected,
       previous,
-      field: this.getFieldState(),
+      field:           this.getFieldState(),
       semantic,
-      similarity: similarity !== null ? Math.round(similarity * 100) + "%" : null,
-      avgStep: Math.round(avgStep * 100) / 100,
-      stdDev: Math.round(stdDev * 100) / 100,
-      threshold: Math.round(az.adaptiveThreshold),
+      similarity:      similarity !== null ? Math.round(similarity * 100) + "%" : null,
+      avgStep:         Math.round(avgStep * 100) / 100,
+      stdDev:          Math.round(stdDev * 100) / 100,
+      threshold:       Math.round(az.adaptiveThreshold),
       behaviorVector,
       health,
       forecast,
       containment,
       explain: {
-        reason: this.#buildReason(status, deviation),
-        since: sinceSec ? sinceSec + "s" : null,
-        pattern: this.#classifyPattern(similarity),
-        semanticContext: semantic.context,
-        etaUnavailableReason: trend !== "rising" && status === "CRITICAL" ? "trend is " + trend + " - deviation may be resolving" : null,
+        reason:           this.#buildReason(status, deviation),
+        since:            sinceSec ? sinceSec + "s" : null,
+        pattern:          this.#classifyPattern(similarity),
+        semanticContext:  semantic.context,
+        etaUnavailableReason: trend !== "rising" && status === "CRITICAL"
+          ? "trend is " + trend + " - deviation may be resolving"
+          : null,
       },
     }
 
@@ -1066,18 +1071,18 @@ export class CyclicProcessorEngine {
   #applyContainment(previous, step) {
     if (step === 0) return previous
 
-    const raw = previous + step
-    const next = this.#normalize(raw)
+    const raw   = previous + step
+    const next  = this.#normalize(raw)
     const wraps = Math.floor(Math.abs(raw) / this.#cycle)
 
     if (this.#didWrap(previous, next, step) || wraps > 0) {
       this.#cycleCount += Math.max(1, wraps)
       this.#emit("cycleComplete", {
-        cycleCount: this.#cycleCount,
+        cycleCount:      this.#cycleCount,
         memorySignature: this.#memorySignature,
         previous,
         next,
-        timestamp: this.#clock(),
+        timestamp:       this.#clock(),
       })
     }
 
@@ -1096,11 +1101,72 @@ export class CyclicProcessorEngine {
     return false
   }
 
+  // ─────────────────────────────────────────────
+  // #record — compressed storage
+  // full snapshot كل checkpointInterval entry
+  // delta فقط لما بينها
+  // ─────────────────────────────────────────────
   #record(payload) {
-    const entry = Object.freeze({
-      ...payload,
-      timestamp: Number.isFinite(payload.timestamp) ? payload.timestamp : this.#clock(),
-    })
+    const totalRecords = this.#history.length + 1
+    const isCheckpoint = totalRecords % this.#checkpointInterval === 0
+
+    let entry
+
+    if (isCheckpoint) {
+      // checkpoint كامل — يُحفظ في checkpoints منفصلاً
+      const cp = Object.freeze({
+        index:           totalRecords,
+        timestamp:       payload.timestamp ?? this.#clock(),
+        state:           payload.next,
+        cycleCount:      payload.cycleCount,
+        memorySignature: payload.memorySignature,
+        field:           payload.field,
+        semantic:        payload.semantic,
+        attractorVersion: this.#attractorVersion,
+      })
+      this.#checkpoints.push(cp)
+      if (this.#checkpoints.length > 50) this.#checkpoints.shift()
+
+      // في الـ history: نسخة كاملة فقط عند الـ checkpoint
+      entry = Object.freeze({
+        type:            payload.type,
+        previous:        payload.previous,
+        next:            payload.next,
+        step:            payload.step,
+        requestedStep:   payload.requestedStep,
+        rawStep:         payload.rawStep,
+        velocity:        payload.velocity,
+        cycleCount:      payload.cycleCount,
+        memorySignature: payload.memorySignature,
+        field:           payload.field,
+        semantic:        payload.semantic,
+        input:           payload.input ?? null,
+        output:          payload.output ?? [],
+        cycle:           this.#cycle,
+        timestamp:       payload.timestamp ?? this.#clock(),
+        _checkpoint:     true,
+      })
+    } else {
+      // delta فقط — بدون field أو semantic أو attractors
+      entry = Object.freeze({
+        type:            payload.type,
+        previous:        payload.previous,
+        next:            payload.next,
+        step:            payload.step,
+        requestedStep:   payload.requestedStep,
+        rawStep:         payload.rawStep,
+        velocity:        payload.velocity,
+        cycleCount:      payload.cycleCount,
+        memorySignature: payload.memorySignature,
+        pressure:        payload.field?.pressure        ?? 0,
+        novelty:         payload.field?.novelty         ?? 0,
+        attractorVersion: this.#attractorVersion,
+        input:           payload.input ?? null,
+        output:          payload.output ?? [],
+        cycle:           this.#cycle,
+        timestamp:       payload.timestamp ?? this.#clock(),
+      })
+    }
 
     this.#history.push(entry)
 
@@ -1116,19 +1182,20 @@ export class CyclicProcessorEngine {
     if (!entry) return
 
     const archived = Object.freeze({
-      type: "archive",
-      originalType: entry.type,
-      previous: entry.previous,
-      next: entry.next,
-      step: entry.step,
-      cycleCount: entry.cycleCount,
+      type:            "archive",
+      originalType:    entry.type,
+      previous:        entry.previous,
+      next:            entry.next,
+      step:            entry.step,
+      cycleCount:      entry.cycleCount,
       memorySignature: entry.memorySignature,
-      fieldResidual: entry.field?.residual ?? 0,
-      fieldCurvature: entry.field?.curvature ?? 0,
+      pressure:        entry.pressure ?? entry.field?.pressure ?? 0,
+      fieldResidual:   entry.field?.residual   ?? 0,
+      fieldCurvature:  entry.field?.curvature  ?? 0,
       fieldResistance: entry.field?.resistance ?? 0,
-      concept: entry.semantic?.state ?? null,
-      timestamp: entry.timestamp,
-      archivedAt: this.#clock(),
+      concept:         entry.semantic?.state   ?? null,
+      timestamp:       entry.timestamp,
+      archivedAt:      this.#clock(),
     })
 
     this.#archive.push(archived)
@@ -1148,10 +1215,7 @@ export class CyclicProcessorEngine {
   #emit(event, payload) {
     const listeners = this.#listeners[event]
     if (!listeners || listeners.size === 0) return
-
-    for (const listener of listeners) {
-      listener({ ...payload }, this)
-    }
+    for (const listener of listeners) listener({ ...payload }, this)
   }
 
   #sanitizeEntry(entry) {
@@ -1160,48 +1224,48 @@ export class CyclicProcessorEngine {
     }
 
     return Object.freeze({
-      type: typeof entry.type === "string" ? entry.type : "process",
-      previous: this.#normalize(entry.previous),
-      next: this.#normalize(entry.next),
-      step: Number.isFinite(entry.step) ? Number(entry.step) : this.signedDistance(entry.previous, entry.next),
-      requestedStep: Number.isFinite(entry.requestedStep) ? Number(entry.requestedStep) : undefined,
-      rawStep: Number.isFinite(entry.rawStep) ? Number(entry.rawStep) : undefined,
-      velocity: Number.isFinite(entry.velocity) ? Number(entry.velocity) : undefined,
-      cycleCount: Number.isFinite(entry.cycleCount) ? entry.cycleCount : 0,
+      type:            typeof entry.type === "string" ? entry.type : "process",
+      previous:        this.#normalize(entry.previous),
+      next:            this.#normalize(entry.next),
+      step:            Number.isFinite(entry.step) ? Number(entry.step) : this.signedDistance(entry.previous, entry.next),
+      requestedStep:   Number.isFinite(entry.requestedStep) ? Number(entry.requestedStep) : undefined,
+      rawStep:         Number.isFinite(entry.rawStep) ? Number(entry.rawStep) : undefined,
+      velocity:        Number.isFinite(entry.velocity) ? Number(entry.velocity) : undefined,
+      cycleCount:      Number.isFinite(entry.cycleCount) ? entry.cycleCount : 0,
       memorySignature: Number.isFinite(entry.memorySignature) ? entry.memorySignature : 0,
-      field: entry.field ? { ...entry.field } : undefined,
-      semantic: entry.semantic ? { ...entry.semantic } : undefined,
-      cycle: this.#cycle,
-      timestamp: Number.isFinite(entry.timestamp) ? Number(entry.timestamp) : this.#clock(),
-      input: entry.input ?? null,
-      output: Array.isArray(entry.output) ? entry.output : [],
+      field:           entry.field    ? { ...entry.field }    : undefined,
+      semantic:        entry.semantic ? { ...entry.semantic } : undefined,
+      cycle:           this.#cycle,
+      timestamp:       Number.isFinite(entry.timestamp) ? Number(entry.timestamp) : this.#clock(),
+      input:           entry.input  ?? null,
+      output:          Array.isArray(entry.output) ? entry.output : [],
     })
   }
 
   #restoreField(field) {
-    this.#field.residual = this.#clamp01(field.residual ?? 0)
-    this.#field.constraintDensity = this.#clamp01(field.constraintDensity ?? 0)
-    this.#field.inertia = this.#clamp01(field.inertia ?? 0)
-    this.#field.pressure = this.#clamp01(field.pressure ?? 0)
-    this.#field.curvature = this.#clamp01(field.curvature ?? 0)
-    this.#field.diffusion = this.#clamp01(field.diffusion ?? 0)
-    this.#field.resistance = this.#clamp01(field.resistance ?? 0)
-    this.#field.novelty = this.#clamp01(field.novelty ?? 0)
-    this.#field.lastEffectiveStep = Number.isFinite(field.lastEffectiveStep) ? Number(field.lastEffectiveStep) : 0
-    this.#field.attractors = Array.isArray(field.attractors) ? field.attractors.map(a => ({ ...a })) : []
+    this.#field.residual           = this.#clamp01(field.residual           ?? 0)
+    this.#field.constraintDensity  = this.#clamp01(field.constraintDensity  ?? 0)
+    this.#field.inertia            = this.#clamp01(field.inertia            ?? 0)
+    this.#field.pressure           = this.#clamp01(field.pressure           ?? 0)
+    this.#field.curvature          = this.#clamp01(field.curvature          ?? 0)
+    this.#field.diffusion          = this.#clamp01(field.diffusion          ?? 0)
+    this.#field.resistance         = this.#clamp01(field.resistance         ?? 0)
+    this.#field.novelty            = this.#clamp01(field.novelty            ?? 0)
+    this.#field.lastEffectiveStep  = Number.isFinite(field.lastEffectiveStep) ? Number(field.lastEffectiveStep) : 0
+    this.#field.attractors         = Array.isArray(field.attractors) ? field.attractors.map(a => ({ ...a })) : []
   }
 
   #resetField() {
-    this.#field.residual = 0
+    this.#field.residual          = 0
     this.#field.constraintDensity = 0
-    this.#field.inertia = 0
-    this.#field.pressure = 0
-    this.#field.curvature = 0
-    this.#field.diffusion = 0
-    this.#field.resistance = 0
-    this.#field.novelty = 0
+    this.#field.inertia           = 0
+    this.#field.pressure          = 0
+    this.#field.curvature         = 0
+    this.#field.diffusion         = 0
+    this.#field.resistance        = 0
+    this.#field.novelty           = 0
     this.#field.lastEffectiveStep = 0
-    this.#field.attractors = []
+    this.#field.attractors        = []
   }
 
   #clamp01(v) {
@@ -1217,12 +1281,9 @@ export class CyclicProcessorEngine {
   #zNormalize(arr) {
     const n = arr.length
     if (n === 0) return []
-
     const mean = arr.reduce((s, v) => s + v, 0) / n
-    const std = n > 1 ? Math.sqrt(arr.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / (n - 1)) : 0
-
+    const std  = n > 1 ? Math.sqrt(arr.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / (n - 1)) : 0
     if (std === 0) return arr.map(() => 0)
-
     return arr.map(v => (v - mean) / std)
   }
 
@@ -1230,10 +1291,9 @@ export class CyclicProcessorEngine {
     if (!learnedZScores.length || !currentSteps.length) return null
 
     const windowSize = Math.min(currentSteps.length, learnedZScores.length)
-    const cNorm = this.#zNormalize(currentSteps.slice(-windowSize))
-    const lWindow = learnedZScores.slice(-windowSize)
-
-    let sumDiff = 0
+    const cNorm      = this.#zNormalize(currentSteps.slice(-windowSize))
+    const lWindow    = learnedZScores.slice(-windowSize)
+    let sumDiff      = 0
 
     for (let i = 0; i < windowSize; i++) {
       sumDiff += Math.pow(cNorm[i] - lWindow[i], 2)
@@ -1244,94 +1304,82 @@ export class CyclicProcessorEngine {
 
   #extractSteps(historySlice) {
     const steps = []
-
     for (let i = 1; i < historySlice.length; i++) {
       steps.push(Math.abs(this.signedDistance(historySlice[i - 1].next, historySlice[i].next)))
     }
-
     return steps
   }
 
   #linearSlope(buffer) {
     const n = buffer.length
     if (n < 2) return 0
-
-    const xm = (n - 1) / 2
-    const ym = buffer.reduce((s, v) => s + v, 0) / n
-
-    let num = 0
-    let den = 0
-
+    const xm  = (n - 1) / 2
+    const ym  = buffer.reduce((s, v) => s + v, 0) / n
+    let num   = 0
+    let den   = 0
     for (let i = 0; i < n; i++) {
       num += (i - xm) * (buffer[i] - ym)
       den += Math.pow(i - xm, 2)
     }
-
     return den === 0 ? 0 : num / den
   }
 
   #getTrend() {
     if (this.#az.trendBuffer.length < 2) return "stable"
-
     const slope = this.#linearSlope(this.#az.trendBuffer)
-
-    if (slope > 0.5) return "rising"
+    if (slope > 0.5)  return "rising"
     if (slope < -0.5) return "falling"
-
     return "stable"
   }
 
   #estimateETA(trend, deviation) {
     if (trend !== "rising") return null
-
     const remaining = (this.#az.adaptiveThreshold * 2) - deviation
     if (remaining <= 0) return "0.0s"
-
     const slope = this.#linearSlope(this.#az.trendBuffer)
     if (slope <= 0) return null
-
     return (remaining / slope).toFixed(1) + "s"
   }
 
   #buildReason(status, deviation) {
     const t = this.#az.adaptiveThreshold
-
     if (status === "CRITICAL") return "deviation " + Math.round(deviation) + " exceeded critical threshold " + Math.round(t * 2)
-    if (status === "NOTICE") return "deviation " + Math.round(deviation) + " above notice threshold " + Math.round(t)
-
+    if (status === "NOTICE")   return "deviation " + Math.round(deviation) + " above notice threshold "    + Math.round(t)
     return "within normal range"
   }
 
   #classifyPattern(similarity) {
-    if (similarity === null) return "no pattern learned yet"
-    if (similarity > 0.8) return "high match with learned pattern"
-    if (similarity > 0.5) return "partial match"
+    if (similarity === null)   return "no pattern learned yet"
+    if (similarity > 0.8)      return "high match with learned pattern"
+    if (similarity > 0.5)      return "partial match"
     return "low match - unknown pattern"
   }
 
   #computeBehaviorVector(stdDev, deviation, similarity) {
-    const az = this.#az
-    const patternWeight = az.learnedZScores.length > 0 ? Math.min(0.2, 0.2 * (az.readingCount / az.historyWindow)) : 0
+    const az            = this.#az
+    const patternWeight = az.learnedZScores.length > 0
+      ? Math.min(0.2, 0.2 * (az.readingCount / az.historyWindow))
+      : 0
     const rem = 1 - patternWeight
 
     const stabilityScore = Math.max(0, Math.min(1, 1 - (stdDev / (az.adaptiveThreshold + 1))))
     const deviationScore = Math.min(1, deviation / (az.adaptiveThreshold * 2))
-    const patternScore = similarity ?? 0
-    const fieldScore = Math.max(0, 1 - this.#field.resistance)
+    const patternScore   = similarity ?? 0
+    const fieldScore     = Math.max(0, 1 - this.#field.resistance)
 
     const behaviorScore = Math.round(
-      stabilityScore * (rem * 0.35) +
+      stabilityScore  * (rem * 0.35) +
       (1 - deviationScore) * (rem * 0.35) +
-      patternScore * patternWeight +
-      fieldScore * 0.30
+      patternScore    * patternWeight +
+      fieldScore      * 0.30
     ) * 100
 
     return {
       stability: Math.round(stabilityScore * 100),
       deviation: Math.round(deviationScore * 100),
-      pattern: Math.round(patternScore * 100),
-      field: Math.round(fieldScore * 100),
-      behavior: Math.max(0, Math.min(100, behaviorScore)),
+      pattern:   Math.round(patternScore   * 100),
+      field:     Math.round(fieldScore     * 100),
+      behavior:  Math.max(0, Math.min(100, behaviorScore)),
     }
   }
 
@@ -1344,7 +1392,6 @@ export class CyclicProcessorEngine {
 
   #computeForecast(currentScore) {
     const az = this.#az
-
     if (az.scoreHistory.length < 3) return null
 
     const slope = this.#linearSlope(az.scoreHistory.map(e => e.score))
@@ -1354,12 +1401,9 @@ export class CyclicProcessorEngine {
 
     const fmt = (intervals) => {
       if (intervals === null) return null
-
       const ms = intervals * az.intervalMs
-
       if (Math.round(ms / 86400000) >= 2) return Math.round(ms / 86400000) + " days"
-      if (Math.round(ms / 3600000) >= 2) return Math.round(ms / 3600000) + " hours"
-
+      if (Math.round(ms / 3600000)  >= 2) return Math.round(ms / 3600000)  + " hours"
       return Math.round(ms / 60000) + " minutes"
     }
 
@@ -1370,9 +1414,9 @@ export class CyclicProcessorEngine {
 
     return {
       degradationRate: Math.round(degradationPerInterval * 100) / 100,
-      score50in: fmt(intervalsTo(50)),
-      score30in: fmt(intervalsTo(30)),
-      confidence: Math.min(99, Math.round((az.scoreHistory.length / az.scoreHistorySize) * 99)),
+      score50in:       fmt(intervalsTo(50)),
+      score30in:       fmt(intervalsTo(30)),
+      confidence:      Math.min(99, Math.round((az.scoreHistory.length / az.scoreHistorySize) * 99)),
     }
   }
 }
