@@ -49,8 +49,76 @@ function mapIntent(snapshot) {
   return 'statement'
 }
 
+function buildSemanticSummary(text, routedContext = [], snapshot = {}) {
+
+  const lower = String(text || '').toLowerCase()
+
+  const topics = []
+
+  if (/python|fastapi|redis|api|server|backend/.test(lower)) {
+    topics.push('backend-development')
+  }
+
+  if (/latency|timeout|performance|speed|cache|caching/.test(lower)) {
+    topics.push('performance-optimization')
+  }
+
+  if (/railway|deploy|docker|cloud|hosting/.test(lower)) {
+    topics.push('deployment')
+  }
+
+  if (/tokens|claude|openai|llm|prompt/.test(lower)) {
+    topics.push('llm-optimization')
+  }
+
+  const language =
+    /[أ-ي]/.test(text)
+      ? 'arabic'
+      : 'english'
+
+  const field =
+    snapshot?.field ?? {}
+
+  const phase =
+    snapshot?.phase ?? 'warmup'
+
+  const coherence =
+    Number(field.coherence ?? 0)
+
+  const resonance =
+    Number(field.resonance ?? 0)
+
+  const novelty =
+    Number(field.noveltyPressure ?? 0)
+
+  const grounding =
+    Number(field.semanticGrounding ?? 0)
+
+  const routed =
+    routedContext
+      .slice(0, 3)
+      .map(r => ({
+        phase: r.phase,
+        score: r.score
+      }))
+
+  return {
+    topic: topics.join(', ') || 'general-discussion',
+    language,
+    phase,
+    coherence,
+    resonance,
+    novelty,
+    grounding,
+    routed
+  }
+
+}
+
 async function feed(sessionId, text) {
+
   const signals = parse(text)
+
   if (!signals.valid) {
     return { ok: false, reason: signals.reason ?? 'invalid_signals' }
   }
@@ -86,72 +154,98 @@ async function feed(sessionId, text) {
     celfResult: {
       phase: snapshot.phase,
       t:     snapshot.t,
-      field, metrics, control, perturbation, attractors
+      field,
+      metrics,
+      control,
+      perturbation,
+      attractors
     }
   }
 }
 
-// ── Claude API call ──────────────────────────
-async function callClaude(systemHint, userContent, history, hasImage) {
+async function callClaude(
+  systemHint,
+  userContent,
+  history,
+  hasImage,
+  routedContext = [],
+  semanticSummary = {}
+) {
 
-  // بناء messages لـ Claude
+  let finalContent
+
+  if (hasImage) {
+    finalContent = userContent
+  } else {
+    finalContent =
+      typeof userContent === 'string'
+        ? userContent
+        : JSON.stringify(userContent)
+  }
+
+  const compactMemory = routedContext.map(r => ({
+    t:          r.t,
+    phase:      r.phase,
+    score:      r.score,
+    theta:      r.theta,
+    signature:  r.signature,
+    signalType: r.signalType
+  }))
+
+  const summaryText =
+    JSON.stringify(semanticSummary)
+
   const messages = [
-    ...history.map(h => ({ role: h.role, content: h.content })),
     {
       role: 'user',
-      content: hasImage ? userContent : userContent
+      content: hasImage
+        ? finalContent
+        : `[CELF SUMMARY]\n${summaryText}\n\n[CELF MEMORY]\n${JSON.stringify(compactMemory)}\n\n${finalContent}`
     }
   ]
 
-  // صورة → content array
-  let finalContent
-  if (hasImage) {
-    finalContent = userContent  // array جاهز
-  } else {
-    finalContent = typeof userContent === 'string' ? userContent : JSON.stringify(userContent)
-  }
+  const historyChars = history.reduce(
+    (s, h) => s + JSON.stringify(h).length,
+    0
+  )
 
-  const lastMessage = messages[messages.length - 1]
-  lastMessage.content = finalContent
+  const systemChars = systemHint.length
 
-  // ── TOKEN DEBUG ─────────────────────────────
-  const debugPayload = {
-    model:      'claude-haiku-4-5-20251001',
-    max_tokens: 1024,
-    system:     systemHint,
-    messages
-  }
+  const userChars =
+    typeof finalContent === 'string'
+      ? finalContent.length
+      : JSON.stringify(finalContent).length
 
-  const debugPayloadString = JSON.stringify(debugPayload)
-  const estimatedTokens    = Math.ceil(debugPayloadString.length / 4)
+  const memoryChars =
+    JSON.stringify(compactMemory).length
 
-  console.log('\n========== REAL API PAYLOAD ==========\n')
-  console.log('Payload chars:', debugPayloadString.length)
-  console.log('Estimated tokens:', estimatedTokens)
-  console.log('Payload KB:', (debugPayloadString.length / 1024).toFixed(2))
-  console.log('System chars:', systemHint.length)
-  console.log('History count:', history.length)
+  const summaryChars =
+    summaryText.length
 
-  messages.forEach((m, i) => {
-    const size = JSON.stringify(m).length
-    console.log(`#${i} role=${m.role} chars=${size}`)
+  const totalChars =
+    historyChars +
+    systemChars +
+    userChars +
+    memoryChars +
+    summaryChars
 
-    if (Array.isArray(m.content)) {
-      m.content.forEach((part, x) => {
-        if (part.type === 'image') {
-          const bytes = Buffer.from(part.source?.data || '', 'base64').length
-          console.log(`   IMAGE[${x}] bytes=${bytes}`)
-          console.log(`   IMAGE[${x}] MB=${(bytes / 1024 / 1024).toFixed(2)}`)
-        }
-      })
-    }
-  })
+  const estimatedInputTokens =
+    Math.ceil(totalChars / 4)
 
-  console.log('\n======================================\n')
-  // ─────────────────────────────────────
+  console.log('\n========== REAL API PAYLOAD ==========')
+  console.log('History messages:      ', history.length)
+  console.log('History chars:         ', historyChars)
+  console.log('System hint chars:     ', systemChars)
+  console.log('User chars:            ', userChars)
+  console.log('CELF memory chars:     ', memoryChars)
+  console.log('CELF summary chars:    ', summaryChars)
+  console.log('TOTAL chars:           ', totalChars)
+  console.log('Estimated INPUT TOKENS:', estimatedInputTokens)
+  console.log('Max OUTPUT TOKENS:     ', 1024)
+  console.log('======================================\n')
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method:  'POST',
+    method: 'POST',
     headers: {
       'Content-Type':      'application/json',
       'x-api-key':         process.env.ANTHROPIC_API_KEY,
@@ -168,26 +262,13 @@ async function callClaude(systemHint, userContent, history, hasImage) {
   const data = await response.json()
 
   if (!response.ok) {
-    throw new Error(`Claude API error: ${data?.error?.message ?? response.status}`)
+    throw new Error(
+      `Claude API error: ${data?.error?.message ?? response.status}`
+    )
   }
-
-  // ── CLAUDE REAL USAGE DEBUG ─────────────────
-  if (data?.usage) {
-    console.log('\n========== CLAUDE USAGE ==========\n')
-    console.log('Input tokens:', data.usage.input_tokens)
-    console.log('Output tokens:', data.usage.output_tokens)
-    console.log('Cache creation:', data.usage.cache_creation_input_tokens ?? 0)
-    console.log('Cache read:', data.usage.cache_read_input_tokens ?? 0)
-    console.log('\n==================================\n')
-  }
-  // ───────────────────────────────────────────
 
   return data?.content?.[0]?.text ?? null
 }
-
-// ─────────────────────────────────────────────
-//  GET /process-text
-// ─────────────────────────────────────────────
 
 router.get('/process-text', (_req, res) => {
   res.json({
@@ -200,11 +281,8 @@ router.get('/process-text', (_req, res) => {
   })
 })
 
-// ─────────────────────────────────────────────
-//  POST /process-text
-// ─────────────────────────────────────────────
-
 router.post('/process-text', async (req, res) => {
+
   const {
     text          = '',
     sessionId,
@@ -213,11 +291,18 @@ router.post('/process-text', async (req, res) => {
     imageMimeType = 'image/jpeg'
   } = req.body
 
-  const hasText  = typeof text === 'string' && text.trim().length > 0
-  const hasImage = typeof image === 'string' && image.length > 0
+  const hasText  =
+    typeof text === 'string' &&
+    text.trim().length > 0
+
+  const hasImage =
+    typeof image === 'string' &&
+    image.length > 0
 
   if (!hasText && !hasImage) {
-    return res.status(400).json({ error: 'missing_input' })
+    return res.status(400).json({
+      error: 'missing_input'
+    })
   }
 
   const sid       = sessionId || 'default'
@@ -256,33 +341,72 @@ router.post('/process-text', async (req, res) => {
   }
 
   try {
+
     const systemHint = built.systemHint || ''
 
-    // بناء userContent
     let userContent
+
     if (hasImage) {
+
       userContent = [
         {
-          type:   'image',
+          type: 'image',
           source: {
             type:       'base64',
             media_type: imageMimeType,
             data:       image
           }
         },
-        ...(hasText ? [{ type: 'text', text }] : [])
+        ...(hasText
+          ? [{ type: 'text', text }]
+          : [])
       ]
+
     } else {
+
       userContent = text
+
     }
 
-    // Metrics
-    const historyChars     = history.reduce((s, h) => s + (h.content?.length || 0), 0)
-    const rawInputChars    = text.length + historyChars
-    const compressedChars  = systemHint.length + text.length
-    const compressionRatio = rawInputChars > 0
-      ? Math.round((1 - compressedChars / rawInputChars) * 100)
-      : 0
+    const engine = getEngine(sid)
+
+    const routedContext =
+      engine.routeContext(text, 3)
+
+    const semanticSummary =
+      buildSemanticSummary(
+        text,
+        routedContext,
+        processed.result
+      )
+
+    const historyChars =
+      history.reduce(
+        (s, h) => s + (h.content?.length || 0),
+        0
+      )
+
+    const rawInputChars =
+      text.length + historyChars
+
+    const compactMemoryChars =
+      JSON.stringify(routedContext).length
+
+    const semanticSummaryChars =
+      JSON.stringify(semanticSummary).length
+
+    const compressedChars =
+      systemHint.length +
+      text.length +
+      compactMemoryChars +
+      semanticSummaryChars
+
+    const compressionRatio =
+      rawInputChars > 0
+        ? Math.round(
+            (1 - compressedChars / rawInputChars) * 100
+          )
+        : 0
 
     metricsStore.set(sid, {
       sessionId: sid,
@@ -290,6 +414,8 @@ router.post('/process-text', async (req, res) => {
       compressedChars,
       compressionRatio,
       estimatedSystemTokens: Math.ceil(systemHint.length / 4),
+      estimatedCompactTokens: Math.ceil(compactMemoryChars / 4),
+      estimatedSummaryTokens: Math.ceil(semanticSummaryChars / 4),
       phase:       processed.celfResult.phase                  ?? 'warmup',
       resonance:   processed.celfResult.field?.resonance       ?? 0,
       coherence:   processed.celfResult.field?.coherence       ?? 0,
@@ -300,12 +426,16 @@ router.post('/process-text', async (req, res) => {
       updatedAt:   new Date().toISOString()
     })
 
-    // استدعاء Claude
-    const reply = await callClaude(systemHint, userContent, history, hasImage)
+    const reply = await callClaude(
+      systemHint,
+      userContent,
+      history,
+      hasImage,
+      routedContext,
+      semanticSummary
+    )
 
-    // Feedback Loop
     if (reply) {
-      const engine = getEngine(sid)
       await engine.process(reply)
     }
 
@@ -313,50 +443,98 @@ router.post('/process-text', async (req, res) => {
       reply,
       context: built.context,
       signals: processed.signals,
-      celf:    processed.result,
+      celf: processed.result,
+      routedContext,
+      semanticSummary,
       metrics: {
         rawInputChars,
         compressedChars,
         compressionRatio,
-        estimatedSystemTokens: Math.ceil(systemHint.length / 4)
+        estimatedSystemTokens: Math.ceil(systemHint.length / 4),
+        estimatedCompactTokens: Math.ceil(compactMemoryChars / 4),
+        estimatedSummaryTokens: Math.ceil(semanticSummaryChars / 4)
       }
     })
 
   } catch (err) {
-    console.error('[process-text] error:', err.message, err.stack)
-    return res.status(500).json({ error: 'llm_failed', detail: err.message })
+
+    console.error(
+      '[process-text] error:',
+      err.message,
+      err.stack
+    )
+
+    return res.status(500).json({
+      error: 'llm_failed',
+      detail: err.message
+    })
+
   }
+
 })
 
 router.get('/session/:id', (req, res) => {
+
   if (!sessions.has(req.params.id)) {
-    return res.status(404).json({ error: 'session_not_found' })
+    return res.status(404).json({
+      error: 'session_not_found'
+    })
   }
+
   const engine  = sessions.get(req.params.id)
   const summary = engine.getSummary?.() ?? {}
-  return res.json({ ok: true, sessionId: req.params.id, summary })
+
+  return res.json({
+    ok: true,
+    sessionId: req.params.id,
+    summary
+  })
+
 })
 
 router.get('/metrics/:id', (req, res) => {
+
   const metrics = metricsStore.get(req.params.id)
-  if (!metrics) return res.status(404).json({ error: 'metrics_not_found' })
+
+  if (!metrics) {
+    return res.status(404).json({
+      error: 'metrics_not_found'
+    })
+  }
+
   return res.json(metrics)
+
 })
 
 router.get('/debug/:id', (req, res) => {
+
   if (!sessions.has(req.params.id)) {
-    return res.status(404).json({ error: 'session_not_found' })
+    return res.status(404).json({
+      error: 'session_not_found'
+    })
   }
+
   const engine  = sessions.get(req.params.id)
   const metrics = metricsStore.get(req.params.id)
   const summary = engine.getSummary?.() ?? {}
-  return res.json({ metrics, summary, rings: engine.getRings?.() ?? [] })
+
+  return res.json({
+    metrics,
+    summary,
+    rings: engine.getRings?.() ?? []
+  })
+
 })
 
 router.delete('/session/:id', (req, res) => {
+
   sessions.delete(req.params.id)
   metricsStore.delete(req.params.id)
-  return res.json({ ok: true })
+
+  return res.json({
+    ok: true
+  })
+
 })
 
 export default router
