@@ -127,6 +127,16 @@ async function feed(sessionId, text) {
 //  POST /process-text
 // ─────────────────────────────────────────────
 
+router.get('/process-text', (_req, res) => {
+  res.json({
+    ok:       true,
+    endpoint: '/celf/process-text',
+    method:   'POST',
+    status:   'online',
+    engine:   'CELF_Engine_AI_V5'
+  })
+})
+
 router.post('/process-text', async (req, res) => {
   const {
     text      = '',
@@ -267,6 +277,7 @@ router.post('/process-text', async (req, res) => {
     })
 
   } catch (err) {
+    console.error('[process-text] error:', err.message, err.stack)
     return res.status(500).json({ error: 'llm_failed', detail: err.message })
   }
 })
