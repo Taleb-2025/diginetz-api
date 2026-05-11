@@ -1083,9 +1083,9 @@ export class CELF_Engine_AI_V5 {
 
     const drift = prev
       ? this.clamp01(
-          Math.abs(prev.metrics.mean - mean) +
-          Math.abs(prev.metrics.entropy - entropy) +
-          Math.abs((prev.metrics.semanticMass ?? 0) - semanticMass)
+          Math.abs((prev.metrics?.mean    ?? prev.mean    ?? mean)    - mean) +
+          Math.abs((prev.metrics?.entropy ?? prev.entropy ?? entropy) - entropy) +
+          Math.abs((prev.metrics?.semanticMass ?? prev.semanticMass ?? 0) - semanticMass)
         )
       : 0
 
