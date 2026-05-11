@@ -16,7 +16,7 @@ export class CELF_Engine_AI_V5 {
     this.semanticDimensions = options.semanticDimensions ?? 16
     this.routingLimit = options.routingLimit ?? 8
     this.massTarget = options.massTarget ?? null
-    this.localizationThreshold   = options.localizationThreshold   ?? 0.012 
+    this.localizationThreshold   = options.localizationThreshold   ?? 0.012
     this.decayRate               = options.decayRate               ?? 0.25
     this.contradictionThreshold  = options.contradictionThreshold  ?? 0.22
     this.credibilityLearningRate = options.credibilityLearningRate ?? 0.08
