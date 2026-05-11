@@ -114,6 +114,42 @@ async function callClaude(systemHint, userContent, history, hasImage) {
   const lastMessage = messages[messages.length - 1]
   lastMessage.content = finalContent
 
+  // ── TOKEN DEBUG ─────────────────────────────
+  const debugPayload = {
+    model:      'claude-haiku-4-5-20251001',
+    max_tokens: 1024,
+    system:     systemHint,
+    messages
+  }
+
+  const debugPayloadString = JSON.stringify(debugPayload)
+  const estimatedTokens    = Math.ceil(debugPayloadString.length / 4)
+
+  console.log('\n========== REAL API PAYLOAD ==========\n')
+  console.log('Payload chars:', debugPayloadString.length)
+  console.log('Estimated tokens:', estimatedTokens)
+  console.log('Payload KB:', (debugPayloadString.length / 1024).toFixed(2))
+  console.log('System chars:', systemHint.length)
+  console.log('History count:', history.length)
+
+  messages.forEach((m, i) => {
+    const size = JSON.stringify(m).length
+    console.log(`#${i} role=${m.role} chars=${size}`)
+
+    if (Array.isArray(m.content)) {
+      m.content.forEach((part, x) => {
+        if (part.type === 'image') {
+          const bytes = Buffer.from(part.source?.data || '', 'base64').length
+          console.log(`   IMAGE[${x}] bytes=${bytes}`)
+          console.log(`   IMAGE[${x}] MB=${(bytes / 1024 / 1024).toFixed(2)}`)
+        }
+      })
+    }
+  })
+
+  console.log('\n======================================\n')
+  // ─────────────────────────────────────
+
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method:  'POST',
     headers: {
@@ -134,6 +170,17 @@ async function callClaude(systemHint, userContent, history, hasImage) {
   if (!response.ok) {
     throw new Error(`Claude API error: ${data?.error?.message ?? response.status}`)
   }
+
+  // ── CLAUDE REAL USAGE DEBUG ─────────────────
+  if (data?.usage) {
+    console.log('\n========== CLAUDE USAGE ==========\n')
+    console.log('Input tokens:', data.usage.input_tokens)
+    console.log('Output tokens:', data.usage.output_tokens)
+    console.log('Cache creation:', data.usage.cache_creation_input_tokens ?? 0)
+    console.log('Cache read:', data.usage.cache_read_input_tokens ?? 0)
+    console.log('\n==================================\n')
+  }
+  // ───────────────────────────────────────────
 
   return data?.content?.[0]?.text ?? null
 }
