@@ -8,11 +8,13 @@ import express from 'express'
 import { CELF_Engine_AI_V5 } from '../engines/celf-engine-v5.js'
 import { parse }              from '../utils/lightweight-parser.js'
 import { build }              from '../utils/context-builder.js'
+import { analyze }            from '../utils/response-analyzer.js'
 
 const router       = express.Router()
-const MAX_SESSIONS = 500
-const sessions     = new Map()
-const metricsStore = new Map()
+const MAX_SESSIONS    = 500
+const sessions        = new Map()
+const metricsStore    = new Map()
+const analysisStore   = new Map()  // sessionId → last analysis
 
 // ── Session LRU ──────────────────────────────
 function getEngine(sessionId) {
@@ -105,7 +107,7 @@ async function callClaude(systemHint, userContent, history) {
     },
     body: JSON.stringify({
       model:      'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
+      max_tokens: 600,
       system:     systemHint,
       messages
     })
@@ -156,11 +158,18 @@ router.post('/process-text', async (req, res) => {
     return res.status(422).json({ error: processed.reason || 'processing_failed' })
   }
 
+  // تحليل الرسالة السابقة إذا وُجد
+  const prevAnalysis     = analysisStore.get(sid)
+  const structuralHint   = prevAnalysis?.structuralHint ?? null
+  const prevMaxTokens    = prevAnalysis?.nextMaxTokens  ?? null
+
   const built = build({
-    ok:         true,
-    signals:    processed.signals,
-    celfResult: processed.celfResult,
-    passToLLM:  processed.passToLLM
+    ok:             true,
+    signals:        processed.signals,
+    celfResult:     processed.celfResult,
+    passToLLM:      processed.passToLLM,
+    structuralHint,
+    prevMaxTokens
   })
 
   if (built.blocked) {
@@ -231,7 +240,7 @@ router.post('/process-text', async (req, res) => {
       },
       body: JSON.stringify({
         model:      'claude-haiku-4-5-20251001',
-        max_tokens: 1024,
+        max_tokens: built.maxTokens ?? 250,
         system:     systemHint,
         messages: [
           ...history.map(h => ({ role: h.role, content: h.content })),
@@ -249,9 +258,22 @@ router.post('/process-text', async (req, res) => {
     const reply = claudeData?.content?.[0]?.text ?? null
     const usage = claudeData?.usage ?? {}
 
-    // Feedback Loop
+    // Feedback Loop + Post-Response Analysis
     if (reply) {
+      const fieldBefore = processed.celfResult.field
       await getEngine(sid).process(reply)
+      const fieldAfter  = getEngine(sid).getSummary?.()?.field ?? {}
+
+      // Response Analyzer — structural only
+      const analysis = analyze({
+        reply,
+        fieldBefore,
+        fieldAfter,
+        maxTokens: built.maxTokens ?? 250
+      })
+
+      // احفظ للرسالة التالية
+      analysisStore.set(sid, analysis)
     }
 
     return res.json({
