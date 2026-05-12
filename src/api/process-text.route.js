@@ -240,7 +240,7 @@ router.post('/process-text', async (req, res) => {
       },
       body: JSON.stringify({
         model:      'claude-haiku-4-5-20251001',
-        max_tokens: built.maxTokens ?? 250,
+        max_tokens: 4096,  // true test — no artificial limit
         system:     systemHint,
         messages: [
           ...history.map(h => ({ role: h.role, content: h.content })),
@@ -269,7 +269,7 @@ router.post('/process-text', async (req, res) => {
         reply,
         fieldBefore,
         fieldAfter,
-        maxTokens: built.maxTokens ?? 250
+        maxTokens: 4096
       })
 
       // احفظ للرسالة التالية
