@@ -1,8 +1,4 @@
 export class CELF_Engine_AI_V5 {
-  // Private cache for metrics() — computed once per cycle
-  #metricsCache     = null
-  #metricsCacheTime = -1
-
   constructor(options = {}) {
     this.cycle = options.cycle ?? 360
     this.resolution = options.resolution ?? 360
@@ -101,8 +97,8 @@ export class CELF_Engine_AI_V5 {
 
   process(input, options = {}) {
     // Invalidate metrics cache at start of each cycle
-    this.#metricsCache     = null
-    this.#metricsCacheTime = -1
+    this._metricsCache     = null
+    this._metricsCacheTime = -1
 
     // Accept process(input, 0.2) or process(input, { sourceWeight: 0.2 })
     if (typeof options === 'number') options = { sourceWeight: options }
@@ -1084,8 +1080,8 @@ export class CELF_Engine_AI_V5 {
 
   metrics() {
     // Cache: reuse if called multiple times in same cycle
-    if (this.#metricsCache !== null && this.#metricsCacheTime === this.state.t) {
-      return this.#metricsCache
+    if (this._metricsCache !== null && this._metricsCacheTime === this.state.t) {
+      return this._metricsCache
     }
 
     const ps = []
@@ -1149,9 +1145,10 @@ export class CELF_Engine_AI_V5 {
     }
 
     // Store in cache
-    this.#metricsCache     = result
-    this.#metricsCacheTime = this.state.t
+    this._metricsCache     = result
+    this._metricsCacheTime = this.state.t
     return result
+  }
 
   snapshot(perturbation, delta, contained) {
     return {
