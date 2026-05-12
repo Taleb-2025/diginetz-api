@@ -221,8 +221,33 @@ router.post('/process-text', async (req, res) => {
       updatedAt:  new Date().toISOString()
     })
 
-    // استدعاء Claude
-    const reply = await callClaude(systemHint, userContent, history)
+    // استدعاء Claude مع usage tracking
+    const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
+      method:  'POST',
+      headers: {
+        'Content-Type':      'application/json',
+        'x-api-key':         process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model:      'claude-haiku-4-5-20251001',
+        max_tokens: 1024,
+        system:     systemHint,
+        messages: [
+          ...history.map(h => ({ role: h.role, content: h.content })),
+          { role: 'user', content: userContent }
+        ]
+      })
+    })
+
+    const claudeData = await claudeResponse.json()
+
+    if (!claudeResponse.ok) {
+      throw new Error(`Claude error: ${claudeData?.error?.message ?? claudeResponse.status}`)
+    }
+
+    const reply = claudeData?.content?.[0]?.text ?? null
+    const usage = claudeData?.usage ?? {}
 
     // Feedback Loop
     if (reply) {
@@ -239,7 +264,16 @@ router.post('/process-text', async (req, res) => {
         compressedChars,
         compressionRatio,
         estimatedSystemTokens: Math.ceil(systemHint.length / 4),
-        systemHintPreview: systemHint.slice(0, 100)
+        systemHintPreview: systemHint.slice(0, 100),
+        claudeUsage: {
+          inputTokens:  usage.input_tokens  ?? 0,
+          outputTokens: usage.output_tokens ?? 0,
+          totalTokens:  (usage.input_tokens  ?? 0) + (usage.output_tokens ?? 0),
+          costUSD:      parseFloat((
+            ((usage.input_tokens  ?? 0) / 1_000_000 * 1.00) +
+            ((usage.output_tokens ?? 0) / 1_000_000 * 5.00)
+          ).toFixed(6))
+        }
       }
     })
 
