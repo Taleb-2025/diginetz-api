@@ -163,13 +163,18 @@ router.post('/process-text', async (req, res) => {
   const structuralHint   = prevAnalysis?.structuralHint ?? null
   const prevMaxTokens    = prevAnalysis?.nextMaxTokens  ?? null
 
+  // Read field topology from engine — no stored memory
+  const engine      = getEngine(sid)
+  const fieldPrompt = engine.buildFieldPrompt?.() ?? null
+
   const built = build({
     ok:             true,
     signals:        processed.signals,
     celfResult:     processed.celfResult,
     passToLLM:      processed.passToLLM,
     structuralHint,
-    prevMaxTokens
+    prevMaxTokens,
+    fieldPrompt
   })
 
   if (built.blocked) {
@@ -231,6 +236,8 @@ router.post('/process-text', async (req, res) => {
     })
 
     // استدعاء Claude مع usage tracking
+    // Field state memory — no history sent to Claude
+    // CELF field replaces conversation history
     const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
       method:  'POST',
       headers: {
@@ -240,10 +247,9 @@ router.post('/process-text', async (req, res) => {
       },
       body: JSON.stringify({
         model:      'claude-haiku-4-5-20251001',
-        max_tokens: 4096,  // true test — no artificial limit
+        max_tokens: built.maxTokens ?? 300,
         system:     systemHint,
         messages: [
-          ...history.map(h => ({ role: h.role, content: h.content })),
           { role: 'user', content: userContent }
         ]
       })
@@ -259,9 +265,11 @@ router.post('/process-text', async (req, res) => {
     const usage = claudeData?.usage ?? {}
 
     // Feedback Loop + Post-Response Analysis
+    // P_llm weight: 0.2 — stabilizes only, does not build
+    // P_u   weight: 1.0 — builds attractors (default)
     if (reply) {
       const fieldBefore = processed.celfResult.field
-      await getEngine(sid).process(reply)
+      await getEngine(sid).process(reply, 0.2)
       const fieldAfter  = getEngine(sid).getSummary?.()?.field ?? {}
 
       // Response Analyzer — structural only
