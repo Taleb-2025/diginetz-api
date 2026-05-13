@@ -1,15 +1,12 @@
-// ── دالة مساعدة: هل الرد مقطوع؟ ─────────────────────────
 function isTruncated(claudeData) {
   return claudeData?.stop_reason === 'max_tokens'
 }
 
-// ── دالة مساعدة: استخراج آخر كتلة كود مفتوحة ───────────
 function detectOpenCodeBlock(text) {
   const fences = (text.match(/```/g) ?? []).length
-  return fences % 2 !== 0  // عدد فردي = كتلة كود مفتوحة
+  return fences % 2 !== 0
 }
 
-// ── دالة الاستمرار التلقائي ──────────────────────────────
 async function continuationCall(
   messages,
   partialReply,
@@ -18,7 +15,6 @@ async function continuationCall(
 ) {
   const hasOpenCode = detectOpenCodeBlock(partialReply)
 
-  // نُخبر Claude بأنه كان يكتب ويجب أن يكمل
   const continuePrompt = hasOpenCode
     ? 'continue exactly from where you stopped, complete the code block'
     : 'continue exactly from where you stopped'
@@ -26,79 +22,175 @@ async function continuationCall(
   const continuationMessages = [
     ...messages,
     { role: 'assistant', content: partialReply },
-    { role: 'user',      content: continuePrompt }
+    { role: 'user', content: continuePrompt }
   ]
 
   const response = await fetchClaude({
-    model:      'claude-haiku-4-5-20251001',
+    model: 'claude-haiku-4-5-20251001',
     max_tokens: maxTokens,
-    messages:   continuationMessages
+    messages: continuationMessages
   }, timeoutMs)
 
   return await response.json()
 }
 
-// ── السقف الديناميكي حسب complexity ─────────────────────
 function resolveHardCap(complexity, intent) {
-  if (complexity === 'extreme')   return 4096
+  if (complexity === 'extreme') return 4096
   if (complexity === 'very_high') return 2048
-  if (complexity === 'high')      return 1400
-  if (intent === 'command')       return 1200
+  if (complexity === 'high') return 1400
+  if (intent === 'command') return 1200
   return 900
 }
 
-// ── داخل router.post('/process-text') ────────────────────
-// استبدل الكود من "const baseMax" حتى نهاية استدعاء Claude
+router.post('/process-text', async (req, res) => {
+  const {
+    text = '',
+    sessionId,
+    history = [],
+    image = null,
+    imageMimeType = 'image/jpeg'
+  } = req.body
 
-    const rawHint    = built.systemHint || ''
+  const hasText = typeof text === 'string' && text.trim().length > 0
+  const hasImage = typeof image === 'string' && image.length > 0
+
+  if (!hasText && !hasImage) {
+    return res.status(400).json({ error: 'missing_input' })
+  }
+
+  if (hasImage && image.length > 5_000_000) {
+    return res.status(413).json({
+      error: 'image_too_large',
+      maxBytes: 5_000_000
+    })
+  }
+
+  const sid = sessionId || 'default'
+
+  if (processingLock.has(sid)) {
+    return res.status(429).json({
+      error: 'request_in_progress',
+      retry: true
+    })
+  }
+
+  processingLock.add(sid)
+
+  try {
+    const inputText = hasText ? text : '(image)'
+    const processed = feed(sid, inputText)
+
+    if (!processed.ok) {
+      return res.status(422).json({
+        error: processed.reason || 'processing_failed'
+      })
+    }
+
+    const engine = getEngine(sid)
+    const fieldPrompt = engine.buildFieldPrompt?.() ?? null
+    const prevAnalysis = analysisStore.get(sid) ?? null
+
+    const built = build({
+      ok: true,
+      signals: processed.signals,
+      celfResult: processed.celfResult,
+      passToLLM: processed.passToLLM,
+      structuralHint: prevAnalysis?.structuralHint ?? null,
+      prevMaxTokens: prevAnalysis?.nextMaxTokens ?? null,
+      fieldPrompt,
+      prevAnalysis
+    })
+
+    if (built.blocked) {
+      return res.status(422).json({
+        blocked: true,
+        reason: 'semantic_constraint',
+        context: built.context
+      })
+    }
+
+    if (!built.passToLLM && !hasImage) {
+      return res.json({
+        reply: null,
+        skippedLLM: true,
+        reason: 'weak_semantic_field',
+        context: built.context,
+        celf: processed.result
+      })
+    }
+
+    const rawHint = built.systemHint || ''
     const systemHint = rawHint.slice(0, 300)
-    const intent     = built.context?.intent ?? 'question'
-    const complexity = built.context?.complexity ?? 'low'
-    const baseMax    = built.maxTokens ?? 400
 
-    // ── السقف الديناميكي بدل الصلب 1400 ─────────────────
-    const hardCap   = resolveHardCap(complexity, intent)
+    const intent = built.context?.intent ?? 'question'
+    const complexity = built.context?.complexity ?? 'low'
+    const baseMax = built.maxTokens ?? 400
+
+    const hardCap = resolveHardCap(complexity, intent)
     const maxTokens = Math.min(Math.max(baseMax, 160), hardCap)
 
-    const historyBudget   = Math.max(150, 3000 - maxTokens)
-    const prunedHistory   = adaptiveHistory(history, intent, historyBudget)
+    const historyBudget = Math.max(150, 3000 - maxTokens)
+    const prunedHistory = adaptiveHistory(
+      history,
+      intent,
+      historyBudget
+    )
 
-    let userContent = hasImage
-      ? [
-          { type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } },
-          ...(hasText ? [{ type: 'text', text }] : [])
-        ]
-      : text
+    let userContent
+
+    if (hasImage) {
+      userContent = [
+        {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: imageMimeType,
+            data: image
+          }
+        },
+        ...(hasText ? [{ type: 'text', text }] : [])
+      ]
+    } else {
+      userContent = text
+    }
 
     const messages = [
       ...prunedHistory,
       { role: 'user', content: userContent }
     ]
 
-    // ── System hint يتضمن تعليم عدم القطع ───────────────
     const fullSystemHint = [
       systemHint,
       complexity === 'extreme' || complexity === 'very_high'
         ? 'Never truncate. Complete all code blocks fully.'
         : ''
-    ].filter(Boolean).join(' ').slice(0, 400)
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .slice(0, 400)
 
     let payloadSize = 0
+
     try {
       payloadSize = checkPayload(fullSystemHint, messages)
     } catch (e) {
-      return res.status(413).json({ error: 'prompt_too_large', detail: e.message })
+      return res.status(413).json({
+        error: 'prompt_too_large',
+        detail: e.message
+      })
     }
 
     let claudeData
     let reply = null
 
+    let inputTokensTotal = 0
+    let outputTokensTotal = 0
+
     try {
-      // ── الاستدعاء الأول ───────────────────────────────
       const claudeResponse = await fetchClaude({
-        model:      'claude-haiku-4-5-20251001',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: maxTokens,
-        system:     fullSystemHint,
+        system: fullSystemHint,
         messages
       })
 
@@ -112,12 +204,15 @@ function resolveHardCap(complexity, intent) {
 
       reply = claudeData?.content?.[0]?.text ?? null
 
-      // ── كشف القطع والاستمرار التلقائي ────────────────
-      const MAX_CONTINUATIONS = 2  // حد أقصى لتجنب infinite loop
+      inputTokensTotal =
+        claudeData?.usage?.input_tokens ?? 0
+
+      outputTokensTotal =
+        claudeData?.usage?.output_tokens ?? 0
+
+      const MAX_CONTINUATIONS = 2
 
       let continuationCount = 0
-      let inputTokensTotal  = claudeData?.usage?.input_tokens  ?? 0
-      let outputTokensTotal = claudeData?.usage?.output_tokens ?? 0
 
       while (
         reply &&
@@ -128,10 +223,10 @@ function resolveHardCap(complexity, intent) {
 
         const contTokens = Math.min(
           maxTokens,
-          4096 - outputTokensTotal  // لا نتجاوز الحد الكلي
+          4096 - outputTokensTotal
         )
 
-        if (contTokens < 50) break  // لا فائدة من continuation صغير جداً
+        if (contTokens < 50) break
 
         const contData = await continuationCall(
           messages,
@@ -139,47 +234,109 @@ function resolveHardCap(complexity, intent) {
           contTokens
         )
 
-        if (!contData?.content?.[0]?.text) break
+        if (!contData?.content?.[0]?.text) {
+          break
+        }
 
-        // دمج الردود
         reply += contData.content[0].text
 
-        inputTokensTotal  += contData?.usage?.input_tokens  ?? 0
-        outputTokensTotal += contData?.usage?.output_tokens ?? 0
+        inputTokensTotal +=
+          contData?.usage?.input_tokens ?? 0
 
-        // تحديث claudeData للـ loop التالي
+        outputTokensTotal +=
+          contData?.usage?.output_tokens ?? 0
+
         claudeData = contData
       }
-
     } catch (err) {
       if (err.name === 'AbortError') {
-        return res.status(504).json({ error: 'claude_timeout' })
+        return res.status(504).json({
+          error: 'claude_timeout'
+        })
       }
+
       throw err
     }
 
-    // ── حساب التكلفة الإجمالية شاملة الـ continuations ──
-    const inputTokens  = claudeData?.usage?.input_tokens  ?? 0
-    const outputTokens = claudeData?.usage?.output_tokens ?? 0
-
     const costUSD = parseFloat(
       (
-        (inputTokens  / 1_000_000) * 1.0 +
-        (outputTokens / 1_000_000) * 5.0
+        (inputTokensTotal / 1_000_000) * 1.0 +
+        (outputTokensTotal / 1_000_000) * 5.0
       ).toFixed(6)
     )
 
-    // ... باقي الكود (analyze, metricsStore, return) كما هو
+    if (reply) {
+      const fieldBefore = processed.celfResult.field
+
+      engine.process(reply, 0.15)
+
+      const fieldAfter =
+        engine.buildFieldPrompt?.() ?? {}
+
+      const analysis = analyze({
+        reply,
+        fieldBefore,
+        fieldAfter,
+        maxTokens
+      })
+
+      analysisStore.set(sid, analysis)
+    }
+
+    metricsStore.set(sid, {
+      sessionId: sid,
+      inputTokens: inputTokensTotal,
+      outputTokens: outputTokensTotal,
+      totalTokens:
+        inputTokensTotal + outputTokensTotal,
+      costUSD,
+      maxTokens,
+      payloadSize,
+      prunedHistory: prunedHistory.length,
+      intent,
+      complexity,
+      phase:
+        processed.celfResult.phase ?? 'warmup',
+      fieldZone: fieldPrompt?.zone ?? null,
+      fieldStyle: fieldPrompt?.style ?? null,
+      continuity:
+        fieldPrompt?.continuity ?? 0,
+      updatedAt: new Date().toISOString()
+    })
+
     return res.json({
       reply,
+      context: built.context,
+      signals: processed.signals,
+      celf: processed.result,
+      wave:
+        analysisStore.get(sid)?.wave ?? null,
       metrics: {
-        inputTokens,
-        outputTokens,
-        totalTokens: inputTokens + outputTokens,
+        inputTokens: inputTokensTotal,
+        outputTokens: outputTokensTotal,
+        totalTokens:
+          inputTokensTotal + outputTokensTotal,
         costUSD,
         maxTokens,
-        complexity,           // ← مفيد للـ debugging
-        prunedHistory: prunedHistory.length,
-        payloadSize
+        complexity,
+        prunedHistory:
+          prunedHistory.length,
+        payloadSize,
+        systemHintPreview:
+          fullSystemHint.slice(0, 120)
       }
     })
+  } catch (err) {
+    console.error(
+      '[process-text] error:',
+      err.message
+    )
+
+    return res.status(500).json({
+      error: 'llm_failed',
+      detail: err.message
+    })
+  } finally {
+    processingLock.delete(sid)
+  }
+})
