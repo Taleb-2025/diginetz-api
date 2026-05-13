@@ -63,6 +63,67 @@ function normalizeHistory(history = [], limit = 2, charLimit = 500) {
     }))
 }
 
+function buildSemanticContinuity(engine) {
+  const routed =
+    engine
+      .getSemanticState?.()
+      ?.routedContext ?? []
+
+  if (!routed.length)
+    return null
+
+  const top = routed.slice(0, 3)
+
+  const phases = [
+    ...new Set(top.map(x => x.phase).filter(Boolean))
+  ]
+
+  return [
+    'Previous semantic continuity:',
+    `Phase memory: ${phases.join(', ')}`,
+    `Top continuity score: ${top[0]?.score ?? 0}`
+  ].join('\n')
+}
+
+function detectTruncation(reply = '', stopReason = '') {
+  if (!reply) return false
+
+  if (stopReason === 'max_tokens')
+    return true
+
+  const codeFenceCount =
+    (reply.match(/```/g) || []).length
+
+  if (codeFenceCount % 2 !== 0)
+    return true
+
+  const endings = [
+    '{',
+    '(',
+    '[',
+    'const',
+    'let',
+    'return',
+    'class',
+    'app.',
+    'export',
+    'import'
+  ]
+
+  const trimmed = reply.trim()
+
+  return endings.some(e =>
+    trimmed.endsWith(e)
+  )
+}
+
+function resolveTemperature(complexity = 'low') {
+  if (complexity === 'very_high') return 0.6
+  if (complexity === 'high') return 0.5
+  if (complexity === 'medium') return 0.4
+  return 0.2
+}
+
 async function feed(sessionId, text) {
   const signals = parse(text)
 
@@ -117,7 +178,7 @@ router.get('/process-text', (_req, res) => {
     status: 'online',
     engine: 'CELF_Engine_AI_V5',
     llm: 'Claude Haiku 4.5',
-    version: '4.2'
+    version: '5.0'
   })
 })
 
@@ -193,6 +254,14 @@ router.post('/process-text', async (req, res) => {
   try {
     const systemHint = built.systemHint || ''
     const lightweightHistory = normalizeHistory(history)
+    const semanticContinuity =
+      buildSemanticContinuity(engine)
+
+    const complexity =
+      built?.context?.complexity ?? 'low'
+
+    const temperature =
+      resolveTemperature(complexity)
 
     let userContent
 
@@ -217,6 +286,12 @@ router.post('/process-text', async (req, res) => {
         role: h.role,
         content: h.content
       })),
+      ...(semanticContinuity
+        ? [{
+            role: 'user',
+            content: semanticContinuity
+          }]
+        : []),
       {
         role: 'user',
         content: userContent
@@ -239,29 +314,41 @@ router.post('/process-text', async (req, res) => {
     const compressedChars =
       systemHint.length +
       lightweightHistoryChars +
-      text.length
+      text.length +
+      (semanticContinuity?.length ?? 0)
 
     const compressionRatio =
       rawInputChars > 0
         ? Math.round((1 - compressedChars / rawInputChars) * 100)
         : 0
 
-    const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: built.maxTokens ?? 300,
-        system: systemHint,
-        messages
-      })
-    })
+    let maxTokens =
+      built.maxTokens ?? 300
 
-    const claudeData = await claudeResponse.json()
+    let claudeResponse = await fetch(
+      'https://api.anthropic.com/v1/messages',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: maxTokens,
+          temperature,
+          system:
+            complexity === 'high' ||
+            complexity === 'very_high'
+              ? `${systemHint} Never truncate code. Always complete code blocks.`
+              : systemHint,
+          messages
+        })
+      }
+    )
+
+    let claudeData = await claudeResponse.json()
 
     if (!claudeResponse.ok) {
       throw new Error(
@@ -269,27 +356,112 @@ router.post('/process-text', async (req, res) => {
       )
     }
 
-    const reply = claudeData?.content?.[0]?.text ?? null
-    const usage = claudeData?.usage ?? {}
+    let reply =
+      claudeData?.content?.[0]?.text ?? null
+
+    let usage =
+      claudeData?.usage ?? {}
+
+    const stopReason =
+      claudeData?.stop_reason ?? ''
+
+    const truncated =
+      detectTruncation(reply, stopReason)
+
+    if (
+      truncated &&
+      (
+        complexity === 'high' ||
+        complexity === 'very_high'
+      )
+    ) {
+      maxTokens = Math.min(
+        Math.round(maxTokens * 1.5),
+        4000
+      )
+
+      const retryMessages = [
+        ...messages,
+        {
+          role: 'assistant',
+          content: reply
+        },
+        {
+          role: 'user',
+          content:
+            'Continue exactly from previous output.'
+        }
+      ]
+
+      const retryResponse = await fetch(
+        'https://api.anthropic.com/v1/messages',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01'
+          },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: maxTokens,
+            temperature,
+            system:
+              `${systemHint} Never truncate code. Always complete code blocks.`,
+            messages: retryMessages
+          })
+        }
+      )
+
+      const retryData =
+        await retryResponse.json()
+
+      if (retryResponse.ok) {
+        const continued =
+          retryData?.content?.[0]?.text ?? ''
+
+        reply =
+          `${reply}\n${continued}`
+
+        usage = {
+          input_tokens:
+            (usage.input_tokens ?? 0) +
+            (retryData?.usage?.input_tokens ?? 0),
+
+          output_tokens:
+            (usage.output_tokens ?? 0) +
+            (retryData?.usage?.output_tokens ?? 0)
+        }
+      }
+    }
 
     if (reply) {
-      const fieldBefore = processed.celfResult.field
+      const fieldBefore =
+        processed.celfResult.field
+
       await getEngine(sid).process(reply, 0.2)
-      const fieldAfter = getEngine(sid).getSummary?.()?.field ?? {}
+
+      const fieldAfter =
+        getEngine(sid).getSummary?.()?.field ?? {}
 
       const analysis = analyze({
         reply,
         fieldBefore,
         fieldAfter,
-        maxTokens: built.maxTokens ?? 300
+        maxTokens
       })
 
       analysisStore.set(sid, analysis)
     }
 
-    const inputTokens = usage.input_tokens ?? 0
-    const outputTokens = usage.output_tokens ?? 0
-    const totalTokens = inputTokens + outputTokens
+    const inputTokens =
+      usage.input_tokens ?? 0
+
+    const outputTokens =
+      usage.output_tokens ?? 0
+
+    const totalTokens =
+      inputTokens + outputTokens
 
     const costUSD = parseFloat((
       (inputTokens / 1_000_000 * 1.00) +
@@ -307,7 +479,9 @@ router.post('/process-text', async (req, res) => {
       novelty: processed.celfResult.field?.noveltyPressure ?? 0,
       attractors: processed.celfResult.attractors?.length ?? 0,
       hasImage,
-      maxTokens: built.maxTokens ?? 300,
+      complexity,
+      temperature,
+      maxTokens,
       actualInputTokens: inputTokens,
       actualOutputTokens: outputTokens,
       actualTotalTokens: totalTokens,
@@ -326,7 +500,9 @@ router.post('/process-text', async (req, res) => {
         compressedChars,
         lightweightHistoryChars,
         compressionRatio,
-        maxTokens: built.maxTokens ?? 300,
+        complexity,
+        temperature,
+        maxTokens,
         systemHintPreview: systemHint.slice(0, 100),
         claudeUsage: {
           inputTokens,
