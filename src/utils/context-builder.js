@@ -20,7 +20,14 @@ function detectLang(signals) {
   return lang ?? 'en'
 }
 
-function resolveMaxTokens(intent, fieldPrompt, prevAnalysis = null) {
+function resolveMaxTokens(
+  intent,
+  fieldPrompt,
+  prevAnalysis = null,
+  signals = {},
+  celfResult = {},
+  structuralHint = ''
+) {
   const base = {
     command: 450,
     question: 220,
@@ -70,6 +77,28 @@ function resolveMaxTokens(intent, fieldPrompt, prevAnalysis = null) {
   if (continuity < 0.3)
     tokens += 40
 
+  const requiresLargeOutput =
+    intent === 'command' &&
+    (
+      (signals?.length ?? 0) > 1200 ||
+      celfResult?.perturbation?.semantic?.code ||
+      zone === 'execution'
+    )
+
+  const codeHeavy =
+    zone === 'execution' &&
+    (
+      prevAnalysis?.needsLongCode ||
+      structuralHint?.includes('full_code') ||
+      structuralHint?.includes('complete_file')
+    )
+
+  if (requiresLargeOutput)
+    tokens = Math.max(tokens, 900)
+
+  if (codeHeavy)
+    tokens = Math.max(tokens, 1200)
+
   if (prevAnalysis) {
     if (prevAnalysis.flags?.verbosity) {
       tokens = Math.round(tokens * 0.75)
@@ -82,7 +111,7 @@ function resolveMaxTokens(intent, fieldPrompt, prevAnalysis = null) {
     }
   }
 
-  return Math.max(40, Math.min(650, tokens))
+  return Math.max(40, Math.min(1400, tokens))
 }
 
 export function build(adapterOutput) {
@@ -130,7 +159,10 @@ export function build(adapterOutput) {
     resolveMaxTokens(
       intent,
       fieldPrompt,
-      prevAnalysis
+      prevAnalysis,
+      signals,
+      celfResult,
+      structuralHint
     )
 
   const systemHint = buildSystemHint(
