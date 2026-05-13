@@ -56,29 +56,26 @@ function feed(sessionId, text) {
   const signals = parse(text)
 
   if (!signals.valid) {
-    return {
-      ok: false,
-      reason: signals.reason ?? 'invalid_signals'
-    }
+    return { ok: false, reason: signals.reason ?? 'invalid_signals' }
   }
 
-  const engine = getEngine(sessionId)
+  const engine   = getEngine(sessionId)
   const snapshot = engine.process(text)
 
-  const field = snapshot.field ?? {}
-  const metrics = snapshot.metrics ?? {}
-  const control = snapshot.control ?? {}
+  const field        = snapshot.field        ?? {}
+  const metrics      = snapshot.metrics      ?? {}
+  const control      = snapshot.control      ?? {}
   const perturbation = snapshot.perturbation ?? {}
-  const attractors = snapshot.attractors ?? []
+  const attractors   = snapshot.attractors   ?? []
 
-  const coherence = Number(field.coherence ?? 0)
-  const resonance = Number(field.resonance ?? 0)
-  const confidence = Number(field.semanticGrounding ?? 0)
-  const intent = mapIntent(snapshot)
+  const coherence  = Number(field.coherence         ?? 0)
+  const resonance  = Number(field.resonance          ?? 0)
+  const confidence = Number(field.semanticGrounding  ?? 0)
+  const intent     = mapIntent(snapshot)
 
   const passToLLM =
-    coherence > 0.15 ||
-    resonance > 0.20 ||
+    coherence  > 0.15 ||
+    resonance  > 0.20 ||
     intent === 'greeting' ||
     intent === 'emotional' ||
     confidence < 0.4
@@ -102,11 +99,9 @@ function feed(sessionId, text) {
 
 function estimateTokens(text) {
   if (!text || typeof text !== 'string') return 0
-
   const codeBlocks = text.match(/```[\s\S]*?```/g) ?? []
-  const codeChars = codeBlocks.reduce((s, b) => s + b.length, 0)
-  const textChars = text.length - codeChars
-
+  const codeChars  = codeBlocks.reduce((s, b) => s + b.length, 0)
+  const textChars  = text.length - codeChars
   return Math.ceil(codeChars / 3) + Math.ceil(textChars / 4)
 }
 
@@ -121,12 +116,12 @@ function adaptiveHistory(history = [], intent = 'question', tokenBudget = 800) {
     h.content.length > 0
   )
 
-  const selected = []
-  let usedTokens = 0
+  const selected  = []
+  let usedTokens  = 0
   const maxTokens = Math.min(tokenBudget, 500)
 
   for (let i = clean.length - 1; i >= 0; i--) {
-    const h = clean[i]
+    const h      = clean[i]
     const tokens = estimateTokens(h.content)
     if (usedTokens + tokens > maxTokens) break
     selected.unshift(h)
@@ -134,10 +129,10 @@ function adaptiveHistory(history = [], intent = 'question', tokenBudget = 800) {
   }
 
   return selected.map(h => {
-    const maxChars = h.role === 'assistant' ? 800 : 400
+    const maxChars     = h.role === 'assistant' ? 800 : 400
     if (h.content.length <= maxChars) return h
 
-    const trimmed = h.content.slice(0, maxChars)
+    const trimmed      = h.content.slice(0, maxChars)
     const lastBoundary = Math.max(
       trimmed.lastIndexOf('.'),
       trimmed.lastIndexOf('\n'),
@@ -145,11 +140,10 @@ function adaptiveHistory(history = [], intent = 'question', tokenBudget = 800) {
     )
 
     return {
-      role: h.role,
-      content:
-        lastBoundary > maxChars * 0.6
-          ? trimmed.slice(0, lastBoundary + 1)
-          : trimmed
+      role:    h.role,
+      content: lastBoundary > maxChars * 0.6
+        ? trimmed.slice(0, lastBoundary + 1)
+        : trimmed
     }
   })
 }
@@ -162,17 +156,17 @@ function checkPayload(systemHint, messages) {
 
 async function fetchClaude(body, timeoutMs = 20000) {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const timer      = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
     return await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
+      method:  'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'Content-Type':      'application/json',
+        'x-api-key':         process.env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01'
       },
-      body: JSON.stringify(body),
+      body:   JSON.stringify(body),
       signal: controller.signal
     })
   } finally {
@@ -180,24 +174,43 @@ async function fetchClaude(body, timeoutMs = 20000) {
   }
 }
 
-// ── هل الرد مقطوع؟ ────────────────────────────────────────
 function isTruncated(claudeData) {
   return claudeData?.stop_reason === 'max_tokens'
 }
 
-// ── هل توجد كتلة كود مفتوحة في نهاية الرد؟ ──────────────
 function detectOpenCodeBlock(text) {
   const fences = (text.match(/```/g) ?? []).length
   return fences % 2 !== 0
 }
 
-// ── استدعاء الاستمرار التلقائي ────────────────────────────
-async function continuationCall(messages, partialReply, maxTokens, timeoutMs = 20000) {
+function removeOverlap(existing, continuation) {
+  const checkLen = Math.min(120, continuation.length)
+  const tail     = existing.slice(-checkLen * 2)
+  const head     = continuation.slice(0, checkLen)
+
+  for (let len = checkLen; len >= 20; len--) {
+    const fragment = head.slice(0, len)
+    if (tail.includes(fragment)) {
+      const overlapStart = continuation.indexOf(fragment)
+      return continuation.slice(overlapStart + fragment.length)
+    }
+  }
+
+  return continuation
+}
+
+async function continuationCall(
+  messages,
+  partialReply,
+  maxTokens,
+  systemHint,
+  timeoutMs = 25000
+) {
   const hasOpenCode = detectOpenCodeBlock(partialReply)
 
   const continuePrompt = hasOpenCode
-    ? 'continue exactly from where you stopped, complete the code block'
-    : 'continue exactly from where you stopped'
+    ? 'continue exactly from where you stopped — complete the open code block, do not repeat what was already written'
+    : 'continue exactly from where you stopped — do not repeat what was already written'
 
   const continuationMessages = [
     ...messages,
@@ -208,13 +221,13 @@ async function continuationCall(messages, partialReply, maxTokens, timeoutMs = 2
   const response = await fetchClaude({
     model:      'claude-haiku-4-5-20251001',
     max_tokens: maxTokens,
+    system:     systemHint,
     messages:   continuationMessages
   }, timeoutMs)
 
   return await response.json()
 }
 
-// ── السقف الديناميكي حسب complexity ──────────────────────
 function resolveHardCap(complexity, intent) {
   if (complexity === 'extreme')   return 4096
   if (complexity === 'very_high') return 2048
@@ -223,53 +236,40 @@ function resolveHardCap(complexity, intent) {
   return 900
 }
 
-// ─────────────────────────────────────────────────────────
-//  Routes
-// ─────────────────────────────────────────────────────────
-
 router.get('/process-text', (_req, res) => {
   res.json({
-    ok: true,
-    status: 'online',
-    engine: 'CELF_Engine_AI_V5',
-    llm: 'Claude Haiku 4.5',
+    ok:      true,
+    status:  'online',
+    engine:  'CELF_Engine_AI_V5',
+    llm:     'Claude Haiku 4.5',
     version: '5.4'
   })
 })
 
 router.post('/process-text', async (req, res) => {
   const {
-    text = '',
+    text          = '',
     sessionId,
-    history = [],
-    image = null,
+    history       = [],
+    image         = null,
     imageMimeType = 'image/jpeg'
   } = req.body
 
-  const hasText =
-    typeof text === 'string' && text.trim().length > 0
-
-  const hasImage =
-    typeof image === 'string' && image.length > 0
+  const hasText  = typeof text  === 'string' && text.trim().length > 0
+  const hasImage = typeof image === 'string' && image.length > 0
 
   if (!hasText && !hasImage) {
     return res.status(400).json({ error: 'missing_input' })
   }
 
   if (hasImage && image.length > 5_000_000) {
-    return res.status(413).json({
-      error: 'image_too_large',
-      maxBytes: 5_000_000
-    })
+    return res.status(413).json({ error: 'image_too_large', maxBytes: 5_000_000 })
   }
 
   const sid = sessionId || 'default'
 
   if (processingLock.has(sid)) {
-    return res.status(429).json({
-      error: 'request_in_progress',
-      retry: true
-    })
+    return res.status(429).json({ error: 'request_in_progress', retry: true })
   }
 
   processingLock.add(sid)
@@ -279,17 +279,15 @@ router.post('/process-text', async (req, res) => {
     const processed = feed(sid, inputText)
 
     if (!processed.ok) {
-      return res.status(422).json({
-        error: processed.reason || 'processing_failed'
-      })
+      return res.status(422).json({ error: processed.reason || 'processing_failed' })
     }
 
-    const engine = getEngine(sid)
-    const fieldPrompt = engine.buildFieldPrompt?.() ?? null
+    const engine       = getEngine(sid)
+    const fieldPrompt  = engine.buildFieldPrompt?.() ?? null
     const prevAnalysis = analysisStore.get(sid) ?? null
 
     const built = build({
-      ok: true,
+      ok:             true,
       signals:        processed.signals,
       celfResult:     processed.celfResult,
       passToLLM:      processed.passToLLM,
@@ -308,20 +306,14 @@ router.post('/process-text', async (req, res) => {
     }
 
     if (!built.passToLLM && !hasImage) {
-      return res.json({
-        reply:      null,
-        skippedLLM: true,
-        reason:     'weak_semantic_field'
-      })
+      return res.json({ reply: null, skippedLLM: true, reason: 'weak_semantic_field' })
     }
 
     const rawHint    = built.systemHint || ''
-    const systemHint = rawHint.slice(0, 300)
     const intent     = built.context?.intent     ?? 'question'
     const complexity = built.context?.complexity ?? 'low'
     const baseMax    = built.maxTokens           ?? 400
 
-    // ── السقف الديناميكي ──────────────────────────────────
     const hardCap   = resolveHardCap(complexity, intent)
     const maxTokens = Math.min(Math.max(baseMax, 160), hardCap)
 
@@ -331,12 +323,8 @@ router.post('/process-text', async (req, res) => {
     const userContent = hasImage
       ? [
           {
-            type: 'image',
-            source: {
-              type:       'base64',
-              media_type: imageMimeType,
-              data:       image
-            }
+            type:   'image',
+            source: { type: 'base64', media_type: imageMimeType, data: image }
           },
           ...(hasText ? [{ type: 'text', text }] : [])
         ]
@@ -347,9 +335,8 @@ router.post('/process-text', async (req, res) => {
       { role: 'user', content: userContent }
     ]
 
-    // ── System hint مع تعليمة عدم القطع ──────────────────
     const fullSystemHint = [
-      systemHint,
+      rawHint.slice(0, 300),
       complexity === 'extreme' || complexity === 'very_high'
         ? 'Never truncate. Complete all code blocks fully.'
         : ''
@@ -359,17 +346,15 @@ router.post('/process-text', async (req, res) => {
     try {
       payloadSize = checkPayload(fullSystemHint, messages)
     } catch (e) {
-      return res.status(413).json({
-        error:  'prompt_too_large',
-        detail: e.message
-      })
+      return res.status(413).json({ error: 'prompt_too_large', detail: e.message })
     }
 
     let claudeData
-    let reply = null
+    let reply             = null
+    let inputTokensTotal  = 0
+    let outputTokensTotal = 0
 
     try {
-      // ── الاستدعاء الأول ───────────────────────────────
       const claudeResponse = await fetchClaude({
         model:      'claude-haiku-4-5-20251001',
         max_tokens: maxTokens,
@@ -387,11 +372,11 @@ router.post('/process-text', async (req, res) => {
 
       reply = claudeData?.content?.[0]?.text ?? null
 
-      // ── كشف القطع والاستمرار التلقائي ────────────────
-      const MAX_CONTINUATIONS = 2
+      inputTokensTotal  = claudeData?.usage?.input_tokens  ?? 0
+      outputTokensTotal = claudeData?.usage?.output_tokens ?? 0
 
-      let continuationCount = 0
-      let outputTokensTotal = claudeData?.usage?.output_tokens ?? 0
+      const MAX_CONTINUATIONS = 2
+      let continuationCount   = 0
 
       while (
         reply &&
@@ -400,25 +385,25 @@ router.post('/process-text', async (req, res) => {
       ) {
         continuationCount++
 
-        const contTokens = Math.min(
-          maxTokens,
-          4096 - outputTokensTotal
-        )
-
+        const contTokens = Math.min(maxTokens, 4096 - outputTokensTotal)
         if (contTokens < 50) break
 
         const contData = await continuationCall(
           messages,
           reply,
-          contTokens
+          contTokens,
+          fullSystemHint
         )
 
         if (!contData?.content?.[0]?.text) break
 
-        reply += contData.content[0].text
+        const raw     = contData.content[0].text
+        const cleaned = removeOverlap(reply, raw)
+        reply        += cleaned
 
+        inputTokensTotal  += contData?.usage?.input_tokens  ?? 0
         outputTokensTotal += contData?.usage?.output_tokens ?? 0
-        claudeData = contData
+        claudeData         = contData
       }
 
     } catch (err) {
@@ -428,13 +413,10 @@ router.post('/process-text', async (req, res) => {
       throw err
     }
 
-    const inputTokens  = claudeData?.usage?.input_tokens  ?? 0
-    const outputTokens = claudeData?.usage?.output_tokens ?? 0
-
     const costUSD = parseFloat(
       (
-        (inputTokens  / 1_000_000) * 1.0 +
-        (outputTokens / 1_000_000) * 5.0
+        (inputTokensTotal  / 1_000_000) * 1.0 +
+        (outputTokensTotal / 1_000_000) * 5.0
       ).toFixed(6)
     )
 
@@ -442,21 +424,15 @@ router.post('/process-text', async (req, res) => {
       const fieldBefore = processed.celfResult.field
       const fieldAfter  = engine.buildFieldPrompt?.() ?? {}
 
-      const analysis = analyze({
-        reply,
-        fieldBefore,
-        fieldAfter,
-        maxTokens
-      })
-
+      const analysis = analyze({ reply, fieldBefore, fieldAfter, maxTokens })
       analysisStore.set(sid, analysis)
     }
 
     metricsStore.set(sid, {
       sessionId:     sid,
-      inputTokens,
-      outputTokens,
-      totalTokens:   inputTokens + outputTokens,
+      inputTokens:   inputTokensTotal,
+      outputTokens:  outputTokensTotal,
+      totalTokens:   inputTokensTotal + outputTokensTotal,
       costUSD,
       maxTokens,
       complexity,
@@ -470,9 +446,9 @@ router.post('/process-text', async (req, res) => {
     return res.json({
       reply,
       metrics: {
-        inputTokens,
-        outputTokens,
-        totalTokens:   inputTokens + outputTokens,
+        inputTokens:   inputTokensTotal,
+        outputTokens:  outputTokensTotal,
+        totalTokens:   inputTokensTotal + outputTokensTotal,
         costUSD,
         maxTokens,
         complexity,
@@ -483,10 +459,7 @@ router.post('/process-text', async (req, res) => {
 
   } catch (err) {
     console.error('[process-text] error:', err.message)
-    return res.status(500).json({
-      error:  'llm_failed',
-      detail: err.message
-    })
+    return res.status(500).json({ error: 'llm_failed', detail: err.message })
   } finally {
     processingLock.delete(sid)
   }
@@ -496,7 +469,6 @@ router.get('/session/:id', (req, res) => {
   if (!sessions.has(req.params.id)) {
     return res.status(404).json({ error: 'session_not_found' })
   }
-
   const summary = sessions.get(req.params.id).getSummary?.() ?? {}
   return res.json({ ok: true, sessionId: req.params.id, summary })
 })
