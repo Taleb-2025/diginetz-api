@@ -20,6 +20,87 @@ function detectLang(signals) {
   return lang ?? 'en'
 }
 
+function detectComplexity(
+  signals = {},
+  celfResult = {},
+  intent = 'statement',
+  fieldPrompt = {},
+  structuralHint = ''
+) {
+  const text =
+    (
+      signals?.raw ??
+      signals?.text ??
+      ''
+    ).toLowerCase()
+
+  let score = 0
+
+  if (text.length > 120) score += 1
+  if (text.length > 400) score += 1
+  if (text.length > 900) score += 1
+
+  if (
+    text.includes('fastapi') ||
+    text.includes('docker') ||
+    text.includes('postgres') ||
+    text.includes('postgresql') ||
+    text.includes('redis') ||
+    text.includes('websocket') ||
+    text.includes('railway') ||
+    text.includes('nginx') ||
+    text.includes('authentication') ||
+    text.includes('scaling')
+  ) {
+    score += 2
+  }
+
+  if (
+    text.includes('full') ||
+    text.includes('complete') ||
+    text.includes('production') ||
+    text.includes('architecture') ||
+    text.includes('implement') ||
+    text.includes('microservice')
+  ) {
+    score += 2
+  }
+
+  if (
+    text.includes('code') ||
+    text.includes('example') ||
+    text.includes('api') ||
+    text.includes('backend')
+  ) {
+    score += 1
+  }
+
+  if (intent === 'command')
+    score += 2
+
+  if (fieldPrompt?.zone === 'execution')
+    score += 2
+
+  if (
+    structuralHint?.includes('full_code') ||
+    structuralHint?.includes('complete_file')
+  ) {
+    score += 2
+  }
+
+  if (
+    celfResult?.perturbation?.semantic?.code
+  ) {
+    score += 2
+  }
+
+  if (score >= 9) return 'very_high'
+  if (score >= 6) return 'high'
+  if (score >= 3) return 'medium'
+
+  return 'low'
+}
+
 function resolveMaxTokens(
   intent,
   fieldPrompt,
@@ -28,80 +109,124 @@ function resolveMaxTokens(
   celfResult = {},
   structuralHint = ''
 ) {
-  const base = {
-    command: 450,
-    question: 220,
-    greeting: 40,
-    emotional: 80,
-    complaint: 180,
-    statement: 220,
-  }[intent] ?? 220
-
   const pressure = fieldPrompt?.pressure ?? 'neutral'
   const zone = fieldPrompt?.zone ?? 'general'
   const style = fieldPrompt?.style ?? 'clear_direct'
   const continuity = fieldPrompt?.continuity ?? 0
 
-  let tokens = base
+  const complexity = detectComplexity(
+    signals,
+    celfResult,
+    intent,
+    fieldPrompt,
+    structuralHint
+  )
+
+  let tokens = 220
+
+  if (complexity === 'low')
+    tokens = 180
+
+  if (complexity === 'medium')
+    tokens = 420
+
+  if (complexity === 'high')
+    tokens = 1200
+
+  if (complexity === 'very_high')
+    tokens = 2400
+
+  if (intent === 'greeting')
+    tokens = 60
+
+  if (intent === 'emotional')
+    tokens = Math.max(tokens, 120)
+
+  if (intent === 'complaint')
+    tokens = Math.max(tokens, 260)
+
+  if (
+    intent === 'command' &&
+    complexity !== 'high' &&
+    complexity !== 'very_high'
+  ) {
+    tokens = Math.max(tokens, 900)
+  }
 
   if (zone === 'execution')
-    tokens = Math.max(tokens, 550)
-
-  if (zone === 'conceptual')
-    tokens = Math.max(tokens, 300)
-
-  if (zone === 'focused')
-    tokens = Math.min(tokens, 180)
-
-  if (zone === 'multi_focus')
-    tokens = Math.max(tokens, 280)
-
-  if (pressure === 'high_pressure')
-    tokens = Math.min(tokens, 180)
-
-  if (pressure === 'stable')
-    tokens = Math.max(tokens, base)
-
-  if (pressure === 'exploring')
-    tokens = Math.max(tokens, 280)
-
-  if (style === 'direct_minimal')
-    tokens = Math.min(tokens, 160)
-
-  if (style === 'technical_concise')
-    tokens = Math.min(tokens, 450)
-
-  if (continuity > 0.7)
-    tokens = Math.round(tokens * 0.85)
-
-  if (continuity < 0.3)
-    tokens += 40
-
-  const requiresLargeOutput =
-    intent === 'command' &&
-    (
-      (signals?.length ?? 0) > 1200 ||
-      celfResult?.perturbation?.semantic?.code ||
-      zone === 'execution'
-    )
-
-  const codeHeavy =
-    zone === 'execution' &&
-    (
-      prevAnalysis?.needsLongCode ||
-      structuralHint?.includes('full_code') ||
-      structuralHint?.includes('complete_file')
-    )
-
-  if (requiresLargeOutput)
-    tokens = Math.max(tokens, 900)
-
-  if (codeHeavy)
     tokens = Math.max(tokens, 1200)
 
+  if (
+    zone === 'conceptual' &&
+    complexity === 'low'
+  ) {
+    tokens = Math.max(tokens, 300)
+  }
+
+  if (
+    zone === 'focused' &&
+    complexity === 'low'
+  ) {
+    tokens = Math.min(tokens, 220)
+  }
+
+  if (
+    zone === 'multi_focus' &&
+    complexity !== 'low'
+  ) {
+    tokens = Math.max(tokens, 700)
+  }
+
+  if (
+    pressure === 'high_pressure' &&
+    complexity === 'low'
+  ) {
+    tokens = Math.min(tokens, 180)
+  }
+
+  if (
+    pressure === 'exploring' &&
+    complexity !== 'low'
+  ) {
+    tokens = Math.max(tokens, 700)
+  }
+
+  if (
+    style === 'direct_minimal' &&
+    complexity === 'low'
+  ) {
+    tokens = Math.min(tokens, 160)
+  }
+
+  if (
+    style === 'technical_concise' &&
+    complexity !== 'high' &&
+    complexity !== 'very_high'
+  ) {
+    tokens = Math.min(tokens, 650)
+  }
+
+  if (
+    continuity > 0.7 &&
+    complexity === 'low'
+  ) {
+    tokens = Math.round(tokens * 0.85)
+  }
+
+  if (
+    continuity < 0.3 &&
+    complexity !== 'high' &&
+    complexity !== 'very_high'
+  ) {
+    tokens += 60
+  }
+
   if (prevAnalysis) {
-    if (prevAnalysis.flags?.verbosity) {
-      tokens = Math.round(tokens * 0.75)
+    if (
+      prevAnalysis.flags?.verbosity &&
+      complexity === 'low'
+    ) {
+      tokens = Math.round(tokens * 0.8)
     }
 
     if (prevAnalysis.nextMaxTokens) {
@@ -111,7 +236,7 @@ function resolveMaxTokens(
     }
   }
 
-  return Math.max(40, Math.min(1400, tokens))
+  return Math.max(60, Math.min(4000, tokens))
 }
 
 export function build(adapterOutput) {
@@ -140,10 +265,19 @@ export function build(adapterOutput) {
   const phase = celfResult?.phase ?? 'warmup'
   const drift = Number(celfResult?.field?.drift ?? 0)
 
+  const complexity = detectComplexity(
+    signals,
+    celfResult,
+    intent,
+    fieldPrompt,
+    structuralHint
+  )
+
   const context = {
     lang,
     phase,
     intent,
+    complexity,
     drift,
     coherence: Number(celfResult?.field?.coherence ?? 0),
     confidence: Number(celfResult?.field?.semanticGrounding ?? 0),
@@ -168,6 +302,7 @@ export function build(adapterOutput) {
   const systemHint = buildSystemHint(
     lang,
     intent,
+    complexity,
     phase,
     drift,
     fieldPrompt,
@@ -187,6 +322,7 @@ export function build(adapterOutput) {
 function buildSystemHint(
   lang,
   intent,
+  complexity,
   phase,
   drift,
   fieldPrompt,
@@ -221,8 +357,10 @@ function buildSystemHint(
     }
   }
 
+  parts.push(`Complexity: ${complexity}.`)
+
   if (intent === 'command')
-    parts.push('Output: working code.')
+    parts.push('Output: complete working code.')
 
   if (intent === 'question')
     parts.push('Output: direct answer.')
@@ -236,9 +374,19 @@ function buildSystemHint(
   if (intent === 'greeting')
     parts.push('Output: one sentence.')
 
+  if (
+    complexity === 'high' ||
+    complexity === 'very_high'
+  ) {
+    parts.push('Do not truncate code.')
+  }
+
   if (phase === 'drift' || drift > 0.4) {
     parts.push('Topic changed.')
-  } else if (phase === 'turbulent') {
+  } else if (
+    phase === 'turbulent' &&
+    complexity === 'low'
+  ) {
     parts.push('Be brief.')
   }
 
