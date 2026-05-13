@@ -27,12 +27,11 @@ function detectComplexity(
   fieldPrompt = {},
   structuralHint = ''
 ) {
-  const text =
-    (
-      signals?.raw ??
-      signals?.text ??
-      ''
-    ).toLowerCase()
+  const text = (
+    signals?.raw ??
+    signals?.text ??
+    ''
+  ).toLowerCase()
 
   let score = 0
 
@@ -75,11 +74,9 @@ function detectComplexity(
     score += 1
   }
 
-  if (intent === 'command')
-    score += 2
+  if (intent === 'command') score += 2
 
-  if (fieldPrompt?.zone === 'execution')
-    score += 2
+  if (fieldPrompt?.zone === 'execution') score += 2
 
   if (
     structuralHint?.includes('full_code') ||
@@ -88,9 +85,7 @@ function detectComplexity(
     score += 2
   }
 
-  if (
-    celfResult?.perturbation?.semantic?.code
-  ) {
+  if (celfResult?.perturbation?.semantic?.code) {
     score += 2
   }
 
@@ -122,80 +117,74 @@ function resolveMaxTokens(
     structuralHint
   )
 
-  let tokens = 220
+  let tokens = 160
 
-  if (complexity === 'low')
-    tokens = 180
+  if (complexity === 'medium') tokens = 320
+  if (complexity === 'high') tokens = 900
+  if (complexity === 'very_high') tokens = 1600
 
-  if (complexity === 'medium')
-    tokens = 420
+  if (intent === 'greeting') tokens = 40
 
-  if (complexity === 'high')
-    tokens = 1200
+  if (intent === 'emotional') {
+    tokens = Math.max(tokens, 100)
+  }
 
-  if (complexity === 'very_high')
-    tokens = 2400
-
-  if (intent === 'greeting')
-    tokens = 60
-
-  if (intent === 'emotional')
-    tokens = Math.max(tokens, 120)
-
-  if (intent === 'complaint')
-    tokens = Math.max(tokens, 260)
+  if (intent === 'complaint') {
+    tokens = Math.max(tokens, 220)
+  }
 
   if (
     intent === 'command' &&
     complexity !== 'high' &&
     complexity !== 'very_high'
   ) {
-    tokens = Math.max(tokens, 900)
+    tokens = Math.max(tokens, 700)
   }
 
-  if (zone === 'execution')
-    tokens = Math.max(tokens, 1200)
+  if (zone === 'execution') {
+    tokens = Math.max(tokens, 1000)
+  }
 
   if (
     zone === 'conceptual' &&
     complexity === 'low'
   ) {
-    tokens = Math.max(tokens, 300)
+    tokens = Math.max(tokens, 240)
   }
 
   if (
     zone === 'focused' &&
     complexity === 'low'
   ) {
-    tokens = Math.min(tokens, 220)
+    tokens = Math.min(tokens, 180)
   }
 
   if (
     zone === 'multi_focus' &&
     complexity !== 'low'
   ) {
-    tokens = Math.max(tokens, 700)
+    tokens = Math.max(tokens, 500)
   }
 
   if (
     pressure === 'high_pressure' &&
     complexity === 'low'
   ) {
-    tokens = Math.min(tokens, 180)
+    tokens = Math.min(tokens, 140)
   }
 
   if (
     pressure === 'exploring' &&
     complexity !== 'low'
   ) {
-    tokens = Math.max(tokens, 700)
+    tokens = Math.max(tokens, 500)
   }
 
   if (
     style === 'direct_minimal' &&
     complexity === 'low'
   ) {
-    tokens = Math.min(tokens, 160)
+    tokens = Math.min(tokens, 120)
   }
 
   if (
@@ -203,14 +192,14 @@ function resolveMaxTokens(
     complexity !== 'high' &&
     complexity !== 'very_high'
   ) {
-    tokens = Math.min(tokens, 650)
+    tokens = Math.min(tokens, 500)
   }
 
   if (
-    continuity > 0.7 &&
+    continuity > 0.8 &&
     complexity === 'low'
   ) {
-    tokens = Math.round(tokens * 0.85)
+    tokens = Math.round(tokens * 0.7)
   }
 
   if (
@@ -218,7 +207,7 @@ function resolveMaxTokens(
     complexity !== 'high' &&
     complexity !== 'very_high'
   ) {
-    tokens += 60
+    tokens += 40
   }
 
   if (prevAnalysis) {
@@ -226,17 +215,20 @@ function resolveMaxTokens(
       prevAnalysis.flags?.verbosity &&
       complexity === 'low'
     ) {
-      tokens = Math.round(tokens * 0.8)
+      tokens = Math.round(tokens * 0.75)
     }
 
-    if (prevAnalysis.nextMaxTokens) {
+    if (
+      prevAnalysis.nextMaxTokens &&
+      complexity !== 'very_high'
+    ) {
       tokens = Math.round(
         (tokens + prevAnalysis.nextMaxTokens) / 2
       )
     }
   }
 
-  return Math.max(60, Math.min(4000, tokens))
+  return Math.max(40, Math.min(2400, tokens))
 }
 
 export function build(adapterOutput) {
@@ -247,7 +239,7 @@ export function build(adapterOutput) {
     passToLLM,
     structuralHint,
     prevMaxTokens,
-    fieldPrompt,
+    fieldPrompt
   } = adapterOutput
 
   if (!ok) {
@@ -256,7 +248,7 @@ export function build(adapterOutput) {
       reason: 'invalid_input',
       context: null,
       systemHint: null,
-      maxTokens: 220
+      maxTokens: 160
     }
   }
 
@@ -282,7 +274,7 @@ export function build(adapterOutput) {
     coherence: Number(celfResult?.field?.coherence ?? 0),
     confidence: Number(celfResult?.field?.semanticGrounding ?? 0),
     novelty: Number(celfResult?.field?.noveltyPressure ?? 0),
-    fieldPrompt: fieldPrompt ?? null,
+    continuity: Number(fieldPrompt?.continuity ?? 0)
   }
 
   const prevAnalysis =
@@ -334,66 +326,69 @@ function buildSystemHint(
   const langMap = {
     ar: 'ar',
     de: 'de',
-    mixed: 'ar+en-terms',
+    mixed: 'ar+en',
     en: 'en'
   }
 
-  parts.push(`Language: ${langMap[lang] ?? lang}.`)
+  parts.push(langMap[lang] ?? lang)
 
-  if (fieldPrompt) {
-    const fp = fieldPrompt
-
-    if (fp.zone)
-      parts.push(`Zone: ${fp.zone}.`)
-
-    if (fp.style)
-      parts.push(`Style: ${fp.style}.`)
-
-    if (
-      fp.pressure &&
-      fp.pressure !== 'neutral'
-    ) {
-      parts.push(`Field: ${fp.pressure}.`)
-    }
+  if (fieldPrompt?.zone) {
+    parts.push(fieldPrompt.zone)
   }
 
-  parts.push(`Complexity: ${complexity}.`)
+  if (
+    fieldPrompt?.style &&
+    fieldPrompt.style !== 'clear_direct'
+  ) {
+    parts.push(fieldPrompt.style)
+  }
 
-  if (intent === 'command')
-    parts.push('Output: complete working code.')
+  if (intent === 'command') {
+    parts.push('working code')
+  }
 
-  if (intent === 'question')
-    parts.push('Output: direct answer.')
+  if (intent === 'question') {
+    parts.push('direct answer')
+  }
 
-  if (intent === 'complaint')
-    parts.push('Output: solution first.')
+  if (intent === 'complaint') {
+    parts.push('solution first')
+  }
 
-  if (intent === 'emotional')
-    parts.push('Output: brief support.')
+  if (intent === 'emotional') {
+    parts.push('brief support')
+  }
 
-  if (intent === 'greeting')
-    parts.push('Output: one sentence.')
+  if (intent === 'greeting') {
+    parts.push('one sentence')
+  }
 
   if (
     complexity === 'high' ||
     complexity === 'very_high'
   ) {
-    parts.push('Do not truncate code.')
+    parts.push('no truncation')
   }
 
-  if (phase === 'drift' || drift > 0.4) {
-    parts.push('Topic changed.')
-  } else if (
+  if (
+    (phase === 'drift' || drift > 0.4) &&
+    complexity !== 'high'
+  ) {
+    parts.push('topic changed')
+  }
+
+  if (
     phase === 'turbulent' &&
     complexity === 'low'
   ) {
-    parts.push('Be brief.')
+    parts.push('brief')
   }
 
-  parts.push(`Max: ${maxTokens} tokens.`)
+  parts.push(`max ${maxTokens}`)
 
-  if (structuralHint)
-    parts.push(structuralHint)
+  if (structuralHint) {
+    parts.push(structuralHint.slice(0, 120))
+  }
 
-  return parts.join(' ')
+  return parts.join(' ').slice(0, 400)
 }
