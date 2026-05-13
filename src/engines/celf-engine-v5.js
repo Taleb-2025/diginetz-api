@@ -13,7 +13,7 @@ export class CELF_Engine_AI_V5 {
     this.historyLimit = options.historyLimit ?? 512
     this.archiveLimit = options.archiveLimit ?? 512
     this.semanticMemoryLimit = options.semanticMemoryLimit ?? 256
-    this.semanticDimensions = options.semanticDimensions ?? 16
+    this.semanticDimensions = options.semanticDimensions ?? 64
     this.routingLimit = options.routingLimit ?? 8
     this.massTarget = options.massTarget ?? null
     this.localizationThreshold   = options.localizationThreshold   ?? 0.012
@@ -65,8 +65,8 @@ export class CELF_Engine_AI_V5 {
         residual: this.epsilon,
         pressure: 0,
         memory: 0,
-        hysteresis: 0,      // path-dependent deformation memory
-        elasticStrain: 0,   // tension toward baseline
+        hysteresis: 0,
+        elasticStrain: 0,
         constraintDensity: 0,
         semanticTrace: 0,
         intentTrace: 0,
@@ -88,7 +88,7 @@ export class CELF_Engine_AI_V5 {
       history: [],
       archive: [],
       lastSourceWeight: 1.0,
-      lastPerturbationVector: [],
+      lastPerturbationVector: new Float32Array(this.semanticDimensions),
       attractorCredibilityLog: []
     }
 
@@ -96,11 +96,9 @@ export class CELF_Engine_AI_V5 {
   }
 
   process(input, options = {}) {
-    // Invalidate metrics cache at start of each cycle
     this._metricsCache     = null
     this._metricsCacheTime = -1
 
-    // Accept process(input, 0.2) or process(input, { sourceWeight: 0.2 })
     if (typeof options === 'number') options = { sourceWeight: options }
     const sourceWeight = this.clamp01(options.sourceWeight ?? 1.0)
     this.state.lastSourceWeight = sourceWeight
@@ -128,7 +126,7 @@ export class CELF_Engine_AI_V5 {
     this.updateEmergentCredibility(perturbation)
     this.updateRecursiveCognition()
 
-    this.state.lastPerturbationVector = [...perturbation.semantic.vector]
+    this.state.lastPerturbationVector = perturbation.semantic.vector.slice()
 
     const snapshot = this.snapshot(perturbation, delta, contained)
     this.commit(snapshot)
@@ -215,7 +213,7 @@ export class CELF_Engine_AI_V5 {
   }
 
   semanticVector(text, h1 = 0, h2 = 0, h3 = 0) {
-    const vector = Array.from({ length: this.semanticDimensions }, () => 0)
+    const vector = new Float32Array(this.semanticDimensions)
     const s = String(text ?? "")
 
     for (let i = 0; i < s.length; i++) {
@@ -228,7 +226,7 @@ export class CELF_Engine_AI_V5 {
     }
 
     const norm = Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0)) || 1
-    return vector.map(v => this.round4(v / norm))
+    return Float32Array.from(vector, v => Math.fround(v / norm))
   }
 
   deltaP(p) {
@@ -381,19 +379,16 @@ export class CELF_Engine_AI_V5 {
           proximity * semanticWeight * 0.004
         )
 
-        // Hysteresis — path-dependent field physics
         cell.hysteresis = this.clamp01(
           (cell.hysteresis ?? 0) * 0.995
           + proximity * ringDelta * sourceWeight * 0.005
         )
 
-        // Elastic strain — tension toward baseline
         const baseline     = 1 / this.resolution
         cell.elasticStrain = this.clamp01(
           Math.abs(cell.p - baseline) * (cell.hysteresis ?? 0) * 0.3
         )
 
-        // Path bias — old semantic valleys easier to re-activate
         const pathBias = (cell.hysteresis ?? 0) * 0.15 * sourceWeight
         cell.p = this.clampP(
           cell.p
@@ -437,7 +432,6 @@ export class CELF_Engine_AI_V5 {
 
         const resistance         = 1 - (this.rings[r][i].constraintDensity ?? 0)
         const semanticResistance = 1 - (this.rings[r][i].semanticTrace ?? 0) * 0.25
-        // Hysteresis slows diffusion — semantic valleys preserve their shape
         const hysteresisResistance = 1 - (this.rings[r][i].hysteresis ?? 0) * 0.30
 
         next[r][i] = this.clampP(
@@ -534,7 +528,7 @@ export class CELF_Engine_AI_V5 {
             credibility: cell.credibility ?? 1.0,
             emergentCredibility: cell.credibility ?? 1.0,
             strength: score,
-            semanticVector: [...(perturbation?.semantic?.vector ?? [])],
+            semanticVector: perturbation?.semantic?.vector?.slice() ?? new Float32Array(0),
             predictionScore: 0,
             predictionCount: 0
           })
@@ -867,7 +861,7 @@ export class CELF_Engine_AI_V5 {
       t: this.state.t,
       theta: this.round4(this.state.lastTheta),
       signature: this.round4(this.state.signature),
-      vector: [...current.vector],
+      vector: current.vector.slice(),
       intent: { ...current.intent },
       grounding: this.field.semanticGrounding,
       coherence: this.field.semanticCoherence,
@@ -1079,7 +1073,6 @@ export class CELF_Engine_AI_V5 {
   }
 
   metrics() {
-    // Cache: reuse if called multiple times in same cycle
     if (this._metricsCache !== null && this._metricsCacheTime === this.state.t) {
       return this._metricsCache
     }
@@ -1141,10 +1134,9 @@ export class CELF_Engine_AI_V5 {
       semanticMass: this.round4(semanticMass),
       intentMass: this.round4(intentMass),
       totalMass: this.round4(this.totalMass()),
-            massError: this.round4(Math.abs(this.totalMass() - this.massTarget))
+      massError: this.round4(Math.abs(this.totalMass() - this.massTarget))
     }
 
-    // Store in cache
     this._metricsCache     = result
     this._metricsCacheTime = this.state.t
     return result
@@ -1222,9 +1214,6 @@ export class CELF_Engine_AI_V5 {
   }
 
   commit(snapshot) {
-    // ── Compressed delta — بدل snapshot كامل ──────────────────
-    // كل snapshot كامل ≈ 2,340 bytes
-    // compressed delta  ≈ 80 bytes  → توفير ~97%
     const compressed = {
       t:             snapshot.t,
       phase:         snapshot.phase,
@@ -1284,21 +1273,17 @@ export class CELF_Engine_AI_V5 {
     const currentPhase  = this.state.phase           ?? "warmup"
     const currentAttractors = this.state.attractors  ?? []
 
-    // Topological routing — field navigation not vector retrieval
     return this.field.semanticMemory
       .map(item => {
 
-        // 1. Semantic similarity (vector)
         const semanticSim = this.cosineSimilarity(vector, item.vector ?? [])
 
-        // 2. Attractor proximity — topological distance in field
         const thetaDist = Math.abs(
           ((item.theta - currentTheta + this.cycle) % this.cycle)
         )
         const circularDist  = Math.min(thetaDist, this.cycle - thetaDist)
         const attractorProx = this.clamp01(1 - circularDist / (this.cycle * 0.5))
 
-        // 3. Hysteresis affinity — did previous deformations align?
         const topAttractor     = currentAttractors[0]
         const hysteresisAffinity = topAttractor
           ? this.clamp01(
@@ -1308,24 +1293,22 @@ export class CELF_Engine_AI_V5 {
             )
           : 0
 
-        // 4. Continuity — field persistence
         const continuity = this.clamp01(
           item.coherence  * 0.5 +
           item.grounding  * 0.3 +
           (1 - (item.novelty ?? 0)) * 0.2
         )
 
-        // 5. Resonance — phase alignment
         const phaseMatch = item.phase === currentPhase ? 0.15 : 0
 
         const score = this.round4(
-          semanticSim      * 0.35 +   // vector similarity
-          attractorProx    * 0.25 +   // topological proximity
-          hysteresisAffinity * 0.20 + // field deformation alignment
-          continuity       * 0.10 +   // field persistence
-          phaseMatch       +          // phase resonance
-          item.coherence   * 0.05 +   // coherence contribution
-          item.grounding   * 0.05     // semantic grounding
+          semanticSim      * 0.35 +
+          attractorProx    * 0.25 +
+          hysteresisAffinity * 0.20 +
+          continuity       * 0.10 +
+          phaseMatch       +
+          item.coherence   * 0.05 +
+          item.grounding   * 0.05
         )
 
         return {
@@ -1335,7 +1318,6 @@ export class CELF_Engine_AI_V5 {
           signature:         item.signature,
           signalType:        item.signalType ?? "noise",
           score,
-          // Debug info
           _semanticSim:      this.round4(semanticSim),
           _attractorProx:    this.round4(attractorProx),
           _hysteresisAff:    this.round4(hysteresisAffinity),
@@ -1585,29 +1567,18 @@ export class CELF_Engine_AI_V5 {
     return Math.round(Number(v || 0) * 10000) / 10000
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // FIELD TOPOLOGY → PROMPT
-  // Reads current field deformation — no stored memory
-  // Translates topology into ~20 tokens for Claude
-  // ═══════════════════════════════════════════════════════════
-
   buildFieldPrompt() {
     const attractors = this.state.attractors ?? []
     const field      = this.field
     const phase      = this.state.phase ?? 'warmup'
 
-    // Top attractors by strength — topology peaks
     const topAttractors = attractors
       .sort((a, b) => b.strength - a.strength)
       .slice(0, 3)
 
-    // Dominant zone from attractor positions
-    const semanticZone = this.#resolveSemanticZone(topAttractors, field)
-
-    // Field pressure state
+    const semanticZone  = this.#resolveSemanticZone(topAttractors, field)
     const pressureState = this.#resolvePressureState(field)
 
-    // Continuity — from field shape not stored data
     const continuity = this.round4(
       field.continuity      * 0.35 +
       field.coherence       * 0.35 +
@@ -1615,7 +1586,6 @@ export class CELF_Engine_AI_V5 {
       (1 - field.drift)     * 0.10
     )
 
-    // Style from field mechanics
     const style = this.#resolveStyle(field, phase)
 
     return {
@@ -1628,7 +1598,6 @@ export class CELF_Engine_AI_V5 {
       coherence:   this.round4(field.coherence    ?? 0),
       drift:       this.round4(field.drift        ?? 0),
       attractorCount: attractors.length,
-      // Micro context — strongest attractor position
       topTheta:    topAttractors[0]
         ? this.round4(topAttractors[0].theta ?? 0)
         : null,
@@ -1643,9 +1612,9 @@ export class CELF_Engine_AI_V5 {
     const execReady      = field.executionReadiness  ?? 0
     const semantic       = field.semanticGrounding   ?? 0
 
-    if (execReady > 0.6)    return 'execution'
-    if (intentPressure > 0.6) return 'inquiry'
-    if (semantic > 0.5)     return 'conceptual'
+    if (execReady > 0.6)           return 'execution'
+    if (intentPressure > 0.6)      return 'inquiry'
+    if (semantic > 0.5)            return 'conceptual'
     if (topAttractors.length >= 3) return 'multi_focus'
     if (topAttractors.length === 1) return 'focused'
     return 'general'
@@ -1656,10 +1625,10 @@ export class CELF_Engine_AI_V5 {
     const novelty       = field.noveltyPressure ?? 0
     const coherence     = field.coherence       ?? 0
 
-    if (topicPressure > 0.7)    return 'high_pressure'
-    if (novelty > 0.6)          return 'exploring'
-    if (coherence > 0.6)        return 'stable'
-    if (field.drift > 0.5)      return 'drifting'
+    if (topicPressure > 0.7) return 'high_pressure'
+    if (novelty > 0.6)       return 'exploring'
+    if (coherence > 0.6)     return 'stable'
+    if (field.drift > 0.5)   return 'drifting'
     return 'neutral'
   }
 
@@ -1717,7 +1686,7 @@ export class CELF_Engine_AI_V5 {
       lastDeltaTheta: 0, totalMass: this.totalMass(),
       attractors: [], history: [], archive: [],
       lastSourceWeight: 1.0,
-      lastPerturbationVector: [],
+      lastPerturbationVector: new Float32Array(this.semanticDimensions),
       attractorCredibilityLog: []
     }
 
