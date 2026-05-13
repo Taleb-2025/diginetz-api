@@ -57,45 +57,7 @@ function mapIntent(snapshot) {
   return 'statement'
 }
 
-// ── Intelligent history pruning ──────────────
-function normalizeHistory(history = [], intent = 'question') {
-  if (!Array.isArray(history) || history.length === 0) return []
 
-  const clean = history
-    .filter(h =>
-      h &&
-      (h.role === 'user' || h.role === 'assistant') &&
-      typeof h.content === 'string' &&
-      h.content.length > 0
-    )
-    .map(h => ({
-      role: h.role,
-      content: h.role === 'assistant'
-        ? h.content.slice(0, 400)   // code/reply snippet
-        : h.content.slice(0, 200)   // user question
-    }))
-
-  switch (intent) {
-    case 'command':
-      // Code continuation: last user + last assistant
-      return clean.slice(-2)
-
-    case 'complaint':
-      // Debugging: last exchange
-      return clean.slice(-2)
-
-    case 'question':
-      // Follow-up: last user + last assistant for context
-      return clean.slice(-2)
-
-    case 'greeting':
-    case 'emotional':
-      return []
-
-    default:
-      return clean.slice(-2)
-  }
-}
 
 // ── feed() ───────────────────────────────────
 function feed(sessionId, text) {
@@ -138,6 +100,67 @@ function feed(sessionId, text) {
   }
 }
 
+// ── Token estimator ─────────────────────────
+// Better than char/4 — accounts for code density
+function estimateTokens(text) {
+  if (!text || typeof text !== 'string') return 0
+  const codeBlocks = (text.match(/```[\s\S]*?```/g) ?? [])
+  const codeChars  = codeBlocks.reduce((s, b) => s + b.length, 0)
+  const textChars  = text.length - codeChars
+  // Code is denser: ~3 chars/token. Text: ~4 chars/token
+  return Math.ceil(codeChars / 3) + Math.ceil(textChars / 4)
+}
+
+// ── Adaptive history ─────────────────────────
+// Budget-aware: fills available space intelligently
+function adaptiveHistory(history = [], intent = 'question', tokenBudget = 800) {
+  if (!Array.isArray(history) || history.length === 0) return []
+
+  const clean = history
+    .filter(h =>
+      h &&
+      (h.role === 'user' || h.role === 'assistant') &&
+      typeof h.content === 'string' &&
+      h.content.length > 0
+    )
+
+  if (intent === 'greeting' || intent === 'emotional') return []
+
+  // Fill from most recent — stop when budget exceeded
+  const selected = []
+  let usedTokens  = 0
+  const maxTokens = Math.min(tokenBudget, 600)
+
+  for (let i = clean.length - 1; i >= 0; i--) {
+    const h      = clean[i]
+    const tokens = estimateTokens(h.content)
+
+    if (usedTokens + tokens > maxTokens) break
+
+    selected.unshift(h)
+    usedTokens += tokens
+  }
+
+  // Trim content to fit — never cut mid-sentence
+  return selected.map(h => {
+    const maxChars = h.role === 'assistant' ? 1200 : 600
+    if (h.content.length <= maxChars) return h
+    const trimmed = h.content.slice(0, maxChars)
+    const lastPeriod = Math.max(
+      trimmed.lastIndexOf('.'),
+      trimmed.lastIndexOf('
+'),
+      trimmed.lastIndexOf('```')
+    )
+    return {
+      role:    h.role,
+      content: lastPeriod > maxChars * 0.6
+        ? trimmed.slice(0, lastPeriod + 1)
+        : trimmed
+    }
+  })
+}
+
 // ── Payload protection ────────────────────────
 function checkPayload(systemHint, messages) {
   const size = JSON.stringify({ system: systemHint, messages }).length
@@ -174,7 +197,7 @@ router.get('/process-text', (_req, res) => {
     status:  'online',
     engine:  'CELF_Engine_AI_V5',
     llm:     'Claude Haiku 4.5',
-    version: '5.1'
+    version: '5.2'
   })
 })
 
@@ -255,8 +278,17 @@ router.post('/process-text', async (req, res) => {
     const systemHint = rawHint.slice(0, 400)
 
     const intent        = built.context?.intent ?? 'question'
-    const maxTokens     = Math.min(built.maxTokens ?? 300, 700)
-    const prunedHistory = normalizeHistory(history, intent)
+    // Dynamic output reserve — code needs more space
+    const baseMax = built.maxTokens ?? 400
+    const outputReserve = intent === 'command'   ? 1600
+                        : intent === 'question'  ? 800
+                        : intent === 'complaint' ? 1000
+                        : 600
+    const maxTokens = Math.min(Math.max(baseMax, outputReserve), 2000)
+
+    // Adaptive history — token-budget aware
+    const historyBudget = Math.max(200, 4000 - maxTokens - 200)
+    const prunedHistory = adaptiveHistory(history, intent, historyBudget)
 
     // Build user content
     let userContent
