@@ -1,48 +1,100 @@
-/**
- * context-builder.js — v5.0
- * Response Compression Layer
- * - systemHint directive لا descriptive
- * - max_tokens ديناميكي حسب intent
- * - منع conversational preamble
- * - phase-driven output control
- */
-
 function mapIntent(celfResult) {
   const s = celfResult?.perturbation?.semantic
+
   if (!s) return 'statement'
-  if (s.question)        return 'question'
+  if (s.question) return 'question'
   if (s.intent?.execute) return 'command'
-  if (s.error)           return 'complaint'
-  if (s.emotional)       return 'emotional'
+  if (s.error) return 'complaint'
+  if (s.emotional) return 'emotional'
+
   return 'statement'
 }
 
 function detectLang(signals) {
   const lang = signals?.lang ?? 'en'
-  if (lang === 'ar')    return 'ar'
-  if (lang === 'de')    return 'de'
+
+  if (lang === 'ar') return 'ar'
+  if (lang === 'de') return 'de'
   if (lang === 'mixed') return 'mixed'
+
   return lang ?? 'en'
 }
 
-// max_tokens ديناميكي حسب intent و phase
-function resolveMaxTokens(intent, phase) {
-  if (intent === 'command')  return 600   // كود + شرح
-  if (intent === 'question') return 200   // إجابة مباشرة
-  if (intent === 'greeting') return 60    // رد قصير
-  if (intent === 'emotional') return 100  // دعم مختصر
-  if (intent === 'complaint') return 200  // حل مباشر
+function resolveMaxTokens(intent, fieldPrompt, prevAnalysis = null) {
+  const base = {
+    command: 450,
+    question: 220,
+    greeting: 40,
+    emotional: 80,
+    complaint: 180,
+    statement: 220,
+  }[intent] ?? 220
 
-  if (phase === 'compressed') return 150
-  if (phase === 'locked')     return 150
-  if (phase === 'turbulent')  return 100
+  const pressure = fieldPrompt?.pressure ?? 'neutral'
+  const zone = fieldPrompt?.zone ?? 'general'
+  const style = fieldPrompt?.style ?? 'clear_direct'
+  const continuity = fieldPrompt?.continuity ?? 0
 
-  return 250  // default
+  let tokens = base
+
+  if (zone === 'execution')
+    tokens = Math.max(tokens, 550)
+
+  if (zone === 'conceptual')
+    tokens = Math.max(tokens, 300)
+
+  if (zone === 'focused')
+    tokens = Math.min(tokens, 180)
+
+  if (zone === 'multi_focus')
+    tokens = Math.max(tokens, 280)
+
+  if (pressure === 'high_pressure')
+    tokens = Math.min(tokens, 180)
+
+  if (pressure === 'stable')
+    tokens = Math.max(tokens, base)
+
+  if (pressure === 'exploring')
+    tokens = Math.max(tokens, 280)
+
+  if (style === 'direct_minimal')
+    tokens = Math.min(tokens, 160)
+
+  if (style === 'technical_concise')
+    tokens = Math.min(tokens, 450)
+
+  if (continuity > 0.7)
+    tokens = Math.round(tokens * 0.85)
+
+  if (continuity < 0.3)
+    tokens += 40
+
+  if (prevAnalysis) {
+    if (prevAnalysis.flags?.verbosity) {
+      tokens = Math.round(tokens * 0.75)
+    }
+
+    if (prevAnalysis.nextMaxTokens) {
+      tokens = Math.round(
+        (tokens + prevAnalysis.nextMaxTokens) / 2
+      )
+    }
+  }
+
+  return Math.max(40, Math.min(650, tokens))
 }
 
 export function build(adapterOutput) {
-  const { ok, signals, celfResult, passToLLM,
-          structuralHint, prevMaxTokens } = adapterOutput
+  const {
+    ok,
+    signals,
+    celfResult,
+    passToLLM,
+    structuralHint,
+    prevMaxTokens,
+    fieldPrompt,
+  } = adapterOutput
 
   if (!ok) {
     return {
@@ -50,30 +102,46 @@ export function build(adapterOutput) {
       reason: 'invalid_input',
       context: null,
       systemHint: null,
-      maxTokens: 250
+      maxTokens: 220
     }
   }
 
-  const phase  = celfResult?.phase                        ?? 'warmup'
-  const drift  = Number(celfResult?.field?.drift          ?? 0)
   const intent = mapIntent(celfResult)
-  const lang   = detectLang(signals)
-  const rupture = signals?.rupture ?? 0
+  const lang = detectLang(signals)
+  const phase = celfResult?.phase ?? 'warmup'
+  const drift = Number(celfResult?.field?.drift ?? 0)
 
   const context = {
     lang,
     phase,
     intent,
     drift,
-    rupture,
-    coherence:  Number(celfResult?.field?.coherence         ?? 0),
+    coherence: Number(celfResult?.field?.coherence ?? 0),
     confidence: Number(celfResult?.field?.semanticGrounding ?? 0),
-    novelty:    Number(celfResult?.field?.noveltyPressure   ?? 0),
+    novelty: Number(celfResult?.field?.noveltyPressure ?? 0),
+    fieldPrompt: fieldPrompt ?? null,
   }
 
-  // استخدم maxTokens من التحليل السابق إذا وُجد
-  const maxTokens  = prevMaxTokens ?? resolveMaxTokens(intent, phase)
-  const systemHint = buildSystemHint(context, maxTokens, structuralHint)
+  const prevAnalysis =
+    adapterOutput.prevAnalysis ?? null
+
+  const maxTokens =
+    prevMaxTokens ??
+    resolveMaxTokens(
+      intent,
+      fieldPrompt,
+      prevAnalysis
+    )
+
+  const systemHint = buildSystemHint(
+    lang,
+    intent,
+    phase,
+    drift,
+    fieldPrompt,
+    maxTokens,
+    structuralHint
+  )
 
   return {
     passToLLM,
@@ -84,48 +152,68 @@ export function build(adapterOutput) {
   }
 }
 
-function buildSystemHint(ctx, maxTokens, structuralHint = null) {
+function buildSystemHint(
+  lang,
+  intent,
+  phase,
+  drift,
+  fieldPrompt,
+  maxTokens,
+  structuralHint
+) {
   const parts = []
 
-  // ── اللغة — directive فقط ────────────────
-  if (ctx.lang === 'ar') {
-    parts.push('Language: ar.')
-  } else if (ctx.lang === 'de') {
-    parts.push('Language: de.')
-  } else if (ctx.lang === 'mixed') {
-    parts.push('Language: ar. Technical terms in en only.')
-  } else {
-    parts.push(`Language: ${ctx.lang}.`)
+  const langMap = {
+    ar: 'ar',
+    de: 'de',
+    mixed: 'ar+en-terms',
+    en: 'en'
   }
 
-  // ── قواعد صارمة — دائماً ─────────────────
-  parts.push('No introductions. No meta commentary. No language discussion. Reply directly.')
-  parts.push(`Under ${maxTokens} tokens.`)
+  parts.push(`Language: ${langMap[lang] ?? lang}.`)
 
-  // ── النية — directive مباشر ───────────────
-  if (ctx.intent === 'command')   parts.push('Output: code + minimal explanation.')
-  if (ctx.intent === 'question')  parts.push('Output: direct answer only.')
-  if (ctx.intent === 'complaint') parts.push('Output: solution first, cause second.')
-  if (ctx.intent === 'emotional') parts.push('Output: brief supportive response.')
-  if (ctx.intent === 'greeting')  parts.push('Output: one sentence greeting.')
+  if (fieldPrompt) {
+    const fp = fieldPrompt
 
-  // ── الطور — directive ─────────────────────
-  if (ctx.phase === 'drift' || ctx.drift > 0.55) {
-    parts.push('Topic changed. Follow new subject only.')
-  } else if (ctx.phase === 'compressed') {
-    parts.push('Continue existing context directly.')
-  } else if (ctx.phase === 'turbulent') {
-    parts.push('Clarify first. Be brief.')
-  } else if (ctx.phase === 'locked') {
-    parts.push('Be precise. Context established.')
+    if (fp.zone)
+      parts.push(`Zone: ${fp.zone}.`)
+
+    if (fp.style)
+      parts.push(`Style: ${fp.style}.`)
+
+    if (
+      fp.pressure &&
+      fp.pressure !== 'neutral'
+    ) {
+      parts.push(`Field: ${fp.pressure}.`)
+    }
   }
 
-  // ── حالات خاصة ───────────────────────────
-  if (ctx.rupture > 2)      parts.push('User stressed. Be clear.')
-  if (ctx.confidence < 0.3) parts.push('Ask one clarifying question if needed.')
+  if (intent === 'command')
+    parts.push('Output: working code.')
 
-  // ── Structural hint من التحليل السابق ────
-  if (structuralHint) parts.push(structuralHint)
+  if (intent === 'question')
+    parts.push('Output: direct answer.')
+
+  if (intent === 'complaint')
+    parts.push('Output: solution first.')
+
+  if (intent === 'emotional')
+    parts.push('Output: brief support.')
+
+  if (intent === 'greeting')
+    parts.push('Output: one sentence.')
+
+  if (phase === 'drift' || drift > 0.4) {
+    parts.push('Topic changed.')
+  } else if (phase === 'turbulent') {
+    parts.push('Be brief.')
+  }
+
+  parts.push(`Max: ${maxTokens} tokens.`)
+
+  if (structuralHint)
+    parts.push(structuralHint)
 
   return parts.join(' ')
 }
