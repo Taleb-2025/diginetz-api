@@ -6,13 +6,58 @@ import { analyze } from '../utils/response-analyzer.js'
 
 const router = express.Router()
 
-const MAX_SESSIONS   = 150
+const MAX_SESSIONS    = 150
 const MAX_INPUT_CHARS = 40000
+const MAX_TEXT_MAP    = 300
+const ROUTE_CONFIDENCE_THRESHOLD = 0.35
+const DEDUP_JACCARD_THRESHOLD    = 0.72
 
-const sessions      = new Map()
-const metricsStore  = new Map()
-const analysisStore = new Map()
-const processingLock = new Set()
+const sessions         = new Map()
+const metricsStore     = new Map()
+const analysisStore    = new Map()
+const processingLock   = new Set()
+const semanticTextMaps = new Map()
+
+const TECH_KEYWORDS = {
+  frameworks: ['fastapi', 'django', 'flask', 'express', 'nestjs', 'react', 'vue', 'spring'],
+  databases:  ['redis', 'postgresql', 'postgres', 'mysql', 'mongodb', 'sqlite', 'elasticsearch'],
+  infra:      ['docker', 'railway', 'nginx', 'kubernetes', 'aws', 'gcp', 'azure', 'vercel'],
+  concepts:   ['caching', 'pooling', 'rate limiting', 'authentication', 'websocket',
+               'async', 'optimization', 'deployment', 'monitoring', 'scaling', 'latency',
+               'performance', 'connection', 'middleware', 'routing', 'security']
+}
+
+const FILLERS = new Set([
+  'the','and','or','but','is','are','was','were','a','an','in','on','at','to','for',
+  'ich','bin','ein','eine','der','die','das','und','wie','mit','von','auf','bei','für',
+  'هل','في','من','على','مع','هو','هي','كان','لا','أو','و','ما','هذا','ذلك'
+])
+
+function semanticHash(text) {
+  const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 200)
+  let h = 2166136261
+  for (let i = 0; i < normalized.length; i++) {
+    h ^= normalized.charCodeAt(i)
+    h  = Math.imul(h, 16777619)
+  }
+  return (Math.abs(h >>> 0)).toString(36)
+}
+
+function semanticCompress(text, maxWords = 12) {
+  const cleaned = String(text ?? '').replace(/```[\s\S]*?```/g, '').trim()
+  const words   = cleaned.split(/\s+/).filter(w => w.length > 2 && !FILLERS.has(w.toLowerCase()))
+  return words.slice(0, maxWords).join(' ')
+}
+
+function jaccardSimilarity(textA, textB) {
+  const setA = new Set(textA.toLowerCase().split(/\s+/).filter(w => w.length > 2))
+  const setB = new Set(textB.toLowerCase().split(/\s+/).filter(w => w.length > 2))
+  if (!setA.size || !setB.size) return 0
+  let overlap = 0
+  for (const w of setA) if (setB.has(w)) overlap++
+  const union = setA.size + setB.size - overlap
+  return union > 0 ? overlap / union : 0
+}
 
 function getEngine(sessionId) {
   if (sessions.has(sessionId)) {
@@ -23,7 +68,9 @@ function getEngine(sessionId) {
   }
 
   if (sessions.size >= MAX_SESSIONS) {
-    sessions.delete(sessions.keys().next().value)
+    const oldest = sessions.keys().next().value
+    sessions.delete(oldest)
+    semanticTextMaps.delete(oldest)
   }
 
   const engine = new CELF_Engine_AI_V5({
@@ -54,10 +101,7 @@ function mapIntent(snapshot) {
 
 function feed(sessionId, text) {
   const signals = parse(text)
-
-  if (!signals.valid) {
-    return { ok: false, reason: signals.reason ?? 'invalid_signals' }
-  }
+  if (!signals.valid) return { ok: false, reason: signals.reason ?? 'invalid_signals' }
 
   const engine   = getEngine(sessionId)
   const snapshot = engine.process(text)
@@ -74,10 +118,8 @@ function feed(sessionId, text) {
   const intent     = mapIntent(snapshot)
 
   const passToLLM =
-    coherence  > 0.15 ||
-    resonance  > 0.20 ||
-    intent === 'greeting' ||
-    intent === 'emotional' ||
+    coherence  > 0.15 || resonance > 0.20 ||
+    intent === 'greeting' || intent === 'emotional' ||
     confidence < 0.4
 
   return {
@@ -86,44 +128,150 @@ function feed(sessionId, text) {
     signals,
     result: snapshot,
     celfResult: {
-      phase: snapshot.phase,
-      t: snapshot.t,
+      phase: snapshot.phase, t: snapshot.t,
       field, metrics, control, perturbation, attractors
     }
   }
 }
 
-function estimateTokens(text) {
-  if (!text || typeof text !== 'string') return 0
-  const codeBlocks = text.match(/```[\s\S]*?```/g) ?? []
-  const codeChars  = codeBlocks.reduce((s, b) => s + b.length, 0)
-  const textChars  = text.length - codeChars
-  return Math.ceil(codeChars / 3) + Math.ceil(textChars / 4)
-}
+function storeSemanticEntry(sid, t, text) {
+  const map = semanticTextMaps.get(sid) ?? new Map()
 
-function adaptiveHistory(history = [], intent = 'question', tokenBudget = 2000) {
-  if (!Array.isArray(history) || history.length === 0) return []
-  if (intent === 'greeting' || intent === 'emotional') return []
+  const compressed = semanticCompress(text, 15)
+  if (!compressed) return
 
-  const clean = history.filter(h =>
-    h &&
-    (h.role === 'user' || h.role === 'assistant') &&
-    typeof h.content === 'string' &&
-    h.content.length > 0
-  )
+  const hash = semanticHash(compressed)
 
-  const selected = []
-  let usedTokens  = 0
-
-  for (let i = clean.length - 1; i >= 0; i--) {
-    const h      = clean[i]
-    const tokens = estimateTokens(h.content)
-    if (usedTokens + tokens > tokenBudget) break
-    selected.unshift(h)
-    usedTokens += tokens
+  for (const [, entry] of map) {
+    if (entry.hash === hash) return
+    if (jaccardSimilarity(entry.text, compressed) >= DEDUP_JACCARD_THRESHOLD) return
   }
 
-  return selected
+  map.set(t, { hash, text: compressed })
+
+  if (map.size > MAX_TEXT_MAP) {
+    map.delete(map.keys().next().value)
+  }
+
+  semanticTextMaps.set(sid, map)
+}
+
+function enrichRouteContext(rawRoute, sid) {
+  const map = semanticTextMaps.get(sid) ?? new Map()
+  return rawRoute.map(item => ({
+    ...item,
+    text: map.get(item.t)?.text ?? ''
+  }))
+}
+
+function calcRouteConfidence(routedContext) {
+  if (!routedContext?.length) return 0
+  const valid = routedContext.filter(i => i.score > 0.25 && i.text?.trim().length > 3)
+  if (!valid.length) return 0
+  return valid.reduce((s, i) => s + i.score, 0) / valid.length
+}
+
+function extractCodePurpose(lang, surroundingText, codeContent) {
+  const combined = (surroundingText + ' ' + codeContent.slice(0, 300)).toLowerCase()
+
+  const allTech = [
+    ...TECH_KEYWORDS.frameworks,
+    ...TECH_KEYWORDS.databases,
+    ...TECH_KEYWORDS.infra
+  ]
+  const foundTech    = allTech.filter(k => combined.includes(k)).slice(0, 2)
+  const foundConcept = TECH_KEYWORDS.concepts.find(k => combined.includes(k))
+
+  const declarations = codeContent.match(/(?:def|function|class|async def)\s+(\w+)/g) ?? []
+  const funcNames    = declarations.slice(0, 2).map(d => d.split(/\s+/).at(-1))
+
+  const parts = []
+  if (lang && lang !== 'code') parts.push(lang)
+  if (foundTech.length)        parts.push(foundTech.join('+'))
+  if (foundConcept)            parts.push(foundConcept)
+  if (funcNames.length && !foundTech.length) parts.push(funcNames.join(','))
+
+  return parts.length > 1
+    ? `[${parts.join(': ')}]`
+    : `[${lang || 'code'} implementation]`
+}
+
+function compressAssistantMessage(content) {
+  if (typeof content !== 'string') return content
+
+  const codeBlockPattern = /```(\w*)\n?([\s\S]*?)```/g
+  const parts   = []
+  let lastIndex = 0
+  let match
+
+  codeBlockPattern.lastIndex = 0
+
+  while ((match = codeBlockPattern.exec(content)) !== null) {
+    const textBefore  = content.slice(lastIndex, match.index)
+    const lang        = match[1]?.trim() || 'code'
+    const codeContent = match[2] ?? ''
+
+    if (textBefore.trim()) {
+      parts.push({ type: 'text', content: textBefore.trim() })
+    }
+
+    parts.push({
+      type:    'label',
+      content: extractCodePurpose(lang, textBefore, codeContent)
+    })
+
+    lastIndex = match.index + match[0].length
+  }
+
+  const textAfter = content.slice(lastIndex).trim()
+  if (textAfter) parts.push({ type: 'text', content: textAfter })
+
+  if (!parts.length) return '[response provided]'
+
+  const textParts  = parts.filter(p => p.type === 'text').map(p => p.content.slice(0, 200))
+  const labelParts = parts.filter(p => p.type === 'label').map(p => p.content)
+
+  return [textParts.join('\n').trim(), labelParts.join(', ')]
+    .filter(Boolean).join('\n') || '[response provided]'
+}
+
+function getLastExchange(history) {
+  if (!Array.isArray(history) || history.length < 2) return null
+
+  const clean = history.filter(h =>
+    h && (h.role === 'user' || h.role === 'assistant') &&
+    typeof h.content === 'string' && h.content.length > 0
+  )
+
+  const last = clean.slice(-2)
+  if (last[0]?.role === 'user' && last[1]?.role === 'assistant') {
+    return { userMsg: last[0].content, assistantMsg: last[1].content }
+  }
+
+  return null
+}
+
+function buildMessageContext(currentText, routedContext, lastExchange, continuity, intent) {
+  if (intent === 'greeting' || intent === 'emotional') {
+    return [{ role: 'user', content: currentText }]
+  }
+
+  const routeConf = calcRouteConfidence(routedContext)
+
+  if (routeConf >= ROUTE_CONFIDENCE_THRESHOLD) {
+    return [{ role: 'user', content: currentText }]
+  }
+
+  if (continuity > 0.65 && lastExchange) {
+    const compressedAssistant = compressAssistantMessage(lastExchange.assistantMsg)
+    return [
+      { role: 'user',      content: lastExchange.userMsg.slice(0, 300) },
+      { role: 'assistant', content: compressedAssistant },
+      { role: 'user',      content: currentText }
+    ]
+  }
+
+  return [{ role: 'user', content: currentText }]
 }
 
 function checkPayload(systemHint, messages) {
@@ -169,32 +317,29 @@ function removeOverlap(existing, continuation) {
   for (let len = checkLen; len >= 20; len--) {
     const fragment = head.slice(0, len)
     if (tail.includes(fragment)) {
-      const overlapStart = continuation.indexOf(fragment)
-      return continuation.slice(overlapStart + fragment.length)
+      return continuation.slice(continuation.indexOf(fragment) + fragment.length)
     }
   }
 
   return continuation
 }
 
-async function continuationCall(messages, partialReply, systemHint, timeoutMs = 30000) {
+async function continuationCall(currentText, partialReply, systemHint, timeoutMs = 30000) {
   const hasOpenCode = detectOpenCodeBlock(partialReply)
 
   const continuePrompt = hasOpenCode
     ? 'continue exactly from where you stopped — complete the open code block, do not repeat what was already written'
     : 'continue exactly from where you stopped — do not repeat what was already written'
 
-  const continuationMessages = [
-    ...messages,
-    { role: 'assistant', content: partialReply },
-    { role: 'user',      content: continuePrompt }
-  ]
-
   const response = await fetchClaude({
     model:      'claude-haiku-4-5-20251001',
     max_tokens: 4096,
     system:     systemHint,
-    messages:   continuationMessages
+    messages: [
+      { role: 'user',      content: currentText },
+      { role: 'assistant', content: partialReply },
+      { role: 'user',      content: continuePrompt }
+    ]
   }, timeoutMs)
 
   return await response.json()
@@ -206,7 +351,7 @@ router.get('/process-text', (_req, res) => {
     status:  'online',
     engine:  'CELF_Engine_AI_V5',
     llm:     'Claude Haiku 4.5',
-    version: '5.5'
+    version: '5.9'
   })
 })
 
@@ -250,17 +395,23 @@ router.post('/process-text', async (req, res) => {
       return res.status(422).json({ error: processed.reason || 'processing_failed' })
     }
 
-    const engine       = getEngine(sid)
-    const fieldPrompt  = engine.buildFieldPrompt?.() ?? null
-    const prevAnalysis = analysisStore.get(sid) ?? null
+    const tValue = processed.result.t
+    storeSemanticEntry(sid, tValue, inputText)
+
+    const engine        = getEngine(sid)
+    const fieldPrompt   = engine.buildFieldPrompt?.() ?? null
+
+    const rawRoute      = engine.routeContext(safeText, 5)
+    const routedContext = enrichRouteContext(rawRoute, sid)
+    const routeConf     = calcRouteConfidence(routedContext)
 
     const built = build({
-      ok:         true,
-      signals:    processed.signals,
-      celfResult: processed.celfResult,
-      passToLLM:  processed.passToLLM,
+      ok:           true,
+      signals:      processed.signals,
+      celfResult:   processed.celfResult,
+      passToLLM:    processed.passToLLM,
       fieldPrompt,
-      prevAnalysis
+      routedContext
     })
 
     if (built.blocked) {
@@ -275,10 +426,10 @@ router.post('/process-text', async (req, res) => {
 
     const systemHint = built.systemHint ?? ''
     const intent     = built.context?.intent ?? 'question'
+    const continuity = built.context?.continuity ?? 0
     const maxTokens  = 4096
 
-    const historyBudget = 2000
-    const prunedHistory = adaptiveHistory(history, intent, historyBudget)
+    const lastExchange = getLastExchange(history)
 
     const userContent = hasImage
       ? [
@@ -287,10 +438,9 @@ router.post('/process-text', async (req, res) => {
         ]
       : safeText
 
-    const messages = [
-      ...prunedHistory,
-      { role: 'user', content: userContent }
-    ]
+    const messages = hasImage
+      ? [{ role: 'user', content: userContent }]
+      : buildMessageContext(safeText, routedContext, lastExchange, continuity, intent)
 
     let payloadSize = 0
     try {
@@ -334,17 +484,12 @@ router.post('/process-text', async (req, res) => {
         continuationCount < MAX_CONTINUATIONS
       ) {
         continuationCount++
-
         if (outputTokensTotal >= 4096) break
 
-        const contData = await continuationCall(messages, reply, systemHint)
-
+        const contData = await continuationCall(safeText, reply, systemHint)
         if (!contData?.content?.[0]?.text) break
 
-        const raw     = contData.content[0].text
-        const cleaned = removeOverlap(reply, raw)
-        reply        += cleaned
-
+        reply        += removeOverlap(reply, contData.content[0].text)
         inputTokensTotal  += contData?.usage?.input_tokens  ?? 0
         outputTokensTotal += contData?.usage?.output_tokens ?? 0
         claudeData         = contData
@@ -365,37 +510,42 @@ router.post('/process-text', async (req, res) => {
     )
 
     if (reply) {
-      const fieldBefore = processed.celfResult.field
-      const fieldAfter  = engine.buildFieldPrompt?.() ?? {}
-      const analysis    = analyze({ reply, fieldBefore, fieldAfter })
+      const analysis = analyze({
+        reply,
+        fieldBefore: processed.celfResult.field,
+        fieldAfter:  engine.buildFieldPrompt?.() ?? {}
+      })
       analysisStore.set(sid, analysis)
     }
 
     metricsStore.set(sid, {
-      sessionId:     sid,
-      inputTokens:   inputTokensTotal,
-      outputTokens:  outputTokensTotal,
-      totalTokens:   inputTokensTotal + outputTokensTotal,
+      sessionId:      sid,
+      inputTokens:    inputTokensTotal,
+      outputTokens:   outputTokensTotal,
+      totalTokens:    inputTokensTotal + outputTokensTotal,
       costUSD,
       maxTokens,
       payloadSize,
-      prunedHistory: prunedHistory.length,
+      routeConfidence: Math.round(routeConf * 1000) / 1000,
+      hasMemoryCard:  !!built.memoryCard,
+      continuity,
       intent,
-      phase:         processed.celfResult.phase ?? 'warmup',
-      updatedAt:     new Date().toISOString()
+      phase:          processed.celfResult.phase ?? 'warmup',
+      updatedAt:      new Date().toISOString()
     })
 
     return res.json({
       reply,
       metrics: {
-        inputTokens:   inputTokensTotal,
-        outputTokens:  outputTokensTotal,
-        totalTokens:   inputTokensTotal + outputTokensTotal,
+        inputTokens:     inputTokensTotal,
+        outputTokens:    outputTokensTotal,
+        totalTokens:     inputTokensTotal + outputTokensTotal,
         costUSD,
         maxTokens,
-        prunedHistory: prunedHistory.length,
+        routeConfidence: Math.round(routeConf * 1000) / 1000,
+        hasMemoryCard:   !!built.memoryCard,
         payloadSize,
-        truncated:     hasText && text.length > MAX_INPUT_CHARS
+        truncated:       hasText && text.length > MAX_INPUT_CHARS
       }
     })
 
@@ -425,6 +575,7 @@ router.delete('/session/:id', (req, res) => {
   sessions.delete(req.params.id)
   metricsStore.delete(req.params.id)
   analysisStore.delete(req.params.id)
+  semanticTextMaps.delete(req.params.id)
   processingLock.delete(req.params.id)
   return res.json({ ok: true })
 })
