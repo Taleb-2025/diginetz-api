@@ -6,9 +6,11 @@ import { analyze } from '../utils/response-analyzer.js'
 
 const router = express.Router()
 
-const MAX_SESSIONS = 150
-const sessions     = new Map()
-const metricsStore = new Map()
+const MAX_SESSIONS   = 150
+const MAX_INPUT_CHARS = 40000
+
+const sessions      = new Map()
+const metricsStore  = new Map()
 const analysisStore = new Map()
 const processingLock = new Set()
 
@@ -83,7 +85,11 @@ function feed(sessionId, text) {
     passToLLM,
     signals,
     result: snapshot,
-    celfResult: { phase: snapshot.phase, t: snapshot.t, field, metrics, control, perturbation, attractors }
+    celfResult: {
+      phase: snapshot.phase,
+      t: snapshot.t,
+      field, metrics, control, perturbation, attractors
+    }
   }
 }
 
@@ -106,7 +112,7 @@ function adaptiveHistory(history = [], intent = 'question', tokenBudget = 2000) 
     h.content.length > 0
   )
 
-  const selected  = []
+  const selected = []
   let usedTokens  = 0
 
   for (let i = clean.length - 1; i >= 0; i--) {
@@ -122,7 +128,7 @@ function adaptiveHistory(history = [], intent = 'question', tokenBudget = 2000) 
 
 function checkPayload(systemHint, messages) {
   const size = JSON.stringify({ system: systemHint, messages }).length
-  if (size > 18000) throw new Error('prompt_too_large')
+  if (size > 80000) throw new Error('prompt_too_large')
   return size
 }
 
@@ -233,7 +239,11 @@ router.post('/process-text', async (req, res) => {
   processingLock.add(sid)
 
   try {
-    const inputText = hasText ? text : '(image)'
+    const safeText = hasText && text.length > MAX_INPUT_CHARS
+      ? text.slice(0, MAX_INPUT_CHARS) + '\n\n[... truncated — input too long ...]'
+      : text
+
+    const inputText = safeText || '(image)'
     const processed = feed(sid, inputText)
 
     if (!processed.ok) {
@@ -273,9 +283,9 @@ router.post('/process-text', async (req, res) => {
     const userContent = hasImage
       ? [
           { type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } },
-          ...(hasText ? [{ type: 'text', text }] : [])
+          ...(hasText ? [{ type: 'text', text: safeText }] : [])
         ]
-      : text
+      : safeText
 
     const messages = [
       ...prunedHistory,
@@ -357,7 +367,7 @@ router.post('/process-text', async (req, res) => {
     if (reply) {
       const fieldBefore = processed.celfResult.field
       const fieldAfter  = engine.buildFieldPrompt?.() ?? {}
-      const analysis    = analyze({ reply, fieldBefore, fieldAfter, maxTokens })
+      const analysis    = analyze({ reply, fieldBefore, fieldAfter })
       analysisStore.set(sid, analysis)
     }
 
@@ -384,7 +394,8 @@ router.post('/process-text', async (req, res) => {
         costUSD,
         maxTokens,
         prunedHistory: prunedHistory.length,
-        payloadSize
+        payloadSize,
+        truncated:     hasText && text.length > MAX_INPUT_CHARS
       }
     })
 
