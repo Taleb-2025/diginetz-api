@@ -42,12 +42,29 @@ function inferCognitiveMode(fieldPrompt) {
   const pressure = fieldPrompt?.pressure ?? 'neutral'
   const drift    = fieldPrompt?.drift    ?? 0
 
-  if (zone === 'execution')               return 'technical'
-  if (zone === 'inquiry')                 return 'analytical'
-  if (zone === 'conceptual')              return 'reasoning'
+  if (zone === 'execution')                  return 'technical'
+  if (zone === 'inquiry')                    return 'analytical'
+  if (zone === 'conceptual')                 return 'reasoning'
   if (pressure === 'stable' && drift < 0.2) return 'focused'
-  if (pressure === 'exploring')           return 'exploratory'
+  if (pressure === 'exploring')              return 'exploratory'
   return 'general'
+}
+
+function buildGenerationMode(fieldPrompt, celfResult) {
+  const continuity = Number(fieldPrompt?.continuity                  ?? 0)
+  const drift      = Number(fieldPrompt?.drift                       ?? 0)
+  const er         = Number(celfResult?.field?.executionReadiness    ?? 0)
+  const np         = Number(celfResult?.field?.noveltyPressure       ?? 0)
+  const comp       = Number(celfResult?.field?.compressionPressure   ?? 0)
+  const phase      = celfResult?.phase ?? 'warmup'
+
+  if (er > 0.6 && continuity < 0.6)           return 'complete implementation'
+  if (np > 0.7 && continuity < 0.4)           return 'full explanation, new topic'
+  if (comp > 0.7 && continuity > 0.7)         return 'direct, skip recap'
+  if (continuity > 0.8 && np < 0.3)           return 'concise, user knows basics'
+  if (phase === 'drift' || drift > 0.5)       return 'fresh start, topic changed'
+  if (phase === 'locked' && drift < 0.2)      return 'focused, no tangents'
+  return null
 }
 
 function buildMemoryCard(routedContext = [], fieldPrompt = {}) {
@@ -86,14 +103,13 @@ function cardToString(card) {
   }
 
   if (card.topics?.length) {
-    parts.push('context:')
-    card.topics.forEach(t => parts.push(`- ${t}`))
+    parts.push(`context: ${card.topics.join(', ')}`)
   }
 
-  return parts.length ? 'Session state:\n' + parts.join('\n') : ''
+  return parts.length ? 'Session state: ' + parts.join(' — ') : ''
 }
 
-function buildCognitiveHint(lang, fieldPrompt) {
+function buildCognitiveHint(lang, fieldPrompt, celfResult) {
   const parts = []
 
   const langMap = { ar: 'ar', de: 'de', mixed: 'ar+en', en: 'en' }
@@ -103,7 +119,10 @@ function buildCognitiveHint(lang, fieldPrompt) {
   if (fieldPrompt?.pressure) parts.push(fieldPrompt.pressure)
   if (fieldPrompt?.phase && fieldPrompt.phase !== 'warmup') parts.push(fieldPrompt.phase)
 
-  return parts.join(' ').slice(0, 200)
+  const mode = buildGenerationMode(fieldPrompt, celfResult)
+  if (mode) parts.push(mode)
+
+  return parts.join(' — ').slice(0, 280)
 }
 
 export function build(adapterOutput) {
@@ -136,11 +155,11 @@ export function build(adapterOutput) {
   }
 
   const memoryCard    = buildMemoryCard(routedContext ?? [], fieldPrompt)
-  const cognitiveHint = buildCognitiveHint(lang, fieldPrompt)
+  const cognitiveHint = buildCognitiveHint(lang, fieldPrompt, celfResult)
   const cardStr       = cardToString(memoryCard)
 
   const systemHint = cardStr
-    ? cognitiveHint + '\n\n' + cardStr
+    ? cognitiveHint + '\n' + cardStr
     : cognitiveHint
 
   return {
