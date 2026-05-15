@@ -250,7 +250,8 @@ export class StructuralIndex {
       semanticLabel,
       semanticVector:  null,
       vaultCapsuleId:  null,
-      dependencyDepth: 0
+      dependencyDepth: 0,
+      sourceCode:      bodyText   // ← الكود الأصلي — لا يُرسل للـ LLM إلا عند deep analysis
     }
   }
 
@@ -598,8 +599,107 @@ export class StructuralIndex {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  //  HELPERS
+  //  CODE RESTORE LAYER — استعادة الكود عند الحاجة
   // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * getNodeSource(nodeId)
+   * يُعيد الكود الأصلي لـ node محددة
+   */
+  getNodeSource(nodeId) {
+    return this.nodes.get(nodeId)?.sourceCode ?? null
+  }
+
+  /**
+   * getNodeSourceBySymbol(symbol)
+   * يُعيد الكود الأصلي بالاسم — يُعيد أول تطابق
+   */
+  getNodeSourceBySymbol(symbol) {
+    const ids = this.symbolIndex.get(symbol) ?? []
+    if (!ids.length) return null
+    return this.nodes.get(ids[0])?.sourceCode ?? null
+  }
+
+  /**
+   * getDeepContext(symbols, options)
+   * يُعيد كود حقيقي لمجموعة symbols — للـ deep analysis
+   *
+   * options:
+   *   maxChars:   حد أقصى للأحرف (default: 8000)
+   *   withGraph:  هل تُضاف علاقات الـ call graph؟
+   *
+   * يُستخدم في buildCognitiveTarget عند mode: 'deep'
+   */
+  getDeepContext(symbols = [], options = {}) {
+    const maxChars  = options.maxChars  ?? 8000
+    const withGraph = options.withGraph ?? true
+
+    const results  = []
+    let totalChars = 0
+
+    for (const symbol of symbols) {
+      if (totalChars >= maxChars) break
+
+      const ids = this.symbolIndex.get(symbol) ?? []
+      for (const id of ids) {
+        const node = this.nodes.get(id)
+        if (!node?.sourceCode) continue
+        if (totalChars + node.sourceCode.length > maxChars) continue
+
+        const block = {
+          symbol:    node.symbol,
+          type:      node.type,
+          file:      node.file,
+          startLine: node.startLine,
+          endLine:   node.endLine,
+          source:    node.sourceCode,
+          calls:     node.calls,
+          usedBy:    node.usedBy,
+          complexity: node.complexity
+        }
+
+        if (withGraph) {
+          // أضف الـ callee sources إذا صغيرة
+          block.calleesSources = {}
+          for (const callee of (node.calls ?? []).slice(0, 3)) {
+            const src = this.getNodeSourceBySymbol(callee)
+            if (src && src.length < 400) {
+              block.calleesSources[callee] = src
+              totalChars += src.length
+            }
+          }
+        }
+
+        results.push(block)
+        totalChars += node.sourceCode.length
+      }
+    }
+
+    return {
+      blocks:     results,
+      totalChars,
+      truncated:  symbols.length > results.length,
+      symbolsFound: results.map(r => r.symbol)
+    }
+  }
+
+  /**
+   * needsDeepAnalysis(userIntent)
+   * يقرر هل السؤال يحتاج كود أصلي
+   * يُستخدم في buildCognitiveTarget
+   */
+  needsDeepAnalysis(userIntent) {
+    const { mode, depth } = userIntent
+    return (
+      depth === 'deep' ||
+      mode === 'debug'    ||
+      mode === 'review'   ||
+      mode === 'optimize' ||
+      (mode === 'explain' && depth !== 'surface')
+    )
+  }
+
+
 
   _hash(str) {
     let h = 2166136261
