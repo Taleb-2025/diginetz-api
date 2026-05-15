@@ -60,6 +60,36 @@ function jaccardSimilarity(textA, textB) {
   return union > 0 ? overlap / union : 0
 }
 
+// ── Inline Code Detection ──────────────────────────────────────
+// يكتشف كود JS/TS في الرسالة — من code blocks أو كود مباشر
+function detectCodeBlocks(text) {
+  const blocks = []
+
+  // 1. ```js / ```javascript / ```ts / ```typescript
+  const fenced = /```(?:js|javascript|ts|typescript|jsx|tsx)?\s*\n([\s\S]*?)```/gi
+  let match
+  while ((match = fenced.exec(text)) !== null) {
+    const code = match[1].trim()
+    if (code.length > 30) blocks.push(code)
+  }
+
+  // 2. إذا لا توجد code blocks — تحقق إذا النص نفسه يبدو كوداً
+  if (blocks.length === 0) {
+    const codeSignals = [
+      /^(import|export|const|let|var|function|class|async)\s/m,
+      /=>\s*\{/,
+      /\bthis\.\w+\s*=/,
+      /^\s{2,}(const|let|var|return|if|for)\s/m
+    ]
+    const looksLikeCode = codeSignals.filter(p => p.test(text)).length >= 2
+    if (looksLikeCode && text.length > 50 && text.length < 20000) {
+      blocks.push(text)
+    }
+  }
+
+  return blocks
+}
+
 function getEngine(sessionId) {
   if (sessions.has(sessionId)) {
     const e = sessions.get(sessionId)
@@ -402,6 +432,18 @@ router.post('/process-text', async (req, res) => {
     const engine        = getEngine(sid)
     const fieldPrompt   = engine.buildFieldPrompt?.() ?? null
 
+    // ── Inline Code Detection & Indexing ────────────────────────
+    // إذا المستخدم أرسل كوداً في الرسالة — يُفهرس فوراً
+    const structIndex = indexStore?.get(sid) ?? null
+    const codeBlocks  = detectCodeBlocks(safeText)
+
+    if (codeBlocks.length > 0 && structIndex) {
+      const tempPath = `session_inline/${sid}/msg_${tValue}.js`
+      structIndex.updateFile(tempPath, codeBlocks.join('\n\n'))
+      structIndex.injectSemanticVectors(engine)
+      structIndex.injectIntoVault(engine)
+    }
+
     const rawRoute      = engine.routeContext(safeText, 5)
 
     // ── routeContext يُعيد array أو {items, vaultHit} ──────────────
@@ -431,7 +473,6 @@ router.post('/process-text', async (req, res) => {
     }
 
     // ── Cognitive Query Layer ────────────────────────────────────
-    const structIndex = indexStore?.get(sid) ?? null
     const cogTarget   = engine.buildCognitiveTarget(safeText, structIndex)
     const rawHint     = built.systemHint ?? ''
 
@@ -568,6 +609,8 @@ router.post('/process-text', async (req, res) => {
         vaultHit:        vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null,
         cognitiveMode:   cogTarget?.cognitiveMode ?? null,
         conflictWinner:  cogTarget?.focus?.winner ?? null,
+        deepAnalysis:    cogTarget?._meta?.deepAnalysis ?? false,
+        inlineCode:      codeBlocks.length > 0,
         payloadSize,
         truncated:       hasText && text.length > MAX_INPUT_CHARS
       }
