@@ -430,13 +430,9 @@ router.post('/process-text', async (req, res) => {
     }
 
     // ── Cognitive Query Layer ────────────────────────────────────
-    // يدمج User Query + CELF Field State → Focused Cognitive Target
-    // الدالة داخل المحرك — تقرأ this مباشرة
-    const engine    = sessions.get(sid)
     const cogTarget = engine.buildCognitiveTarget(safeText, null)
     const rawHint   = built.systemHint ?? ''
 
-    // دمج systemHint من context-builder مع الـ cognitive hint
     const extraHints = []
     if (cogTarget.focus?.winner === 'user')  extraHints.push('topic-shift: true')
     if (cogTarget.focus?.winner === 'celf')  extraHints.push('context-driven: true')
