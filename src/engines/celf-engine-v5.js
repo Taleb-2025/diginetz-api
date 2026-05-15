@@ -24,7 +24,7 @@ export class CELF_Engine_AI_V5 {
     this.metaAttractorThreshold  = options.metaAttractorThreshold  ?? 0.65
 
     // ─── Vault Topology ───────────────────────────────────────────
-    this.hexVault          = new Map()   // capsuleId → capsule
+    this.hexVault          = new Map()
     this.vaultLimit        = options.vaultLimit        ?? 512
     this.vaultStoreThresh  = options.vaultStoreThresh  ?? 0.42
     this.vaultActivThresh  = options.vaultActivThresh  ?? 0.62
@@ -88,7 +88,6 @@ export class CELF_Engine_AI_V5 {
   }
 
   #compressSource(text) {
-    // ضغط دلالي: إزالة الحشو، الحفاظ على الجوهر
     const words = String(text).split(/\s+/).filter(Boolean)
     const stopwords = new Set(['the','a','an','is','are','was','were','be','been','being',
       'have','has','had','do','does','did','will','would','could','should','may',
@@ -133,10 +132,8 @@ export class CELF_Engine_AI_V5 {
   storeOrUpdateCapsule(text, perturbation) {
     const checksum = this.#checksum(text)
 
-    // هل موجودة بالفعل؟
     for (const [id, cap] of this.hexVault) {
       if (cap.source.checksum === checksum) {
-        // تحديث بدون تغيير المحتوى أو phiOrbit
         cap.reinforcement   = (cap.reinforcement ?? 0) + 0.08
         cap.version         = (cap.version ?? 1) + 1
         cap.lastResonance   = this.field.resonance
@@ -146,22 +143,21 @@ export class CELF_Engine_AI_V5 {
       }
     }
 
-    // كبسولة جديدة
     const id = `cap_${this.state.t}_${Math.abs(Math.imul(perturbation.h1, 1234567)) % 99999}`
-    const phiOrbit = this.generatePhiOrbit()   // ثابت للأبد
+    const phiOrbit = this.generatePhiOrbit()
 
     const capsule = {
       id,
       source: {
         compressed: this.#compressSource(text),
         checksum,
-        sealed:     true,    // قفل 1
-        persistent: true     // قفل 2
+        sealed:     true,
+        persistent: true
       },
-      suspended:   true,     // نائمة دائماً
+      suspended:   true,
       attached:    false,
-      fieldLocked: true,     // قفل 3 — الحقل لا يكتب عليها
-      phiOrbit,              // ثابت للأبد
+      fieldLocked: true,
+      phiOrbit,
       createdAt:   this.state.t,
       version:     1,
       reinforcement: 0,
@@ -182,28 +178,19 @@ export class CELF_Engine_AI_V5 {
 
   shouldActivateCapsule(capsule) {
     const phi   = 1.618033988749895
-    const t     = this.state.t
     const orbit = capsule.phiOrbit
 
-    // التوافق مع الحقل الحالي
     const orbitDist  = Math.abs(((orbit - this.field.signature + this.cycle) % this.cycle))
     const orbitAlign = this.clamp01(1 - Math.min(orbitDist, this.cycle - orbitDist) / (this.cycle * 0.5))
 
-    // التوافق الذهبي
     const phiAlignment = this.clamp01(
       Math.abs(Math.sin((orbit * phi) % Math.PI))
     )
 
-    // مدى الحاجة
     const need = this.clamp01(this.field.intentPressure * 0.5 + this.field.recallPotential * 0.5)
-
-    // التماسك
     const coherence = capsule.coherence ?? 0
-
-    // التعزيز
     const reinforcement = this.clamp01((capsule.reinforcement ?? 0) / 10)
 
-    // التشابه الدلالي مع آخر input
     const lastMem = this.field.semanticMemory.at(-1)
     const semantic = lastMem
       ? this.cosineSimilarity(capsule.semanticVector, lastMem.vector ?? new Float32Array(0))
@@ -257,7 +244,6 @@ export class CELF_Engine_AI_V5 {
     const active = []
     for (const [id, cap] of this.hexVault) {
       if (this.shouldActivateCapsule(cap)) {
-        // تصحى لحظياً ثم تعود للنوم
         cap.attached = true
         active.push({ ...cap, _activationScore: true })
         cap.attached = false
@@ -269,7 +255,6 @@ export class CELF_Engine_AI_V5 {
   cleanupCapsules() {
     if (this.hexVault.size <= this.vaultLimit) return
 
-    // احذف الأقل تعزيزاً
     const sorted = [...this.hexVault.entries()]
       .sort(([, a], [, b]) => (a.reinforcement ?? 0) - (b.reinforcement ?? 0))
 
@@ -312,7 +297,6 @@ export class CELF_Engine_AI_V5 {
     this.updateEmergentCredibility(perturbation)
     this.updateRecursiveCognition()
 
-    // ── Vault: تخزين إذا مهم ──────────────────────────────────────
     const signal = typeof input === 'string' ? input : JSON.stringify(input ?? '')
     if (this.shouldStoreCapsule(signal, perturbation)) {
       this.storeOrUpdateCapsule(signal, perturbation)
@@ -822,14 +806,14 @@ export class CELF_Engine_AI_V5 {
     const m = this.metrics()
     let phase = 'stable'
 
-    if (this.state.t < 8)                                                                    phase = 'warmup'
-    else if (this.field.signalType === 'noise' && m.entropy > 0.70)                          phase = 'noise'
-    else if (m.pressure > 0.70 && m.entropy > 0.65)                                          phase = 'turbulent'
-    else if (m.aliveRatio < 0.25)                                                             phase = 'compressed'
+    if (this.state.t < 8)                                                                         phase = 'warmup'
+    else if (this.field.signalType === 'noise' && m.entropy > 0.70)                               phase = 'noise'
+    else if (m.pressure > 0.70 && m.entropy > 0.65)                                               phase = 'turbulent'
+    else if (m.aliveRatio < 0.25)                                                                  phase = 'compressed'
     else if (m.attractorStrength > 0.72 && m.drift < 0.20 && this.field.semanticCoherence > 0.45) phase = 'locked'
-    else if (m.drift > 0.55 || this.field.noveltyPressure > 0.72)                            phase = 'drift'
-    else if (m.residualMass > 0.55 && m.attractorStrength > 0.50)                            phase = 'emergent'
-    else if (m.pressure > 0.45 || m.fieldCurvature > 0.45 || this.field.intentPressure > 0.60) phase = 'metastable'
+    else if (m.drift > 0.55 || this.field.noveltyPressure > 0.72)                                 phase = 'drift'
+    else if (m.residualMass > 0.55 && m.attractorStrength > 0.50)                                 phase = 'emergent'
+    else if (m.pressure > 0.45 || m.fieldCurvature > 0.45 || this.field.intentPressure > 0.60)   phase = 'metastable'
 
     this.state.phase = phase
   }
@@ -917,38 +901,38 @@ export class CELF_Engine_AI_V5 {
       current.intent.diagnose * 0.08
     )
 
-    this.field.semanticGrounding = this.round4(this.clamp01(this.field.semanticGrounding * 0.86 + grounding * 0.14))
-    this.field.semanticCoherence = this.round4(this.clamp01(this.field.semanticCoherence * 0.82 + similarity * 0.18))
-    this.field.intentPressure    = this.round4(this.clamp01(this.field.intentPressure * 0.78 + intentPressure * 0.22))
-    this.field.executionReadiness = this.round4(this.clamp01(
+    this.field.semanticGrounding    = this.round4(this.clamp01(this.field.semanticGrounding * 0.86 + grounding * 0.14))
+    this.field.semanticCoherence    = this.round4(this.clamp01(this.field.semanticCoherence * 0.82 + similarity * 0.18))
+    this.field.intentPressure       = this.round4(this.clamp01(this.field.intentPressure * 0.78 + intentPressure * 0.22))
+    this.field.executionReadiness   = this.round4(this.clamp01(
       current.intent.execute * 0.35 + current.intent.code * 0.25 +
       current.intent.data * 0.15 + this.field.coherence * 0.15 + (1 - this.field.drift) * 0.10
     ))
-    this.field.noveltyPressure = this.round4(this.clamp01(this.field.noveltyPressure * 0.80 + novelty * 0.20))
-    this.field.recallPotential = this.round4(this.clamp01(
+    this.field.noveltyPressure      = this.round4(this.clamp01(this.field.noveltyPressure * 0.80 + novelty * 0.20))
+    this.field.recallPotential      = this.round4(this.clamp01(
       similarity * 0.35 + this.field.resonance * 0.25 +
       this.field.persistence * 0.20 + this.field.continuity * 0.20
     ))
-    this.field.routingPressure = this.round4(this.clamp01(
+    this.field.routingPressure      = this.round4(this.clamp01(
       this.field.intentPressure * 0.30 + this.field.noveltyPressure * 0.20 +
       this.field.recallPotential * 0.30 + this.field.topicPressure * 0.20
     ))
-    this.field.compressionPressure = this.round4(this.clamp01(
+    this.field.compressionPressure  = this.round4(this.clamp01(
       (1 - this.field.noveltyPressure) * 0.30 + this.field.coherence * 0.25 +
       this.field.continuity * 0.25 + this.field.persistence * 0.20
     ))
 
     this.field.semanticMemory.push({
-      t:         this.state.t,
-      theta:     this.round4(this.state.lastTheta),
-      signature: this.round4(this.state.signature),
-      vector:    current.vector.slice(),
-      intent:    { ...current.intent },
-      grounding: this.field.semanticGrounding,
-      coherence: this.field.semanticCoherence,
-      novelty:   this.field.noveltyPressure,
-      phase:     this.state.phase,
-      signalType: this.field.signalType,
+      t:           this.state.t,
+      theta:       this.round4(this.state.lastTheta),
+      signature:   this.round4(this.state.signature),
+      vector:      current.vector.slice(),
+      intent:      { ...current.intent },
+      grounding:   this.field.semanticGrounding,
+      coherence:   this.field.semanticCoherence,
+      novelty:     this.field.noveltyPressure,
+      phase:       this.state.phase,
+      signalType:  this.field.signalType,
       sourceWeight: perturbation.sourceWeight ?? 1.0
     })
 
@@ -1004,15 +988,15 @@ export class CELF_Engine_AI_V5 {
         const prox = Math.max(0, 1 - dist / (radius + 1))
         const idx  = nx * D + ny
 
-        this.field.manifold[idx] = this.clamp01(this.field.manifold[idx] * 0.97 + prox * sw * 0.03)
+        this.field.manifold[idx]    = this.clamp01(this.field.manifold[idx] * 0.97 + prox * sw * 0.03)
         this.field.manifoldAge[idx] = this.clamp01((this.field.manifoldAge[idx] ?? 0) * 0.995 + prox * 0.005)
       }
     }
 
     const lastMem = this.field.semanticMemory.at(-2)
     if (lastMem?.vector) {
-      const bx    = Math.min(Math.abs(Math.floor((lastMem.vector[0] ?? 0) * (D - 1))), D - 1)
-      const by    = Math.min(Math.abs(Math.floor((lastMem.vector[1] ?? 0) * (D - 1))), D - 1)
+      const bx = Math.min(Math.abs(Math.floor((lastMem.vector[0] ?? 0) * (D - 1))), D - 1)
+      const by = Math.min(Math.abs(Math.floor((lastMem.vector[1] ?? 0) * (D - 1))), D - 1)
       for (let s = 1; s <= 4; s++) {
         const lx   = Math.round(bx + (cx - bx) * s / 4)
         const ly   = Math.round(by + (cy - by) * s / 4)
@@ -1097,9 +1081,9 @@ export class CELF_Engine_AI_V5 {
         const b = attractors[y]
         if (!a.semanticVector?.length || !b.semanticVector?.length) continue
 
-        const sim        = this.cosineSimilarity(a.semanticVector, b.semanticVector)
-        const jointStr   = (a.strength + b.strength) / 2
-        const jointCred  = ((a.emergentCredibility ?? 1) + (b.emergentCredibility ?? 1)) / 2
+        const sim       = this.cosineSimilarity(a.semanticVector, b.semanticVector)
+        const jointStr  = (a.strength + b.strength) / 2
+        const jointCred = ((a.emergentCredibility ?? 1) + (b.emergentCredibility ?? 1)) / 2
 
         if (sim > 0.70 && jointStr > this.metaAttractorThreshold && jointCred > 0.55) {
           metaCandidates.push({
@@ -1131,14 +1115,14 @@ export class CELF_Engine_AI_V5 {
         intentTraces.push(c.intentTrace     ?? 0)
       }
 
-    const mean           = this.average(ps)
-    const entropy        = this.normalizedEntropy(ps)
-    const pressure       = this.average(pressures)
-    const residualMass   = this.average(residuals)
-    const aliveRatio     = ps.filter(v => v > this.activationThreshold).length / ps.length
-    const fieldCurvature = this.average(densities)
-    const semanticMass   = this.average(semanticTraces)
-    const intentMass     = this.average(intentTraces)
+    const mean              = this.average(ps)
+    const entropy           = this.normalizedEntropy(ps)
+    const pressure          = this.average(pressures)
+    const residualMass      = this.average(residuals)
+    const aliveRatio        = ps.filter(v => v > this.activationThreshold).length / ps.length
+    const fieldCurvature    = this.average(densities)
+    const semanticMass      = this.average(semanticTraces)
+    const intentMass        = this.average(intentTraces)
     const attractorStrength = this.state.attractors.length
       ? this.average(this.state.attractors.map(a => a.stability))
       : 0
@@ -1146,14 +1130,11 @@ export class CELF_Engine_AI_V5 {
     const prev  = this.state.history.at(-1)
     const drift = prev
       ? this.clamp01(
-          Math.abs((prev.metrics?.mean        ?? prev.mean        ?? mean)    - mean) +
-          Math.abs((prev.metrics?.entropy     ?? prev.entropy     ?? entropy) - entropy) +
-          Math.abs((prev.metrics?.semanticMass ?? prev.semanticMass ?? 0)    - semanticMass)
+          Math.abs((prev.metrics?.mean         ?? prev.mean         ?? mean)    - mean) +
+          Math.abs((prev.metrics?.entropy      ?? prev.entropy      ?? entropy) - entropy) +
+          Math.abs((prev.metrics?.semanticMass ?? prev.semanticMass ?? 0)       - semanticMass)
         )
       : 0
-
-    const maxP = Math.max(...ps)
-    const sumP = ps.reduce((a, b) => a + b, 0)
 
     const result = {
       mean: this.round4(mean), entropy: this.round4(entropy),
@@ -1214,7 +1195,7 @@ export class CELF_Engine_AI_V5 {
         credibilityLog:      this.state.attractorCredibilityLog.slice(-8)
       },
       vault: {
-        capsuleCount: this.hexVault.size,
+        capsuleCount:   this.hexVault.size,
         activeCapsules: this.getActiveCapsules().length
       },
       attractors: this.state.attractors.map(a => ({
@@ -1234,18 +1215,18 @@ export class CELF_Engine_AI_V5 {
 
   commit(snapshot) {
     const compressed = {
-      t:             snapshot.t,
-      phase:         snapshot.phase,
-      signature:     snapshot.contained?.signature     ?? 0,
-      drift:         snapshot.field?.drift             ?? 0,
-      coherence:     snapshot.field?.coherence         ?? 0,
-      continuity:    snapshot.field?.continuity        ?? 0,
-      novelty:       snapshot.field?.noveltyPressure   ?? 0,
-      semanticMass:  snapshot.metrics?.semanticMass    ?? 0,
-      grounding:     snapshot.field?.semanticGrounding ?? 0,
-      attractorCount: snapshot.attractors?.length      ?? 0,
-      signalType:    snapshot.signal?.signalType       ?? 'noise',
-      credibility:   snapshot.cognition?.avgFieldCredibility ?? 1.0
+      t:              snapshot.t,
+      phase:          snapshot.phase,
+      signature:      snapshot.contained?.signature     ?? 0,
+      drift:          snapshot.field?.drift             ?? 0,
+      coherence:      snapshot.field?.coherence         ?? 0,
+      continuity:     snapshot.field?.continuity        ?? 0,
+      novelty:        snapshot.field?.noveltyPressure   ?? 0,
+      semanticMass:   snapshot.metrics?.semanticMass    ?? 0,
+      grounding:      snapshot.field?.semanticGrounding ?? 0,
+      attractorCount: snapshot.attractors?.length       ?? 0,
+      signalType:     snapshot.signal?.signalType       ?? 'noise',
+      credibility:    snapshot.cognition?.avgFieldCredibility ?? 1.0
     }
 
     this.state.history.push(compressed)
@@ -1282,17 +1263,15 @@ export class CELF_Engine_AI_V5 {
     const currentPhase      = this.state.phase       ?? 'warmup'
     const currentAttractors = this.state.attractors  ?? []
 
-    // ── Vault: تحقق من كبسولات نشطة ──────────────────────────────
     const vaultResult = signal ? this.retrieveCapsule(signal, vector) : null
 
     const items = this.field.semanticMemory
       .map(item => {
-        const semanticSim   = this.cosineSimilarity(vector, item.vector ?? new Float32Array(0))
-        const thetaDist     = Math.abs(((item.theta - currentTheta + this.cycle) % this.cycle))
-        const circularDist  = Math.min(thetaDist, this.cycle - thetaDist)
-        const attractorProx = this.clamp01(1 - circularDist / (this.cycle * 0.5))
-
-        const topAttractor = currentAttractors[0]
+        const semanticSim        = this.cosineSimilarity(vector, item.vector ?? new Float32Array(0))
+        const thetaDist          = Math.abs(((item.theta - currentTheta + this.cycle) % this.cycle))
+        const circularDist       = Math.min(thetaDist, this.cycle - thetaDist)
+        const attractorProx      = this.clamp01(1 - circularDist / (this.cycle * 0.5))
+        const topAttractor       = currentAttractors[0]
         const hysteresisAffinity = topAttractor
           ? this.clamp01(
               1 - Math.abs(
@@ -1300,17 +1279,14 @@ export class CELF_Engine_AI_V5 {
               ) / (this.cycle * 0.3)
             )
           : 0
-
         const continuity = this.clamp01(
           item.coherence * 0.5 + item.grounding * 0.3 + (1 - (item.novelty ?? 0)) * 0.2
         )
-
         const phaseMatch = item.phase === currentPhase ? 0.15 : 0
-
         const score = this.round4(
           semanticSim        * 0.35 + attractorProx      * 0.25 +
           hysteresisAffinity * 0.20 + continuity         * 0.10 +
-          phaseMatch         + item.coherence * 0.05 + item.grounding * 0.05
+          phaseMatch + item.coherence * 0.05 + item.grounding * 0.05
         )
 
         return {
@@ -1326,14 +1302,13 @@ export class CELF_Engine_AI_V5 {
       .sort((a, b) => b.score - a.score)
       .slice(0, Math.max(1, limit))
 
-    // أضف بيانات الـ Vault إذا وُجدت
     if (vaultResult) {
       return {
         items,
         vaultHit: {
-          compressed: vaultResult.capsule.source.compressed,
-          score:      this.round4(vaultResult.score),
-          phiOrbit:   this.round4(vaultResult.capsule.phiOrbit),
+          compressed:    vaultResult.capsule.source.compressed,
+          score:         this.round4(vaultResult.score),
+          phiOrbit:      this.round4(vaultResult.capsule.phiOrbit),
           reinforcement: vaultResult.capsule.reinforcement ?? 0
         }
       }
@@ -1352,7 +1327,7 @@ export class CELF_Engine_AI_V5 {
       'balance'
 
     const depth =
-      this.field.routingPressure > 0.72     ? 'deep'  :
+      this.field.routingPressure     > 0.72 ? 'deep'  :
       this.field.compressionPressure > 0.72 ? 'quick' :
       'balanced'
 
@@ -1536,8 +1511,7 @@ export class CELF_Engine_AI_V5 {
   buildFieldPrompt() {
     const attractors    = this.state.attractors ?? []
     const field         = this.field
-    const phase         = this.state.phase ?? 'warmup'
-    const topAttractors = attractors.sort((a, b) => b.strength - a.strength).slice(0, 3)
+    const topAttractors = attractors.slice().sort((a, b) => b.strength - a.strength).slice(0, 3)
 
     const zone     = this.#resolveSemanticZone(topAttractors, field)
     const pressure = this.#resolvePressureState(field)
@@ -1550,7 +1524,8 @@ export class CELF_Engine_AI_V5 {
     )
 
     return {
-      zone, pressure, continuity, phase,
+      zone, pressure, continuity,
+      phase:          this.state.phase ?? 'warmup',
       resonance:      this.round4(field.resonance  ?? 0),
       coherence:      this.round4(field.coherence  ?? 0),
       drift:          this.round4(field.drift      ?? 0),
@@ -1563,22 +1538,9 @@ export class CELF_Engine_AI_V5 {
   //  COGNITIVE QUERY LAYER — داخل المحرك
   // ═══════════════════════════════════════════════════════════════
 
-  /**
-   * buildCognitiveTarget(query, index?)
-   *
-   * يدمج User Query + CELF Field State → Focused Cognitive Target
-   * يقرأ this مباشرة — لا يحتاج engine كـ argument
-   *
-   * @param {string}          query  — نص المستخدم
-   * @param {StructuralIndex} index  — الـ Index (اختياري)
-   * @returns {CognitiveTarget}
-   */
   buildCognitiveTarget(query, index = null) {
-
-    // ── 1. User Intent ─────────────────────────────────────────
     const userIntent = this.#extractUserIntent(query)
 
-    // ── 2. Field State من this مباشرة ─────────────────────────
     const fieldState = {
       phase:              this.state.phase,
       continuity:         this.field.continuity          ?? 0,
@@ -1596,9 +1558,8 @@ export class CELF_Engine_AI_V5 {
       vaultSize:          this.hexVault.size
     }
 
-    // ── 3. Vault ───────────────────────────────────────────────
-    const queryVec    = this.extractSemantic(query, query).vector
-    const vaultResult = this.retrieveCapsule(query, queryVec)
+    const queryVec      = this.extractSemantic(query, query).vector
+    const vaultResult   = this.retrieveCapsule(query, queryVec)
     const vaultCapsules = []
 
     if (vaultResult) {
@@ -1626,14 +1587,10 @@ export class CELF_Engine_AI_V5 {
       }
     }
 
-    // ── 4. Structural Index — hybrid on-demand ─────────────────
     let indexResult = null
     if (index) {
-      // inject semantic vectors إذا لم تُعبأ بعد
       if (typeof index.injectSemanticVectors === 'function')
         index.injectSemanticVectors(this)
-
-      // hybrid routing: semantic + symbol + call graph distance
       indexResult = index.hybridQuery(
         queryVec,
         userIntent.entities,
@@ -1642,11 +1599,11 @@ export class CELF_Engine_AI_V5 {
       )
     }
 
-    // ── 5. Focus Resolution — الـ intersection ─────────────────
     const focus = this.#resolveCognitiveFocus(userIntent, fieldState, vaultCapsules, indexResult)
 
-    // ── 6. Structural subgraph ─────────────────────────────────
     let structuralGraph = null
+    let deepContext     = null
+
     if (index && focus.what.length > 0) {
       const depth = focus.depth === 'deep' ? 3 : focus.depth === 'surface' ? 1 : 2
       const g     = index.query({ names: focus.what, files: focus.files }, depth)
@@ -1654,14 +1611,22 @@ export class CELF_Engine_AI_V5 {
         nodeCount: g.totalNodes,
         edgeCount: g.totalEdges,
         nodes: (g.nodes ?? []).map(n => ({
-          name: n.name, type: n.type, file: n.file,
-          semanticLabel: n.semanticLabel,
+          name: n.name ?? n.symbol, type: n.type, file: n.file,
+          semanticLabel:  n.semanticLabel,
           vaultCapsuleId: n.vaultCapsuleId
         }))
       }
+
+      if (typeof index.needsDeepAnalysis === 'function' &&
+          index.needsDeepAnalysis(userIntent) &&
+          focus.what.length > 0) {
+        deepContext = index.getDeepContext(focus.what, {
+          maxChars:  6000,
+          withGraph: focus.depth === 'deep'
+        })
+      }
     }
 
-    // ── 7. Top Attractors ──────────────────────────────────────
     const topAttractors = (this.state.attractors ?? [])
       .slice()
       .sort((a, b) => (b.stability ?? 0) - (a.stability ?? 0))
@@ -1675,7 +1640,6 @@ export class CELF_Engine_AI_V5 {
         credibility:    this.round4(a.emergentCredibility ?? a.credibility ?? 1)
       }))
 
-    // ── 8. Cognitive Mode ──────────────────────────────────────
     const cognitiveMode =
       fieldState.executionReadiness > 0.65  ? 'technical'   :
       fieldState.intentPressure     > 0.60  ? 'analytical'  :
@@ -1683,20 +1647,16 @@ export class CELF_Engine_AI_V5 {
       fieldState.noveltyPressure    > 0.65  ? 'exploratory' :
       'general'
 
-    // ── 9. Dependency Graph ────────────────────────────────────
     const dependencies = []
     if (structuralGraph?.nodes?.length) {
-      // يُبنى من الـ index edges إذا موجودة في النتيجة
       for (const node of structuralGraph.nodes.slice(0, 6)) {
         if (node.calls?.length) {
-          for (const callee of node.calls.slice(0, 3)) {
+          for (const callee of node.calls.slice(0, 3))
             dependencies.push({ from: node.name, to: callee, type: 'calls', weight: 1 })
-          }
         }
       }
     }
 
-    // ── 10. systemHint ─────────────────────────────────────────
     const hintParts = [
       `mode: ${cognitiveMode}`,
       `phase: ${fieldState.phase}`,
@@ -1709,16 +1669,19 @@ export class CELF_Engine_AI_V5 {
     if (focus.winner === 'user')  hintParts.push('focus: user_driven — new topic')
     if (focus.winner === 'celf')  hintParts.push('focus: context_driven — use session memory')
 
-    if (vaultCapsules.length) {
-      hintParts.push(
-        `vault: ${vaultCapsules.map(v => v.compressed).filter(Boolean).join(' | ')}`
-      )
-    }
+    if (vaultCapsules.length)
+      hintParts.push(`vault: ${vaultCapsules.map(v => v.compressed).filter(Boolean).join(' | ')}`)
 
-    if (dependencies.length) {
-      hintParts.push(
-        `dependencies: ${dependencies.slice(0, 5).map(d => `${d.from}→${d.to}`).join(', ')}`
-      )
+    if (dependencies.length)
+      hintParts.push(`dependencies: ${dependencies.slice(0, 5).map(d => `${d.from}→${d.to}`).join(', ')}`)
+
+    if (deepContext?.blocks?.length) {
+      const codeSection = deepContext.blocks.map(b => [
+        `// ${b.symbol} [${b.type}] — ${b.file}:${b.startLine}-${b.endLine}`,
+        `// complexity: ${b.complexity} | calls: ${(b.calls ?? []).join(', ')}`,
+        b.source
+      ].join('\n')).join('\n\n')
+      hintParts.push(`\n[source code]\n${codeSection}`)
     }
 
     return {
@@ -1729,18 +1692,19 @@ export class CELF_Engine_AI_V5 {
       vaultCapsules,
       dependencies,
       structuralGraph,
+      deepContext,
       topAttractors,
       systemHint: hintParts.filter(Boolean).join('\n'),
       _meta: {
         t:              this.state.t,
         vaultSize:      this.hexVault.size,
         indexUsed:      index !== null,
-        conflictWinner: focus.winner
+        conflictWinner: focus.winner,
+        deepAnalysis:   deepContext !== null
       }
     }
   }
 
-  // ── private: User Intent Extraction ───────────────────────────
   #extractUserIntent(query) {
     const text = String(query ?? '').toLowerCase()
 
@@ -1773,7 +1737,6 @@ export class CELF_Engine_AI_V5 {
     return { mode, depth, entities, clarity, rawQuery: query }
   }
 
-  // ── private: Focus Resolution ──────────────────────────────────
   #resolveCognitiveFocus(userIntent, fieldState, vaultCapsules, indexResult) {
     const {
       continuity, coherence, drift,
@@ -1781,7 +1744,6 @@ export class CELF_Engine_AI_V5 {
       executionReadiness, recallPotential
     } = fieldState
 
-    // novelty: هل الكيانات المذكورة موجودة في الـ Vault؟
     const capsuleLabels = vaultCapsules.map(c => c.compressed?.toLowerCase() ?? '')
     const entityMatches = userIntent.entities.filter(e =>
       capsuleLabels.some(l => l.includes(e.toLowerCase()))
@@ -1791,16 +1753,10 @@ export class CELF_Engine_AI_V5 {
       ? Math.max(0, 1 - entityMatches / userIntent.entities.length)
       : noveltyPressure
 
-    // ── Conflict Resolution ──────────────────────────────────
     let winner = 'balanced'
+    if (userNovelty > 0.70 && continuity > 0.65)          winner = 'user'
+    else if (userIntent.clarity < 0.30 && semanticGrounding > 0.55) winner = 'celf'
 
-    if (userNovelty > 0.70 && continuity > 0.65) {
-      winner = 'user'   // موضوع جديد واضح — اتبع المستخدم
-    } else if (userIntent.clarity < 0.30 && semanticGrounding > 0.55) {
-      winner = 'celf'   // سؤال غامض — استخدم السياق
-    }
-
-    // ── depth ────────────────────────────────────────────────
     const resolvedDepth =
       userIntent.depth === 'deep'                                   ? 'deep'     :
       userIntent.depth === 'surface'                                ? 'surface'  :
@@ -1809,7 +1765,6 @@ export class CELF_Engine_AI_V5 {
       drift > 0.55                                                   ? 'surface'  :
       'balanced'
 
-    // ── scope ────────────────────────────────────────────────
     const scopeNames = [...userIntent.entities]
 
     if (winner !== 'user' && recallPotential > 0.60) {
@@ -1822,15 +1777,12 @@ export class CELF_Engine_AI_V5 {
       }
     }
 
-    // أضف symbols من hybridQuery topScored
     if (indexResult?.topScored?.length) {
-      for (const s of indexResult.topScored.slice(0, 4)) {
+      for (const s of indexResult.topScored.slice(0, 4))
         if (s.symbol && !scopeNames.includes(s.symbol))
           scopeNames.push(s.symbol)
-      }
     }
 
-    // ── mode ─────────────────────────────────────────────────
     const resolvedMode =
       userIntent.mode === 'implement' && this.state.phase === 'locked' ? 'build'     :
       userIntent.mode === 'explain'   && continuity > 0.65             ? 'trace'     :
@@ -1852,20 +1804,16 @@ export class CELF_Engine_AI_V5 {
   }
 
   #resolveSemanticZone(topAttractors, field) {
-    const intentPressure = field.intentPressure     ?? 0
-    const execReady      = field.executionReadiness ?? 0
-    const semantic       = field.semanticGrounding  ?? 0
-
-    if (execReady > 0.6)            return 'execution'
-    if (intentPressure > 0.6)       return 'inquiry'
-    if (semantic > 0.5)             return 'conceptual'
-    if (topAttractors.length >= 3)  return 'multi_focus'
-    if (topAttractors.length === 1) return 'focused'
+    if ((field.executionReadiness ?? 0) > 0.6)  return 'execution'
+    if ((field.intentPressure     ?? 0) > 0.6)  return 'inquiry'
+    if ((field.semanticGrounding  ?? 0) > 0.5)  return 'conceptual'
+    if (topAttractors.length >= 3)               return 'multi_focus'
+    if (topAttractors.length === 1)              return 'focused'
     return 'general'
   }
 
   #resolvePressureState(field) {
-    if ((field.topicPressure  ?? 0) > 0.7) return 'high_pressure'
+    if ((field.topicPressure   ?? 0) > 0.7) return 'high_pressure'
     if ((field.noveltyPressure ?? 0) > 0.6) return 'exploring'
     if ((field.coherence       ?? 0) > 0.6) return 'stable'
     if ((field.drift           ?? 0) > 0.5) return 'drifting'
@@ -1905,8 +1853,6 @@ export class CELF_Engine_AI_V5 {
     }
 
     // الـ Vault لا يُمسح عند reset — الكبسولات دائمة
-    // إذا أردت مسحه: this.hexVault.clear()
-
     this.massTarget = this.totalMass()
   }
 }
