@@ -141,6 +141,14 @@ export function build(adapterOutput) {
     }
   }
 
+  // ── routeContext يُعيد array أو {items, vaultHit} ──────────────
+  const routeItems = Array.isArray(routedContext)
+    ? routedContext
+    : (routedContext?.items ?? [])
+  const vaultHit   = Array.isArray(routedContext)
+    ? null
+    : (routedContext?.vaultHit ?? null)
+
   const intent = mapIntent(celfResult)
   const lang   = detectLang(signals)
   const phase  = celfResult?.phase ?? 'warmup'
@@ -154,19 +162,25 @@ export function build(adapterOutput) {
     continuity:  Number(fieldPrompt?.continuity              ?? 0)
   }
 
-  const memoryCard    = buildMemoryCard(routedContext ?? [], fieldPrompt)
+  const memoryCard    = buildMemoryCard(routeItems, fieldPrompt)
   const cognitiveHint = buildCognitiveHint(lang, fieldPrompt, celfResult)
   const cardStr       = cardToString(memoryCard)
 
-  const systemHint = cardStr
-    ? cognitiveHint + '\n' + cardStr
-    : cognitiveHint
+  // ── أضف Vault hit للـ systemHint إذا وُجد ──────────────────────
+  const vaultStr = vaultHit
+    ? `vault: ${vaultHit.compressed}`
+    : ''
+
+  const systemHint = [cognitiveHint, cardStr, vaultStr]
+    .filter(Boolean)
+    .join('\n')
 
   return {
     passToLLM,
     context,
     systemHint,
     memoryCard,
-    cognitiveHint
+    cognitiveHint,
+    vaultHit
   }
 }
