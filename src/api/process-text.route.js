@@ -355,7 +355,7 @@ function removeOverlap(existing, continuation) {
   return continuation
 }
 
-async function continuationCall(currentText, partialReply, systemHint, timeoutMs = 30000) {
+async function continuationCall(currentText, partialReply, systemHint, timeoutMs = 30000, model = 'claude-haiku-4-5-20251001') {
   const hasOpenCode = detectOpenCodeBlock(partialReply)
 
   const continuePrompt = hasOpenCode
@@ -363,7 +363,7 @@ async function continuationCall(currentText, partialReply, systemHint, timeoutMs
     : 'continue exactly from where you stopped — do not repeat what was already written'
 
   const response = await fetchClaude({
-    model:      'claude-haiku-4-5-20251001',
+    model,
     max_tokens: 4096,
     system:     systemHint,
     messages: [
@@ -516,9 +516,15 @@ router.post('/process-text', async (req, res) => {
     let inputTokensTotal  = 0
     let outputTokensTotal = 0
 
+    // ── Hybrid Routing — CELF يقرر النموذج ──────────────────────
+    const useDeep = cogTarget?._meta?.deepAnalysis === true
+    const model   = useDeep
+      ? 'claude-sonnet-4-6'          // debug / review / deep analysis
+      : 'claude-haiku-4-5-20251001'  // محادثة عادية
+
     try {
       const claudeResponse = await fetchClaude({
-        model:      'claude-haiku-4-5-20251001',
+        model,
         max_tokens: maxTokens,
         system:     systemHint,
         messages
@@ -548,7 +554,7 @@ router.post('/process-text', async (req, res) => {
         continuationCount++
         if (outputTokensTotal >= 4096) break
 
-        const contData = await continuationCall(safeText, reply, systemHint)
+        const contData = await continuationCall(safeText, reply, systemHint, 30000, model)
         if (!contData?.content?.[0]?.text) break
 
         reply        += removeOverlap(reply, contData.content[0].text)
@@ -610,6 +616,7 @@ router.post('/process-text', async (req, res) => {
         cognitiveMode:   cogTarget?.cognitiveMode ?? null,
         conflictWinner:  cogTarget?.focus?.winner ?? null,
         deepAnalysis:    cogTarget?._meta?.deepAnalysis ?? false,
+        model,
         inlineCode:      codeBlocks.length > 0,
         payloadSize,
         truncated:       hasText && text.length > MAX_INPUT_CHARS
