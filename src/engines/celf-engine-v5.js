@@ -23,34 +23,27 @@ export class CELF_Engine_AI_V5 {
     this.manifoldDimensions      = options.manifoldDimensions      ?? 32
     this.metaAttractorThreshold  = options.metaAttractorThreshold  ?? 0.65
 
+    // ─── Vault Topology ───────────────────────────────────────────
+    this.hexVault          = new Map()   // capsuleId → capsule
+    this.vaultLimit        = options.vaultLimit        ?? 512
+    this.vaultStoreThresh  = options.vaultStoreThresh  ?? 0.42
+    this.vaultActivThresh  = options.vaultActivThresh  ?? 0.62
+    this.vaultRetrThresh   = options.vaultRetrThresh   ?? 0.35
+
     this.field = {
-      signature: 0,
-      continuity: 0,
-      coherence: 0,
-      drift: 0,
-      momentum: 0,
-      resonance: 0,
-      phaseHistory: [],
-      attractorTrace: [],
-      topicPressure: 0,
-      lastStablePhase: "warmup",
-      persistence: 0,
-      emergence: 0,
-      semanticGrounding: 0,
-      semanticCoherence: 0,
-      intentPressure: 0,
-      executionReadiness: 0,
-      recallPotential: 0,
-      routingPressure: 0,
-      compressionPressure: 0,
-      noveltyPressure: 0,
-      semanticMemory: [],
-      archivedContinuity: [],
-      localization: 0,
-      coherenceRadius: 0,
-      signalType: "noise",
-      lastSourceWeight: 1.0,
-      manifold: new Float32Array(this.manifoldDimensions * this.manifoldDimensions),
+      signature: 0, continuity: 0, coherence: 0,
+      drift: 0, momentum: 0, resonance: 0,
+      phaseHistory: [], attractorTrace: [],
+      topicPressure: 0, lastStablePhase: 'warmup',
+      persistence: 0, emergence: 0,
+      semanticGrounding: 0, semanticCoherence: 0,
+      intentPressure: 0, executionReadiness: 0,
+      recallPotential: 0, routingPressure: 0,
+      compressionPressure: 0, noveltyPressure: 0,
+      semanticMemory: [], archivedContinuity: [],
+      localization: 0, coherenceRadius: 0,
+      signalType: 'noise', lastSourceWeight: 1.0,
+      manifold:    new Float32Array(this.manifoldDimensions * this.manifoldDimensions),
       manifoldAge: new Float32Array(this.manifoldDimensions * this.manifoldDimensions),
       metaAttractors: [],
       avgFieldCredibility: 1.0
@@ -58,35 +51,22 @@ export class CELF_Engine_AI_V5 {
 
     this.rings = Array.from({ length: this.ringCount }, (_, r) =>
       Array.from({ length: this.resolution }, (_, i) => ({
-        r,
-        i,
+        r, i,
         theta: (i / this.resolution) * this.cycle,
         p: 1 / this.resolution,
         residual: this.epsilon,
-        pressure: 0,
-        memory: 0,
-        hysteresis: 0,
-        elasticStrain: 0,
-        constraintDensity: 0,
-        semanticTrace: 0,
-        intentTrace: 0,
-        active: true,
-        credibility: 1.0
+        pressure: 0, memory: 0,
+        hysteresis: 0, elasticStrain: 0,
+        constraintDensity: 0, semanticTrace: 0,
+        intentTrace: 0, active: true, credibility: 1.0
       }))
     )
 
     this.state = {
-      t: 0,
-      phase: "warmup",
-      signature: 0,
-      cycleCount: 0,
-      lastTheta: 0,
-      lastIndex: 0,
-      lastDeltaTheta: 0,
-      totalMass: this.totalMass(),
-      attractors: [],
-      history: [],
-      archive: [],
+      t: 0, phase: 'warmup', signature: 0,
+      cycleCount: 0, lastTheta: 0, lastIndex: 0,
+      lastDeltaTheta: 0, totalMass: this.totalMass(),
+      attractors: [], history: [], archive: [],
       lastSourceWeight: 1.0,
       lastPerturbationVector: new Float32Array(this.semanticDimensions),
       attractorCredibilityLog: []
@@ -94,6 +74,212 @@ export class CELF_Engine_AI_V5 {
 
     this.massTarget = this.massTarget ?? this.state.totalMass
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  VAULT TOPOLOGY — قانون التغليف والاسترجاع
+  // ═══════════════════════════════════════════════════════════════
+
+  generatePhiOrbit() {
+    const phi = 1.618033988749895
+    return this.containTheta(
+      this.field.signature * phi +
+      this.state.lastTheta * 0.5
+    )
+  }
+
+  #compressSource(text) {
+    // ضغط دلالي: إزالة الحشو، الحفاظ على الجوهر
+    const words = String(text).split(/\s+/).filter(Boolean)
+    const stopwords = new Set(['the','a','an','is','are','was','were','be','been','being',
+      'have','has','had','do','does','did','will','would','could','should','may',
+      'might','shall','of','in','on','at','to','for','by','from','with','and','or'])
+    const meaningful = words.filter((w, i) => i < 3 || !stopwords.has(w.toLowerCase()))
+    return meaningful.slice(0, 40).join(' ')
+  }
+
+  #checksum(text) {
+    let h = 2166136261
+    for (let i = 0; i < text.length; i++) {
+      h ^= text.charCodeAt(i)
+      h  = Math.imul(h, 16777619)
+    }
+    return Math.abs(h >>> 0).toString(16)
+  }
+
+  shouldStoreCapsule(text, perturbation) {
+    if (!text || text.length < 20) return false
+
+    const s = perturbation.semantic
+    const fieldWeight = this.clamp01(
+      s.code      * 0.25 +
+      s.data      * 0.20 +
+      s.reasoning * 0.20 +
+      s.command   * 0.15 +
+      s.question  * 0.10 +
+      s.error     * 0.10
+    )
+
+    const semanticWeight = this.clamp01(
+      s.lexicalDensity * 0.35 +
+      s.lengthScore    * 0.15 +
+      (this.field.semanticGrounding ?? 0) * 0.30 +
+      (this.field.coherence         ?? 0) * 0.20
+    )
+
+    const importance = semanticWeight * 0.55 + fieldWeight * 0.45
+    return importance > this.vaultStoreThresh
+  }
+
+  storeOrUpdateCapsule(text, perturbation) {
+    const checksum = this.#checksum(text)
+
+    // هل موجودة بالفعل؟
+    for (const [id, cap] of this.hexVault) {
+      if (cap.source.checksum === checksum) {
+        // تحديث بدون تغيير المحتوى أو phiOrbit
+        cap.reinforcement   = (cap.reinforcement ?? 0) + 0.08
+        cap.version         = (cap.version ?? 1) + 1
+        cap.lastResonance   = this.field.resonance
+        cap.previousHash    = cap.currentHash
+        cap.currentHash     = checksum
+        return id
+      }
+    }
+
+    // كبسولة جديدة
+    const id = `cap_${this.state.t}_${Math.abs(Math.imul(perturbation.h1, 1234567)) % 99999}`
+    const phiOrbit = this.generatePhiOrbit()   // ثابت للأبد
+
+    const capsule = {
+      id,
+      source: {
+        compressed: this.#compressSource(text),
+        checksum,
+        sealed:     true,    // قفل 1
+        persistent: true     // قفل 2
+      },
+      suspended:   true,     // نائمة دائماً
+      attached:    false,
+      fieldLocked: true,     // قفل 3 — الحقل لا يكتب عليها
+      phiOrbit,              // ثابت للأبد
+      createdAt:   this.state.t,
+      version:     1,
+      reinforcement: 0,
+      lastResonance: this.field.resonance,
+      currentHash:   checksum,
+      previousHash:  null,
+      semanticVector: perturbation.semantic.vector.slice(),
+      phase:          this.state.phase,
+      coherence:      this.field.coherence,
+      grounding:      this.field.semanticGrounding,
+      needScore:      this.field.intentPressure
+    }
+
+    this.hexVault.set(id, capsule)
+    this.cleanupCapsules()
+    return id
+  }
+
+  shouldActivateCapsule(capsule) {
+    const phi   = 1.618033988749895
+    const t     = this.state.t
+    const orbit = capsule.phiOrbit
+
+    // التوافق مع الحقل الحالي
+    const orbitDist  = Math.abs(((orbit - this.field.signature + this.cycle) % this.cycle))
+    const orbitAlign = this.clamp01(1 - Math.min(orbitDist, this.cycle - orbitDist) / (this.cycle * 0.5))
+
+    // التوافق الذهبي
+    const phiAlignment = this.clamp01(
+      Math.abs(Math.sin((orbit * phi) % Math.PI))
+    )
+
+    // مدى الحاجة
+    const need = this.clamp01(this.field.intentPressure * 0.5 + this.field.recallPotential * 0.5)
+
+    // التماسك
+    const coherence = capsule.coherence ?? 0
+
+    // التعزيز
+    const reinforcement = this.clamp01((capsule.reinforcement ?? 0) / 10)
+
+    // التشابه الدلالي مع آخر input
+    const lastMem = this.field.semanticMemory.at(-1)
+    const semantic = lastMem
+      ? this.cosineSimilarity(capsule.semanticVector, lastMem.vector ?? new Float32Array(0))
+      : 0
+
+    const R = this.clamp01(
+      semantic       * 0.38 +
+      orbitAlign     * 0.18 +
+      phiAlignment   * 0.18 +
+      reinforcement  * 0.10 +
+      need           * 0.10 +
+      coherence      * 0.06
+    )
+
+    return R > this.vaultActivThresh
+  }
+
+  retrieveCapsule(query, queryVector) {
+    let best = null, bestScore = -1
+
+    for (const [id, cap] of this.hexVault) {
+      if (!cap.source?.sealed) continue
+
+      const similarity     = this.cosineSimilarity(queryVector, cap.semanticVector)
+      const reinforcement  = this.clamp01((cap.reinforcement ?? 0) / 10)
+      const phiAlignment   = this.clamp01(
+        Math.abs(Math.sin((cap.phiOrbit * 1.618033988749895) % Math.PI))
+      )
+      const orbitDist      = Math.abs(((cap.phiOrbit - this.field.signature + this.cycle) % this.cycle))
+      const orbitScore     = this.clamp01(1 - Math.min(orbitDist, this.cycle - orbitDist) / (this.cycle * 0.5))
+      const integrity      = (cap.source.sealed && cap.source.persistent) ? 1.0 : 0.0
+
+      const score = this.clamp01(
+        similarity    * 0.40 +
+        orbitScore    * 0.20 +
+        phiAlignment  * 0.15 +
+        reinforcement * 0.15 +
+        integrity     * 0.10
+      )
+
+      if (score > bestScore && score >= this.vaultRetrThresh) {
+        bestScore = score
+        best = { capsule: cap, score }
+      }
+    }
+
+    return best
+  }
+
+  getActiveCapsules() {
+    const active = []
+    for (const [id, cap] of this.hexVault) {
+      if (this.shouldActivateCapsule(cap)) {
+        // تصحى لحظياً ثم تعود للنوم
+        cap.attached = true
+        active.push({ ...cap, _activationScore: true })
+        cap.attached = false
+      }
+    }
+    return active
+  }
+
+  cleanupCapsules() {
+    if (this.hexVault.size <= this.vaultLimit) return
+
+    // احذف الأقل تعزيزاً
+    const sorted = [...this.hexVault.entries()]
+      .sort(([, a], [, b]) => (a.reinforcement ?? 0) - (b.reinforcement ?? 0))
+
+    const toDelete = sorted.slice(0, this.hexVault.size - this.vaultLimit)
+    for (const [id] of toDelete) this.hexVault.delete(id)
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  CORE ENGINE PROCESS
+  // ═══════════════════════════════════════════════════════════════
 
   process(input, options = {}) {
     this._metricsCache     = null
@@ -126,6 +312,12 @@ export class CELF_Engine_AI_V5 {
     this.updateEmergentCredibility(perturbation)
     this.updateRecursiveCognition()
 
+    // ── Vault: تخزين إذا مهم ──────────────────────────────────────
+    const signal = typeof input === 'string' ? input : JSON.stringify(input ?? '')
+    if (this.shouldStoreCapsule(signal, perturbation)) {
+      this.storeOrUpdateCapsule(signal, perturbation)
+    }
+
     this.state.lastPerturbationVector = perturbation.semantic.vector.slice()
 
     const snapshot = this.snapshot(perturbation, delta, contained)
@@ -136,9 +328,9 @@ export class CELF_Engine_AI_V5 {
 
   perturb(input) {
     const signal =
-      typeof input === "string"
+      typeof input === 'string'
         ? input
-        : JSON.stringify(input ?? "")
+        : JSON.stringify(input ?? '')
 
     let h1 = 2166136261
     let h2 = 16777619
@@ -147,9 +339,9 @@ export class CELF_Engine_AI_V5 {
     for (let i = 0; i < signal.length; i++) {
       const c = signal.charCodeAt(i)
       h1 ^= c
-      h1 = Math.imul(h1, 16777619)
-      h2 = Math.imul(h2 ^ c, 2246822519)
-      h3 = Math.imul(h3 + c, 3266489917)
+      h1  = Math.imul(h1, 16777619)
+      h2  = Math.imul(h2 ^ c, 2246822519)
+      h3  = Math.imul(h3 + c, 3266489917)
     }
 
     const length   = signal.length
@@ -169,7 +361,7 @@ export class CELF_Engine_AI_V5 {
   }
 
   extractSemantic(input, signal, h1 = 0, h2 = 0, h3 = 0) {
-    const text   = String(signal ?? "")
+    const text   = String(signal ?? '')
     const words  = text.toLowerCase().split(/\s+/).filter(Boolean)
     const unique = new Set(words)
     const code      = /```|function|class|const|let|var|=>|import|export|return|{|}/i.test(text) ? 1 : 0
@@ -195,20 +387,55 @@ export class CELF_Engine_AI_V5 {
   }
 
   semanticVector(text, h1 = 0, h2 = 0, h3 = 0) {
-    const vector = new Float32Array(this.semanticDimensions)
-    const s = String(text ?? "")
+    const D      = this.semanticDimensions
+    const vector = new Float32Array(D)
+    const s      = String(text ?? '').toLowerCase()
+    const tokens = s.split(/\s+/).filter(Boolean)
 
-    for (let i = 0; i < s.length; i++) {
-      const c = s.charCodeAt(i)
-      const a = Math.abs(Math.imul(c ^ h1 ^ i, 16777619)) % this.semanticDimensions
-      const b = Math.abs(Math.imul(c ^ h2 ^ (i * 31), 2246822519)) % this.semanticDimensions
-      const v = ((c % 97) + 1) / 98
-      vector[a] += v
-      vector[b] += v * 0.5
+    if (tokens.length === 0) {
+      for (let i = 0; i < Math.min(s.length, 64); i++) {
+        const c = s.charCodeAt(i)
+        const a = (Math.abs(Math.imul(c ^ h1 ^ i, 16777619)) >>> 0) % D
+        vector[a] += 1 / (i + 1)
+      }
+    } else {
+      for (let ti = 0; ti < tokens.length; ti++) {
+        const token = tokens[ti]
+        let tw = 2166136261
+        for (let ci = 0; ci < token.length; ci++) {
+          tw ^= token.charCodeAt(ci)
+          tw  = Math.imul(tw, 16777619)
+        }
+        tw = Math.abs(tw >>> 0)
+
+        const posHash = (Math.imul(ti + 1, 2654435761) >>> 0)
+        const a = (Math.abs(Math.imul(tw ^ h1 ^ posHash, 16777619))  >>> 0) % D
+        const b = (Math.abs(Math.imul(tw ^ h2,           2246822519)) >>> 0) % D
+        const c = (Math.abs(Math.imul(tw ^ h3,           3266489917)) >>> 0) % D
+        const weight = 1.0 / Math.sqrt(ti + 1)
+        vector[a] += weight
+        vector[b] += weight * 0.6
+        vector[c] += weight * 0.4
+
+        if (ti + 1 < tokens.length) {
+          let bw = 2166136261
+          const bigram = token + ' ' + tokens[ti + 1]
+          for (let ci2 = 0; ci2 < bigram.length; ci2++) {
+            bw ^= bigram.charCodeAt(ci2)
+            bw  = Math.imul(bw, 16777619)
+          }
+          bw = Math.abs(bw >>> 0)
+          const ba = (Math.abs(Math.imul(bw ^ h1, 16777619)) >>> 0) % D
+          vector[ba] += weight * 0.3
+        }
+      }
     }
 
-    const norm = Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0)) || 1
-    return Float32Array.from(vector, v => Math.fround(v / norm))
+    let norm = 0
+    for (let i = 0; i < D; i++) norm += vector[i] * vector[i]
+    norm = Math.sqrt(norm) || 1
+    for (let i = 0; i < D; i++) vector[i] = Math.fround(vector[i] / norm)
+    return vector
   }
 
   deltaP(p) {
@@ -237,22 +464,15 @@ export class CELF_Engine_AI_V5 {
 
     const vector = Array.from({ length: this.ringCount }, (_, r) => {
       const k = (r + 1) / this.ringCount
-      return this.clamp01(
-        intensity * (
-          0.32 +
-          volume * 0.13 * k +
-          rupture * 0.22 * (1 - k) +
-          numeric * 0.08 +
-          variety * 0.12 +
-          semanticWeight * 0.18
-        )
-      )
+      return this.clamp01(intensity * (
+        0.32 + volume * 0.13 * k + rupture * 0.22 * (1 - k) +
+        numeric * 0.08 + variety * 0.12 + semanticWeight * 0.18
+      ))
     })
 
     const targetTheta      = this.containTheta(
       theta + phaseShift + semanticShift +
-      this.state.signature * 0.15 +
-      this.field.signature * 0.05
+      this.state.signature * 0.15 + this.field.signature * 0.05
     )
     const targetIndex      = this.thetaToIndex(targetTheta)
     const signedIndexDelta = this.signedIndexDistance(this.state.lastIndex, targetIndex)
@@ -267,13 +487,10 @@ export class CELF_Engine_AI_V5 {
 
   containDelta(delta) {
     const phi = 1.618033988749895
-
     const nextSignature = this.containTheta(
-      this.state.signature * phi +
-      delta.theta +
-      delta.deltaTheta        * 0.5 +
-      delta.intensity         * this.cycle * 0.22 +
-      delta.semanticWeight    * this.cycle * 0.08
+      this.state.signature * phi + delta.theta +
+      delta.deltaTheta * 0.5 + delta.intensity * this.cycle * 0.22 +
+      delta.semanticWeight * this.cycle * 0.08
     )
 
     const wrapped = Math.abs(delta.signedIndexDelta) > this.resolution / 2
@@ -303,7 +520,6 @@ export class CELF_Engine_AI_V5 {
 
     for (let r = 0; r < this.ringCount; r++) {
       const ringDelta = delta.vector[r] ?? 0
-
       for (let i = 0; i < this.resolution; i++) {
         const cell      = this.rings[r][i]
         const d         = this.circularIndexDistance(i, delta.index)
@@ -311,9 +527,8 @@ export class CELF_Engine_AI_V5 {
         const density   = cell.constraintDensity ?? 0
 
         const pressure = this.clamp01(
-          ringDelta      * 0.40 + delta.rupture  * 0.22 +
-          delta.variety  * 0.12 + semanticWeight * 0.14 +
-          intentWeight   * 0.07 + (1 - proximity) * 0.05
+          ringDelta * 0.40 + delta.rupture * 0.22 + delta.variety * 0.12 +
+          semanticWeight * 0.14 + intentWeight * 0.07 + (1 - proximity) * 0.05
         )
 
         const expansion =
@@ -322,8 +537,7 @@ export class CELF_Engine_AI_V5 {
           (1 + semanticWeight * 0.20) * sourceWeight
 
         const narrowing =
-          pressure * this.constraintRate *
-          (1 - proximity * 0.5) * (1 + density)
+          pressure * this.constraintRate * (1 - proximity * 0.5) * (1 + density)
 
         cell.pressure = pressure
         cell.p = this.clampP(cell.p + expansion - narrowing)
@@ -361,8 +575,7 @@ export class CELF_Engine_AI_V5 {
         )
 
         cell.credibility = this.clamp01(
-          (cell.credibility ?? 1.0) * 0.99 +
-          proximity * sourceWeight * 0.01
+          (cell.credibility ?? 1.0) * 0.99 + proximity * sourceWeight * 0.01
         )
       }
     }
@@ -408,12 +621,11 @@ export class CELF_Engine_AI_V5 {
       }
     }
 
-    for (let r = 0; r < this.ringCount; r++) {
+    for (let r = 0; r < this.ringCount; r++)
       for (let i = 0; i < this.resolution; i++) {
         this.rings[r][i].p             = next[r][i]
         this.rings[r][i].semanticTrace = semanticNext[r][i]
       }
-    }
   }
 
   conserveMass() {
@@ -480,7 +692,7 @@ export class CELF_Engine_AI_V5 {
     candidates.sort((a, b) => b.strength - a.strength)
 
     const L            = this.field.localization
-    const signalFactor = this.field.signalType === "signal" ? 1.0 : 0.4 + L * 0.6
+    const signalFactor = this.field.signalType === 'signal' ? 1.0 : 0.4 + L * 0.6
     const selected     = []
 
     for (const c of candidates) {
@@ -524,7 +736,6 @@ export class CELF_Engine_AI_V5 {
       for (let y = x + 1; y < result.length; y++) {
         const a = result[x]
         const b = result[y]
-
         const d               = Math.max(1, this.circularIndexDistance(a.i, b.i))
         const ringDistance    = Math.abs(a.r - b.r)
         const coupling        = 1 / (1 + ringDistance)
@@ -543,8 +754,7 @@ export class CELF_Engine_AI_V5 {
       ...a,
       stability:  this.clamp01(a.strength + a.force),
       orbitTheta: this.containTheta(
-        a.theta +
-        this.state.lastDeltaTheta * this.attractorRate *
+        a.theta + this.state.lastDeltaTheta * this.attractorRate *
         (1 + (a.semanticWeight ?? 0) * 0.25)
       )
     }))
@@ -581,9 +791,7 @@ export class CELF_Engine_AI_V5 {
       for (let i = 0; i < this.resolution; i++) {
         const cell = this.rings[r][i]
         cell.residual = this.clampP(
-          cell.residual * 0.992 +
-          cell.p        * 0.007 +
-          (cell.semanticTrace ?? 0) * 0.001
+          cell.residual * 0.992 + cell.p * 0.007 + (cell.semanticTrace ?? 0) * 0.001
         )
       }
   }
@@ -594,8 +802,7 @@ export class CELF_Engine_AI_V5 {
         const cell = this.rings[r][i]
         cell.constraintDensity = this.clamp01(
           (cell.constraintDensity ?? 0) * 0.995 +
-          cell.pressure * 0.0026 +
-          cell.memory   * 0.0017 +
+          cell.pressure * 0.0026 + cell.memory * 0.0017 +
           (cell.semanticTrace ?? 0) * 0.0007
         )
       }
@@ -613,16 +820,16 @@ export class CELF_Engine_AI_V5 {
 
   updatePhase() {
     const m = this.metrics()
-    let phase = "stable"
+    let phase = 'stable'
 
-    if (this.state.t < 8)                                                                    phase = "warmup"
-    else if (this.field.signalType === "noise" && m.entropy > 0.70)                         phase = "noise"
-    else if (m.pressure > 0.70 && m.entropy > 0.65)                                         phase = "turbulent"
-    else if (m.aliveRatio < 0.25)                                                            phase = "compressed"
-    else if (m.attractorStrength > 0.72 && m.drift < 0.20 && this.field.semanticCoherence > 0.45) phase = "locked"
-    else if (m.drift > 0.55 || this.field.noveltyPressure > 0.72)                           phase = "drift"
-    else if (m.residualMass > 0.55 && m.attractorStrength > 0.50)                           phase = "emergent"
-    else if (m.pressure > 0.45 || m.fieldCurvature > 0.45 || this.field.intentPressure > 0.60) phase = "metastable"
+    if (this.state.t < 8)                                                                    phase = 'warmup'
+    else if (this.field.signalType === 'noise' && m.entropy > 0.70)                          phase = 'noise'
+    else if (m.pressure > 0.70 && m.entropy > 0.65)                                          phase = 'turbulent'
+    else if (m.aliveRatio < 0.25)                                                             phase = 'compressed'
+    else if (m.attractorStrength > 0.72 && m.drift < 0.20 && this.field.semanticCoherence > 0.45) phase = 'locked'
+    else if (m.drift > 0.55 || this.field.noveltyPressure > 0.72)                            phase = 'drift'
+    else if (m.residualMass > 0.55 && m.attractorStrength > 0.50)                            phase = 'emergent'
+    else if (m.pressure > 0.45 || m.fieldCurvature > 0.45 || this.field.intentPressure > 0.60) phase = 'metastable'
 
     this.state.phase = phase
   }
@@ -632,29 +839,22 @@ export class CELF_Engine_AI_V5 {
     const phi = 1.618033988749895
 
     this.field.signature = this.containTheta(
-      this.field.signature * phi +
-      this.state.signature +
-      m.entropy           * this.cycle * 0.20 +
-      m.attractorStrength * this.cycle * 0.14 +
-      m.fieldCurvature    * this.cycle * 0.10 +
-      this.field.semanticGrounding * this.cycle * 0.08
+      this.field.signature * phi + this.state.signature +
+      m.entropy * this.cycle * 0.20 + m.attractorStrength * this.cycle * 0.14 +
+      m.fieldCurvature * this.cycle * 0.10 + this.field.semanticGrounding * this.cycle * 0.08
     )
 
     this.field.drift = this.round4(m.drift)
 
     this.field.coherence = this.round4(this.clamp01(
-      (1 - m.drift)       * 0.32 +
-      m.attractorStrength * 0.25 +
-      (1 - m.pressure)    * 0.17 +
-      m.fieldCurvature    * 0.08 +
+      (1 - m.drift) * 0.32 + m.attractorStrength * 0.25 +
+      (1 - m.pressure) * 0.17 + m.fieldCurvature * 0.08 +
       this.field.semanticCoherence * 0.18
     ))
 
     this.field.continuity = this.round4(this.clamp01(
-      m.residualMass      * 0.34 +
-      m.attractorStrength * 0.25 +
-      (1 - m.drift)       * 0.17 +
-      m.fieldCurvature    * 0.08 +
+      m.residualMass * 0.34 + m.attractorStrength * 0.25 +
+      (1 - m.drift) * 0.17 + m.fieldCurvature * 0.08 +
       this.field.semanticGrounding * 0.16
     ))
 
@@ -663,16 +863,13 @@ export class CELF_Engine_AI_V5 {
     ))
 
     this.field.resonance = this.round4(this.clamp01(
-      m.entropy           * 0.22 +
-      m.attractorStrength * 0.27 +
-      m.residualMass      * 0.18 +
-      m.fieldCurvature    * 0.13 +
-      this.field.semanticCoherence * 0.20
+      m.entropy * 0.22 + m.attractorStrength * 0.27 + m.residualMass * 0.18 +
+      m.fieldCurvature * 0.13 + this.field.semanticCoherence * 0.20
     ))
 
     this.field.topicPressure = this.round4(m.pressure)
 
-    if (this.state.phase !== "drift" && this.state.phase !== "turbulent")
+    if (this.state.phase !== 'drift' && this.state.phase !== 'turbulent')
       this.field.lastStablePhase = this.state.phase
 
     this.field.persistence = this.round4(this.clamp01(
@@ -680,11 +877,8 @@ export class CELF_Engine_AI_V5 {
     ))
 
     this.field.emergence = this.round4(this.clamp01(
-      m.residualMass      * 0.22 +
-      m.entropy           * 0.20 +
-      m.attractorStrength * 0.28 +
-      m.fieldCurvature    * 0.12 +
-      this.field.noveltyPressure * 0.18
+      m.residualMass * 0.22 + m.entropy * 0.20 + m.attractorStrength * 0.28 +
+      m.fieldCurvature * 0.12 + this.field.noveltyPressure * 0.18
     ))
 
     this.field.phaseHistory.push({ t: this.state.t, phase: this.state.phase })
@@ -711,60 +905,37 @@ export class CELF_Engine_AI_V5 {
     const novelty    = this.clamp01(1 - similarity)
 
     const intentPressure = this.clamp01(
-      current.intent.ask      * 0.15 +
-      current.intent.execute  * 0.22 +
-      current.intent.diagnose * 0.22 +
-      current.intent.reason   * 0.18 +
-      current.intent.code     * 0.15 +
-      current.intent.data     * 0.08
+      current.intent.ask * 0.15 + current.intent.execute * 0.22 +
+      current.intent.diagnose * 0.22 + current.intent.reason * 0.18 +
+      current.intent.code * 0.15 + current.intent.data * 0.08
     )
 
     const grounding = this.clamp01(
-      current.lexicalDensity  * 0.25 +
-      current.lengthScore     * 0.12 +
-      current.intent.code     * 0.15 +
-      current.intent.data     * 0.15 +
-      current.intent.reason   * 0.15 +
-      current.intent.execute  * 0.10 +
+      current.lexicalDensity * 0.25 + current.lengthScore * 0.12 +
+      current.intent.code * 0.15 + current.intent.data * 0.15 +
+      current.intent.reason * 0.15 + current.intent.execute * 0.10 +
       current.intent.diagnose * 0.08
     )
 
-    this.field.semanticGrounding = this.round4(
-      this.clamp01(this.field.semanticGrounding * 0.86 + grounding * 0.14)
-    )
-    this.field.semanticCoherence = this.round4(
-      this.clamp01(this.field.semanticCoherence * 0.82 + similarity * 0.18)
-    )
-    this.field.intentPressure = this.round4(
-      this.clamp01(this.field.intentPressure * 0.78 + intentPressure * 0.22)
-    )
+    this.field.semanticGrounding = this.round4(this.clamp01(this.field.semanticGrounding * 0.86 + grounding * 0.14))
+    this.field.semanticCoherence = this.round4(this.clamp01(this.field.semanticCoherence * 0.82 + similarity * 0.18))
+    this.field.intentPressure    = this.round4(this.clamp01(this.field.intentPressure * 0.78 + intentPressure * 0.22))
     this.field.executionReadiness = this.round4(this.clamp01(
-      current.intent.execute * 0.35 +
-      current.intent.code    * 0.25 +
-      current.intent.data    * 0.15 +
-      this.field.coherence   * 0.15 +
-      (1 - this.field.drift) * 0.10
+      current.intent.execute * 0.35 + current.intent.code * 0.25 +
+      current.intent.data * 0.15 + this.field.coherence * 0.15 + (1 - this.field.drift) * 0.10
     ))
-    this.field.noveltyPressure = this.round4(
-      this.clamp01(this.field.noveltyPressure * 0.80 + novelty * 0.20)
-    )
+    this.field.noveltyPressure = this.round4(this.clamp01(this.field.noveltyPressure * 0.80 + novelty * 0.20))
     this.field.recallPotential = this.round4(this.clamp01(
-      similarity             * 0.35 +
-      this.field.resonance   * 0.25 +
-      this.field.persistence * 0.20 +
-      this.field.continuity  * 0.20
+      similarity * 0.35 + this.field.resonance * 0.25 +
+      this.field.persistence * 0.20 + this.field.continuity * 0.20
     ))
     this.field.routingPressure = this.round4(this.clamp01(
-      this.field.intentPressure  * 0.30 +
-      this.field.noveltyPressure * 0.20 +
-      this.field.recallPotential * 0.30 +
-      this.field.topicPressure   * 0.20
+      this.field.intentPressure * 0.30 + this.field.noveltyPressure * 0.20 +
+      this.field.recallPotential * 0.30 + this.field.topicPressure * 0.20
     ))
     this.field.compressionPressure = this.round4(this.clamp01(
-      (1 - this.field.noveltyPressure) * 0.30 +
-      this.field.coherence             * 0.25 +
-      this.field.continuity            * 0.25 +
-      this.field.persistence           * 0.20
+      (1 - this.field.noveltyPressure) * 0.30 + this.field.coherence * 0.25 +
+      this.field.continuity * 0.25 + this.field.persistence * 0.20
     ))
 
     this.field.semanticMemory.push({
@@ -796,14 +967,12 @@ export class CELF_Engine_AI_V5 {
   updateSignalMetrics() {
     const ps = []
     for (const ring of this.rings) for (const c of ring) ps.push(c.p)
-
     const maxP = Math.max(...ps)
     const sumP = ps.reduce((a, b) => a + b, 0)
     const L    = sumP > 0 ? maxP / sumP : 0
-
     this.field.localization    = this.round4(L)
     this.field.coherenceRadius = this.computeCoherenceRadius()
-    this.field.signalType      = L > this.localizationThreshold ? "signal" : "noise"
+    this.field.signalType      = L > this.localizationThreshold ? 'signal' : 'noise'
   }
 
   computeCoherenceRadius() {
@@ -835,27 +1004,20 @@ export class CELF_Engine_AI_V5 {
         const prox = Math.max(0, 1 - dist / (radius + 1))
         const idx  = nx * D + ny
 
-        this.field.manifold[idx] = this.clamp01(
-          this.field.manifold[idx] * 0.97 + prox * sw * 0.03
-        )
-        this.field.manifoldAge[idx] = this.clamp01(
-          (this.field.manifoldAge[idx] ?? 0) * 0.995 + prox * 0.005
-        )
+        this.field.manifold[idx] = this.clamp01(this.field.manifold[idx] * 0.97 + prox * sw * 0.03)
+        this.field.manifoldAge[idx] = this.clamp01((this.field.manifoldAge[idx] ?? 0) * 0.995 + prox * 0.005)
       }
     }
 
-    const last = this.field.semanticMemory.at(-2)
-    if (last?.vector) {
-      const bx    = Math.min(Math.abs(Math.floor((last.vector[0] ?? 0) * (D - 1))), D - 1)
-      const by    = Math.min(Math.abs(Math.floor((last.vector[1] ?? 0) * (D - 1))), D - 1)
-      const steps = 4
-      for (let s = 1; s <= steps; s++) {
-        const lx   = Math.round(bx + (cx - bx) * s / steps)
-        const ly   = Math.round(by + (cy - by) * s / steps)
+    const lastMem = this.field.semanticMemory.at(-2)
+    if (lastMem?.vector) {
+      const bx    = Math.min(Math.abs(Math.floor((lastMem.vector[0] ?? 0) * (D - 1))), D - 1)
+      const by    = Math.min(Math.abs(Math.floor((lastMem.vector[1] ?? 0) * (D - 1))), D - 1)
+      for (let s = 1; s <= 4; s++) {
+        const lx   = Math.round(bx + (cx - bx) * s / 4)
+        const ly   = Math.round(by + (cy - by) * s / 4)
         const lidx = lx * D + ly
-        this.field.manifold[lidx] = this.clamp01(
-          (this.field.manifold[lidx] ?? 0) + 0.008 * sw
-        )
+        this.field.manifold[lidx] = this.clamp01((this.field.manifold[lidx] ?? 0) + 0.008 * sw)
       }
     }
   }
@@ -1010,8 +1172,8 @@ export class CELF_Engine_AI_V5 {
 
   snapshot(perturbation, delta, contained) {
     return {
-      version: "CELF-V5",
-      mode:    "semantic cyclic possibility curvature",
+      version: 'CELF-V5',
+      mode:    'semantic cyclic possibility curvature',
       t:       this.state.t,
       phase:   this.state.phase,
       perturbation: {
@@ -1050,6 +1212,10 @@ export class CELF_Engine_AI_V5 {
         avgFieldCredibility: this.field.avgFieldCredibility,
         metaAttractors:      this.field.metaAttractors,
         credibilityLog:      this.state.attractorCredibilityLog.slice(-8)
+      },
+      vault: {
+        capsuleCount: this.hexVault.size,
+        activeCapsules: this.getActiveCapsules().length
       },
       attractors: this.state.attractors.map(a => ({
         r: a.r, i: a.i,
@@ -1102,8 +1268,8 @@ export class CELF_Engine_AI_V5 {
 
   routeContext(query = null, limit = this.routingLimit) {
     const signal =
-      query === null || query === undefined ? "" :
-      typeof query === "string" ? query : JSON.stringify(query)
+      query === null || query === undefined ? '' :
+      typeof query === 'string' ? query : JSON.stringify(query)
 
     const semantic = signal
       ? this.extractSemantic(query, signal)
@@ -1113,10 +1279,13 @@ export class CELF_Engine_AI_V5 {
 
     const vector            = semantic.vector ?? new Float32Array(0)
     const currentTheta      = this.state.lastTheta  ?? 0
-    const currentPhase      = this.state.phase       ?? "warmup"
+    const currentPhase      = this.state.phase       ?? 'warmup'
     const currentAttractors = this.state.attractors  ?? []
 
-    return this.field.semanticMemory
+    // ── Vault: تحقق من كبسولات نشطة ──────────────────────────────
+    const vaultResult = signal ? this.retrieveCapsule(signal, vector) : null
+
+    const items = this.field.semanticMemory
       .map(item => {
         const semanticSim   = this.cosineSimilarity(vector, item.vector ?? new Float32Array(0))
         const thetaDist     = Math.abs(((item.theta - currentTheta + this.cycle) % this.cycle))
@@ -1146,7 +1315,7 @@ export class CELF_Engine_AI_V5 {
 
         return {
           t: item.t, phase: item.phase, theta: item.theta,
-          signature: item.signature, signalType: item.signalType ?? "noise",
+          signature: item.signature, signalType: item.signalType ?? 'noise',
           score,
           _semanticSim:   this.round4(semanticSim),
           _attractorProx: this.round4(attractorProx),
@@ -1156,21 +1325,36 @@ export class CELF_Engine_AI_V5 {
       })
       .sort((a, b) => b.score - a.score)
       .slice(0, Math.max(1, limit))
+
+    // أضف بيانات الـ Vault إذا وُجدت
+    if (vaultResult) {
+      return {
+        items,
+        vaultHit: {
+          compressed: vaultResult.capsule.source.compressed,
+          score:      this.round4(vaultResult.score),
+          phiOrbit:   this.round4(vaultResult.capsule.phiOrbit),
+          reinforcement: vaultResult.capsule.reinforcement ?? 0
+        }
+      }
+    }
+
+    return items
   }
 
   getControlGuidance() {
     const mode =
-      this.state.phase === "turbulent" ? "ground"   :
-      this.state.phase === "drift"     ? "clarify"  :
-      this.state.phase === "emergent"  ? "explore"  :
-      this.state.phase === "locked"    ? "compress" :
-      this.state.phase === "noise"     ? "filter"   :
-      "balance"
+      this.state.phase === 'turbulent' ? 'ground'   :
+      this.state.phase === 'drift'     ? 'clarify'  :
+      this.state.phase === 'emergent'  ? 'explore'  :
+      this.state.phase === 'locked'    ? 'compress' :
+      this.state.phase === 'noise'     ? 'filter'   :
+      'balance'
 
     const depth =
-      this.field.routingPressure > 0.72     ? "deep"     :
-      this.field.compressionPressure > 0.72 ? "quick"    :
-      "balanced"
+      this.field.routingPressure > 0.72     ? 'deep'  :
+      this.field.compressionPressure > 0.72 ? 'quick' :
+      'balanced'
 
     return {
       mode, depth,
@@ -1196,6 +1380,7 @@ export class CELF_Engine_AI_V5 {
       compressionPressure: this.field.compressionPressure,
       noveltyPressure:     this.field.noveltyPressure,
       memorySize:          this.field.semanticMemory.length,
+      vaultSize:           this.hexVault.size,
       routedContext:       this.routeContext(null, Math.min(3, this.routingLimit))
     }
   }
@@ -1227,7 +1412,8 @@ export class CELF_Engine_AI_V5 {
       signalType:          this.field.signalType,
       lastSourceWeight:    this.field.lastSourceWeight,
       avgFieldCredibility: this.field.avgFieldCredibility,
-      metaAttractorCount:  this.field.metaAttractors?.length ?? 0
+      metaAttractorCount:  this.field.metaAttractors?.length ?? 0,
+      vaultCapsules:       this.hexVault.size
     }
   }
 
@@ -1249,7 +1435,7 @@ export class CELF_Engine_AI_V5 {
 
   getSummary() {
     return {
-      version:        "CELF-V5",
+      version:        'CELF-V5',
       phase:          this.state.phase,
       t:              this.state.t,
       cycle:          this.cycle,
@@ -1263,6 +1449,7 @@ export class CELF_Engine_AI_V5 {
       metrics:        this.metrics(),
       attractorCount: this.state.attractors.length,
       archiveSize:    this.state.archive.length,
+      vaultSize:      this.hexVault.size,
       signal: {
         localization:     this.field.localization,
         coherenceRadius:  this.field.coherenceRadius,
@@ -1367,7 +1554,8 @@ export class CELF_Engine_AI_V5 {
       resonance:      this.round4(field.resonance  ?? 0),
       coherence:      this.round4(field.coherence  ?? 0),
       drift:          this.round4(field.drift      ?? 0),
-      attractorCount: attractors.length
+      attractorCount: attractors.length,
+      vaultSize:      this.hexVault.size
     }
   }
 
@@ -1404,18 +1592,18 @@ export class CELF_Engine_AI_V5 {
 
     this.field = {
       signature: 0, continuity: 0, coherence: 0, drift: 0, momentum: 0, resonance: 0,
-      phaseHistory: [], attractorTrace: [], topicPressure: 0, lastStablePhase: "warmup",
+      phaseHistory: [], attractorTrace: [], topicPressure: 0, lastStablePhase: 'warmup',
       persistence: 0, emergence: 0, semanticGrounding: 0, semanticCoherence: 0,
       intentPressure: 0, executionReadiness: 0, recallPotential: 0, routingPressure: 0,
       compressionPressure: 0, noveltyPressure: 0, semanticMemory: [], archivedContinuity: [],
-      localization: 0, coherenceRadius: 0, signalType: "noise", lastSourceWeight: 1.0,
+      localization: 0, coherenceRadius: 0, signalType: 'noise', lastSourceWeight: 1.0,
       manifold:    new Float32Array(this.manifoldDimensions * this.manifoldDimensions),
       manifoldAge: new Float32Array(this.manifoldDimensions * this.manifoldDimensions),
       metaAttractors: [], avgFieldCredibility: 1.0
     }
 
     this.state = {
-      t: 0, phase: "warmup", signature: 0,
+      t: 0, phase: 'warmup', signature: 0,
       cycleCount: 0, lastTheta: 0, lastIndex: 0,
       lastDeltaTheta: 0, totalMass: this.totalMass(),
       attractors: [], history: [], archive: [],
@@ -1423,6 +1611,9 @@ export class CELF_Engine_AI_V5 {
       lastPerturbationVector: new Float32Array(this.semanticDimensions),
       attractorCredibilityLog: []
     }
+
+    // الـ Vault لا يُمسح عند reset — الكبسولات دائمة
+    // إذا أردت مسحه: this.hexVault.clear()
 
     this.massTarget = this.totalMass()
   }
