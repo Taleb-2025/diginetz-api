@@ -3,6 +3,7 @@ import { CELF_Engine_AI_V5 } from '../engines/celf-engine-v5.js'
 import { parse } from '../utils/lightweight-parser.js'
 import { build } from '../utils/context-builder.js'
 import { analyze } from '../utils/response-analyzer.js'
+import { indexStore } from './index-code.route.js'
 
 const router = express.Router()
 
@@ -430,8 +431,9 @@ router.post('/process-text', async (req, res) => {
     }
 
     // ── Cognitive Query Layer ────────────────────────────────────
-    const cogTarget = engine.buildCognitiveTarget(safeText, null)
-    const rawHint   = built.systemHint ?? ''
+    const structIndex = indexStore?.get(sid) ?? null
+    const cogTarget   = engine.buildCognitiveTarget(safeText, structIndex)
+    const rawHint     = built.systemHint ?? ''
 
     const extraHints = []
     if (cogTarget.focus?.winner === 'user')  extraHints.push('topic-shift: true')
@@ -601,5 +603,7 @@ router.delete('/session/:id', (req, res) => {
   processingLock.delete(req.params.id)
   return res.json({ ok: true })
 })
+
+export { getEngine }
 
 export default router
