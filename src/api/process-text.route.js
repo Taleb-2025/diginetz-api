@@ -429,7 +429,25 @@ router.post('/process-text', async (req, res) => {
       return res.json({ reply: null, skippedLLM: true, reason: 'weak_semantic_field' })
     }
 
-    const systemHint = built.systemHint ?? ''
+    // ── Cognitive Query Layer ────────────────────────────────────
+    // يدمج User Query + CELF Field State → Focused Cognitive Target
+    // الدالة داخل المحرك — تقرأ this مباشرة
+    const engine    = sessions.get(sid)
+    const cogTarget = engine.buildCognitiveTarget(safeText, null)
+    const rawHint   = built.systemHint ?? ''
+
+    // دمج systemHint من context-builder مع الـ cognitive hint
+    const extraHints = []
+    if (cogTarget.focus?.winner === 'user')  extraHints.push('topic-shift: true')
+    if (cogTarget.focus?.winner === 'celf')  extraHints.push('context-driven: true')
+    if (cogTarget.dependencies?.length) {
+      extraHints.push(
+        `graph: ${cogTarget.dependencies.slice(0, 4).map(d => `${d.from}→${d.to}`).join(', ')}`
+      )
+    }
+
+    const systemHint = [rawHint, ...extraHints].filter(Boolean).join('\n')
+
     const intent     = built.context?.intent ?? 'question'
     const continuity = built.context?.continuity ?? 0
     const maxTokens  = 4096
@@ -550,6 +568,8 @@ router.post('/process-text', async (req, res) => {
         routeConfidence: Math.round(routeConf * 1000) / 1000,
         hasMemoryCard:   !!built.memoryCard,
         vaultHit:        vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null,
+        cognitiveMode:   cogTarget?.cognitiveMode ?? null,
+        conflictWinner:  cogTarget?.focus?.winner ?? null,
         payloadSize,
         truncated:       hasText && text.length > MAX_INPUT_CHARS
       }
