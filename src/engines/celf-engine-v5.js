@@ -1626,17 +1626,20 @@ export class CELF_Engine_AI_V5 {
       }
     }
 
-    // ── 4. Structural Index — on-demand ────────────────────────
+    // ── 4. Structural Index — hybrid on-demand ─────────────────
     let indexResult = null
-    if (index && userIntent.entities.length > 0) {
-      indexResult = index.query(
-        { names: userIntent.entities },
-        userIntent.depth === 'deep' ? 3 : 2
+    if (index) {
+      // inject semantic vectors إذا لم تُعبأ بعد
+      if (typeof index.injectSemanticVectors === 'function')
+        index.injectSemanticVectors(this)
+
+      // hybrid routing: semantic + symbol + call graph distance
+      indexResult = index.hybridQuery(
+        queryVec,
+        userIntent.entities,
+        userIntent.depth === 'deep' ? 3 : 2,
+        8
       )
-      for (const node of (indexResult.nodes ?? [])) {
-        if (!node.semanticVector)
-          node.semanticVector = this.semanticVector(node.semanticLabel ?? node.name)
-      }
     }
 
     // ── 5. Focus Resolution — الـ intersection ─────────────────
@@ -1816,6 +1819,14 @@ export class CELF_Engine_AI_V5 {
             .filter(w => w.length > 4 && /^[a-zA-Z]/.test(w))
           scopeNames.push(...words.slice(0, 3))
         }
+      }
+    }
+
+    // أضف symbols من hybridQuery topScored
+    if (indexResult?.topScored?.length) {
+      for (const s of indexResult.topScored.slice(0, 4)) {
+        if (s.symbol && !scopeNames.includes(s.symbol))
+          scopeNames.push(s.symbol)
       }
     }
 
