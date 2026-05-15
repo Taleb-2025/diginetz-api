@@ -402,7 +402,12 @@ router.post('/process-text', async (req, res) => {
     const fieldPrompt   = engine.buildFieldPrompt?.() ?? null
 
     const rawRoute      = engine.routeContext(safeText, 5)
-    const routedContext = enrichRouteContext(rawRoute, sid)
+
+    // ── routeContext يُعيد array أو {items, vaultHit} ──────────────
+    const routeItems    = Array.isArray(rawRoute) ? rawRoute : (rawRoute?.items ?? [])
+    const vaultHit      = Array.isArray(rawRoute) ? null : (rawRoute?.vaultHit ?? null)
+
+    const routedContext = enrichRouteContext(routeItems, sid)
     const routeConf     = calcRouteConfidence(routedContext)
 
     const built = build({
@@ -411,7 +416,7 @@ router.post('/process-text', async (req, res) => {
       celfResult:   processed.celfResult,
       passToLLM:    processed.passToLLM,
       fieldPrompt,
-      routedContext
+      routedContext: vaultHit ? { items: routedContext, vaultHit } : routedContext
     })
 
     if (built.blocked) {
@@ -544,6 +549,7 @@ router.post('/process-text', async (req, res) => {
         maxTokens,
         routeConfidence: Math.round(routeConf * 1000) / 1000,
         hasMemoryCard:   !!built.memoryCard,
+        vaultHit:        vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null,
         payloadSize,
         truncated:       hasText && text.length > MAX_INPUT_CHARS
       }
