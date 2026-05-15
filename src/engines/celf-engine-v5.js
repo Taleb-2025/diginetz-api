@@ -1559,6 +1559,287 @@ export class CELF_Engine_AI_V5 {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  //  COGNITIVE QUERY LAYER — داخل المحرك
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * buildCognitiveTarget(query, index?)
+   *
+   * يدمج User Query + CELF Field State → Focused Cognitive Target
+   * يقرأ this مباشرة — لا يحتاج engine كـ argument
+   *
+   * @param {string}          query  — نص المستخدم
+   * @param {StructuralIndex} index  — الـ Index (اختياري)
+   * @returns {CognitiveTarget}
+   */
+  buildCognitiveTarget(query, index = null) {
+
+    // ── 1. User Intent ─────────────────────────────────────────
+    const userIntent = this.#extractUserIntent(query)
+
+    // ── 2. Field State من this مباشرة ─────────────────────────
+    const fieldState = {
+      phase:              this.state.phase,
+      continuity:         this.field.continuity          ?? 0,
+      coherence:          this.field.coherence           ?? 0,
+      drift:              this.field.drift               ?? 0,
+      resonance:          this.field.resonance           ?? 0,
+      semanticGrounding:  this.field.semanticGrounding   ?? 0,
+      semanticCoherence:  this.field.semanticCoherence   ?? 0,
+      noveltyPressure:    this.field.noveltyPressure     ?? 0,
+      executionReadiness: this.field.executionReadiness  ?? 0,
+      recallPotential:    this.field.recallPotential     ?? 0,
+      routingPressure:    this.field.routingPressure     ?? 0,
+      intentPressure:     this.field.intentPressure      ?? 0,
+      avgCredibility:     this.field.avgFieldCredibility ?? 1.0,
+      vaultSize:          this.hexVault.size
+    }
+
+    // ── 3. Vault ───────────────────────────────────────────────
+    const queryVec    = this.extractSemantic(query, query).vector
+    const vaultResult = this.retrieveCapsule(query, queryVec)
+    const vaultCapsules = []
+
+    if (vaultResult) {
+      vaultCapsules.push({
+        compressed:    vaultResult.capsule.source.compressed,
+        score:         this.round4(vaultResult.score),
+        phiOrbit:      this.round4(vaultResult.capsule.phiOrbit),
+        reinforcement: vaultResult.capsule.reinforcement ?? 0,
+        phase:         vaultResult.capsule.phase,
+        version:       vaultResult.capsule.version ?? 1
+      })
+    }
+
+    for (const cap of (this.getActiveCapsules?.() ?? []).slice(0, 3)) {
+      if (!vaultCapsules.find(v => v.compressed === cap.source?.compressed)) {
+        vaultCapsules.push({
+          compressed:        cap.source?.compressed,
+          score:             0,
+          phiOrbit:          this.round4(cap.phiOrbit ?? 0),
+          reinforcement:     cap.reinforcement ?? 0,
+          phase:             cap.phase,
+          version:           cap.version ?? 1,
+          activeByResonance: true
+        })
+      }
+    }
+
+    // ── 4. Structural Index — on-demand ────────────────────────
+    let indexResult = null
+    if (index && userIntent.entities.length > 0) {
+      indexResult = index.query(
+        { names: userIntent.entities },
+        userIntent.depth === 'deep' ? 3 : 2
+      )
+      for (const node of (indexResult.nodes ?? [])) {
+        if (!node.semanticVector)
+          node.semanticVector = this.semanticVector(node.semanticLabel ?? node.name)
+      }
+    }
+
+    // ── 5. Focus Resolution — الـ intersection ─────────────────
+    const focus = this.#resolveCognitiveFocus(userIntent, fieldState, vaultCapsules, indexResult)
+
+    // ── 6. Structural subgraph ─────────────────────────────────
+    let structuralGraph = null
+    if (index && focus.what.length > 0) {
+      const depth = focus.depth === 'deep' ? 3 : focus.depth === 'surface' ? 1 : 2
+      const g     = index.query({ names: focus.what, files: focus.files }, depth)
+      structuralGraph = {
+        nodeCount: g.totalNodes,
+        edgeCount: g.totalEdges,
+        nodes: (g.nodes ?? []).map(n => ({
+          name: n.name, type: n.type, file: n.file,
+          semanticLabel: n.semanticLabel,
+          vaultCapsuleId: n.vaultCapsuleId
+        }))
+      }
+    }
+
+    // ── 7. Top Attractors ──────────────────────────────────────
+    const topAttractors = (this.state.attractors ?? [])
+      .slice()
+      .sort((a, b) => (b.stability ?? 0) - (a.stability ?? 0))
+      .slice(0, 3)
+      .map(a => ({
+        r:              a.r,
+        i:              a.i,
+        strength:       this.round4(a.strength       ?? 0),
+        stability:      this.round4(a.stability      ?? 0),
+        semanticWeight: this.round4(a.semanticWeight ?? 0),
+        credibility:    this.round4(a.emergentCredibility ?? a.credibility ?? 1)
+      }))
+
+    // ── 8. Cognitive Mode ──────────────────────────────────────
+    const cognitiveMode =
+      fieldState.executionReadiness > 0.65  ? 'technical'   :
+      fieldState.intentPressure     > 0.60  ? 'analytical'  :
+      fieldState.semanticCoherence  > 0.55  ? 'reasoning'   :
+      fieldState.noveltyPressure    > 0.65  ? 'exploratory' :
+      'general'
+
+    // ── 9. Dependency Graph ────────────────────────────────────
+    const dependencies = []
+    if (structuralGraph?.nodes?.length) {
+      // يُبنى من الـ index edges إذا موجودة في النتيجة
+      for (const node of structuralGraph.nodes.slice(0, 6)) {
+        if (node.calls?.length) {
+          for (const callee of node.calls.slice(0, 3)) {
+            dependencies.push({ from: node.name, to: callee, type: 'calls', weight: 1 })
+          }
+        }
+      }
+    }
+
+    // ── 10. systemHint ─────────────────────────────────────────
+    const hintParts = [
+      `mode: ${cognitiveMode}`,
+      `phase: ${fieldState.phase}`,
+      `target: ${focus.mode}`,
+      `depth: ${focus.depth}`,
+      `continuity: ${fieldState.continuity}`,
+      `coherence: ${fieldState.coherence}`
+    ]
+
+    if (focus.winner === 'user')  hintParts.push('focus: user_driven — new topic')
+    if (focus.winner === 'celf')  hintParts.push('focus: context_driven — use session memory')
+
+    if (vaultCapsules.length) {
+      hintParts.push(
+        `vault: ${vaultCapsules.map(v => v.compressed).filter(Boolean).join(' | ')}`
+      )
+    }
+
+    if (dependencies.length) {
+      hintParts.push(
+        `dependencies: ${dependencies.slice(0, 5).map(d => `${d.from}→${d.to}`).join(', ')}`
+      )
+    }
+
+    return {
+      focus,
+      cognitiveMode,
+      userIntent,
+      fieldState,
+      vaultCapsules,
+      dependencies,
+      structuralGraph,
+      topAttractors,
+      systemHint: hintParts.filter(Boolean).join('\n'),
+      _meta: {
+        t:              this.state.t,
+        vaultSize:      this.hexVault.size,
+        indexUsed:      index !== null,
+        conflictWinner: focus.winner
+      }
+    }
+  }
+
+  // ── private: User Intent Extraction ───────────────────────────
+  #extractUserIntent(query) {
+    const text = String(query ?? '').toLowerCase()
+
+    const mode =
+      /اشرح|explain|كيف يعمل|how does|what is|ما هو|ما هي/i.test(text)  ? 'explain'    :
+      /اكتب|انزل|أنشئ|build|create|generate|implement|نفذ/i.test(text)   ? 'implement'  :
+      /اصلح|fix|debug|خطأ|error|مشكلة|لا يعمل/i.test(text)              ? 'debug'      :
+      /صمم|design|architecture|هندسة|كيف نبني/i.test(text)               ? 'design'     :
+      /تحقق|check|review|راجع|هل صحيح|is this/i.test(text)              ? 'review'     :
+      /قارن|compare|الفرق بين|difference/i.test(text)                    ? 'compare'    :
+      'general'
+
+    const depth =
+      /بالتفصيل|بعمق|كامل|complete|full|detailed|step by step/i.test(text) ? 'deep'    :
+      /باختصار|brief|quick|سريع|ملخص|summary/i.test(text)                  ? 'surface' :
+      'balanced'
+
+    const entityPattern = /\b([A-Z][a-zA-Z]{3,}|[a-z]{4,}(?:Context|Builder|Engine|Index|Layer|Vault|Capsule|Query|Route|Cache|Store|Map|Handler|Manager|Controller))\b/g
+    const entities = []
+    let m
+    while ((m = entityPattern.exec(query)) !== null)
+      if (!entities.includes(m[1])) entities.push(m[1])
+
+    const clarity = Math.min(1,
+      (text.length > 20 ? 0.3 : 0) +
+      (entities.length  > 0  ? 0.3 : 0) +
+      (mode !== 'general'    ? 0.4 : 0)
+    )
+
+    return { mode, depth, entities, clarity, rawQuery: query }
+  }
+
+  // ── private: Focus Resolution ──────────────────────────────────
+  #resolveCognitiveFocus(userIntent, fieldState, vaultCapsules, indexResult) {
+    const {
+      continuity, coherence, drift,
+      semanticGrounding, noveltyPressure,
+      executionReadiness, recallPotential
+    } = fieldState
+
+    // novelty: هل الكيانات المذكورة موجودة في الـ Vault؟
+    const capsuleLabels = vaultCapsules.map(c => c.compressed?.toLowerCase() ?? '')
+    const entityMatches = userIntent.entities.filter(e =>
+      capsuleLabels.some(l => l.includes(e.toLowerCase()))
+    ).length
+
+    const userNovelty = userIntent.entities.length > 0
+      ? Math.max(0, 1 - entityMatches / userIntent.entities.length)
+      : noveltyPressure
+
+    // ── Conflict Resolution ──────────────────────────────────
+    let winner = 'balanced'
+
+    if (userNovelty > 0.70 && continuity > 0.65) {
+      winner = 'user'   // موضوع جديد واضح — اتبع المستخدم
+    } else if (userIntent.clarity < 0.30 && semanticGrounding > 0.55) {
+      winner = 'celf'   // سؤال غامض — استخدم السياق
+    }
+
+    // ── depth ────────────────────────────────────────────────
+    const resolvedDepth =
+      userIntent.depth === 'deep'                                   ? 'deep'     :
+      userIntent.depth === 'surface'                                ? 'surface'  :
+      executionReadiness > 0.65 && userIntent.mode === 'implement'  ? 'deep'     :
+      coherence > 0.70 && userIntent.mode === 'explain'            ? 'balanced' :
+      drift > 0.55                                                   ? 'surface'  :
+      'balanced'
+
+    // ── scope ────────────────────────────────────────────────
+    const scopeNames = [...userIntent.entities]
+
+    if (winner !== 'user' && recallPotential > 0.60) {
+      for (const cap of vaultCapsules.slice(0, 2)) {
+        if (cap.compressed) {
+          const words = cap.compressed.split(/\s+/)
+            .filter(w => w.length > 4 && /^[a-zA-Z]/.test(w))
+          scopeNames.push(...words.slice(0, 3))
+        }
+      }
+    }
+
+    // ── mode ─────────────────────────────────────────────────
+    const resolvedMode =
+      userIntent.mode === 'implement' && this.state.phase === 'locked' ? 'build'     :
+      userIntent.mode === 'explain'   && continuity > 0.65             ? 'trace'     :
+      userIntent.mode === 'debug'                                       ? 'diagnose'  :
+      userIntent.mode === 'design'                                      ? 'architect' :
+      userIntent.mode === 'review'                                      ? 'audit'     :
+      userIntent.mode === 'compare'                                     ? 'contrast'  :
+      'analyze'
+
+    return {
+      winner,
+      what:           scopeNames.filter((v, i, a) => a.indexOf(v) === i).slice(0, 8),
+      files:          [],
+      depth:          resolvedDepth,
+      mode:           resolvedMode,
+      userNovelty:    this.round4(userNovelty),
+      celfContinuity: this.round4(continuity)
+    }
+  }
+
   #resolveSemanticZone(topAttractors, field) {
     const intentPressure = field.intentPressure     ?? 0
     const execReady      = field.executionReadiness ?? 0
