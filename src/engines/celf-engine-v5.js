@@ -25,10 +25,15 @@ export class CELF_Engine_AI_V5 {
 
     // ─── Vault Topology ───────────────────────────────────────────
     this.hexVault          = new Map()
+    this.vaultMin          = options.vaultMin          ?? 64
+    this.vaultMax          = options.vaultMax          ?? 2048
     this.vaultLimit        = options.vaultLimit        ?? 512
+    this.vaultGrowthRate   = options.vaultGrowthRate   ?? 1.5
+    this.vaultShrinkRate   = options.vaultShrinkRate   ?? 0.75
     this.vaultStoreThresh  = options.vaultStoreThresh  ?? 0.42
     this.vaultActivThresh  = options.vaultActivThresh  ?? 0.62
     this.vaultRetrThresh   = options.vaultRetrThresh   ?? 0.35
+    this.reinforceLimit    = options.reinforceLimit    ?? 50
 
     this.field = {
       signature: 0, continuity: 0, coherence: 0,
@@ -134,7 +139,7 @@ export class CELF_Engine_AI_V5 {
 
     for (const [id, cap] of this.hexVault) {
       if (cap.source.checksum === checksum) {
-        cap.reinforcement   = (cap.reinforcement ?? 0) + 0.08
+        cap.reinforcement   = Math.min((cap.reinforcement ?? 0) + 0.08, 10.0)
         cap.version         = (cap.version ?? 1) + 1
         cap.lastResonance   = this.field.resonance
         cap.previousHash    = cap.currentHash
@@ -274,6 +279,60 @@ export class CELF_Engine_AI_V5 {
     for (const [id] of toDelete) this.hexVault.delete(id)
   }
 
+  #adaptVaultSize() {
+    const caps      = [...this.hexVault.values()]
+    const avgR      = caps.reduce((a, c) => a + (c.reinforcement ?? 0), 0) / Math.max(caps.length, 1)
+    const fillRatio = this.hexVault.size / this.vaultLimit
+
+    if (fillRatio > 0.90 && avgR > 0.5) {
+      this.vaultLimit = Math.min(Math.floor(this.vaultLimit * this.vaultGrowthRate), this.vaultMax)
+      return
+    }
+    if (fillRatio < 0.40 && avgR < 0.2) {
+      this.vaultLimit = Math.max(Math.floor(this.vaultLimit * this.vaultShrinkRate), this.vaultMin)
+    }
+  }
+
+  retrieveRaw(query, queryVector) {
+    const result = this.retrieveCapsule(query, queryVector)
+    if (!result) return null
+
+    const cap        = result.capsule
+    const breakdown  = this.#scoreBreakdown(cap, queryVector)
+
+    return {
+      compressed:     cap.source.compressed,
+      score:          this.round4(result.score),
+      capsuleId:      cap.id,
+      phiOrbit:       this.round4(cap.phiOrbit),
+      projectedOrbit: this.round4(cap.projectedOrbit ?? cap.phiOrbit),
+      reinforcement:  this.round4(cap.reinforcement ?? 0),
+      phase:          cap.phase,
+      version:        cap.version ?? 1,
+      enriched:       cap.enriched ?? false,
+      scoreBreakdown: breakdown
+    }
+  }
+
+  #scoreBreakdown(cap, queryVector) {
+    const orbit         = this.#activeOrbit(cap)
+    const similarity    = queryVector?.length ? this.cosineSimilarity(queryVector, cap.semanticVector) : 0
+    const reinforcement = this.clamp01((cap.reinforcement ?? 0) / 10)
+    const phiAlignment  = this.clamp01(Math.abs(Math.sin((cap.phiOrbit * 1.618033988749895) % Math.PI)))
+    const orbitDist     = Math.abs(((orbit - this.field.signature + this.cycle) % this.cycle))
+    const orbitScore    = this.clamp01(1 - Math.min(orbitDist, this.cycle - orbitDist) / (this.cycle * 0.5))
+    const integrity     = (cap.source.sealed && cap.source.persistent) ? 1.0 : 0.0
+
+    return {
+      similarity:    this.round4(similarity),
+      orbitScore:    this.round4(orbitScore),
+      phiAlignment:  this.round4(phiAlignment),
+      reinforcement: this.round4(reinforcement),
+      integrity:     this.round4(integrity),
+      weights: { similarity: 0.40, orbitScore: 0.20, phiAlignment: 0.15, reinforcement: 0.15, integrity: 0.10 }
+    }
+  }
+
   // ═══════════════════════════════════════════════════════════════
   //  CAPSULE REPROJECTION LAYER
   //  phiOrbit        ← DNA ثابت للأبد — لا يُمس
@@ -306,17 +365,17 @@ export class CELF_Engine_AI_V5 {
       const D   = this.manifoldDimensions
       const v   = cap.semanticVector
       if (v?.length) {
-        const cx  = Math.min(Math.abs(Math.floor((v[0] ?? 0) * (D - 1))), D - 1)
-        const cy  = Math.min(Math.abs(Math.floor((v[1] ?? 0) * (D - 1))), D - 1)
+        const { cx, cy } = this.#vectorToManifoldCoords(v, D)
         const idx = cx * D + cy
         this.field.manifold[idx] = this.clamp01(
           (this.field.manifold[idx] ?? 0) + 0.012 * Math.min(1, cap.reinforcement ?? 0)
         )
       }
     }
+
+    this.#adaptVaultSize()
   }
 
-  // helper — يُعيد الـ orbit الفعّال للاسترجاع والتفعيل
   #activeOrbit(cap) {
     return cap.projectedOrbit ?? cap.phiOrbit
   }
@@ -1038,12 +1097,21 @@ export class CELF_Engine_AI_V5 {
     return radius
   }
 
+  #vectorToManifoldCoords(vector, D) {
+    const cx = Math.abs(
+      Math.floor(vector.reduce((a, b, i) => a + b * (i + 1), 0) * (D - 1))
+    ) % D
+    const cy = Math.abs(
+      Math.floor(vector.reduce((a, b, i) => a + b * (D - i), 0) * (D - 1))
+    ) % D
+    return { cx, cy }
+  }
+
   updateManifold(perturbation) {
     const vec    = perturbation.semantic.vector
     const D      = this.manifoldDimensions
     const sw     = perturbation.sourceWeight ?? 1.0
-    const cx     = Math.min(Math.abs(Math.floor((vec[0] ?? 0) * (D - 1))), D - 1)
-    const cy     = Math.min(Math.abs(Math.floor((vec[1] ?? 0) * (D - 1))), D - 1)
+    const { cx, cy } = this.#vectorToManifoldCoords(vec, D)
     const radius = Math.max(1, Math.floor(2 + this.field.semanticCoherence * 4))
 
     for (let dx = -radius; dx <= radius; dx++) {
@@ -1061,12 +1129,11 @@ export class CELF_Engine_AI_V5 {
 
     const lastMem = this.field.semanticMemory.at(-2)
     if (lastMem?.vector) {
-      const bx = Math.min(Math.abs(Math.floor((lastMem.vector[0] ?? 0) * (D - 1))), D - 1)
-      const by = Math.min(Math.abs(Math.floor((lastMem.vector[1] ?? 0) * (D - 1))), D - 1)
+      const { cx: bx, cy: by } = this.#vectorToManifoldCoords(lastMem.vector, D)
       for (let s = 1; s <= 4; s++) {
         const lx   = Math.round(bx + (cx - bx) * s / 4)
         const ly   = Math.round(by + (cy - by) * s / 4)
-        const lidx = lx * D + ly
+        const lidx = ((lx % D + D) % D) * D + ((ly % D + D) % D)
         this.field.manifold[lidx] = this.clamp01((this.field.manifold[lidx] ?? 0) + 0.008 * sw)
       }
     }
@@ -1492,6 +1559,8 @@ export class CELF_Engine_AI_V5 {
       attractorCount: this.state.attractors.length,
       archiveSize:    this.state.archive.length,
       vaultSize:      this.hexVault.size,
+      vaultLimit:     this.vaultLimit,
+      vaultFillRatio: this.round4(this.hexVault.size / this.vaultLimit),
       signal: {
         localization:     this.field.localization,
         coherenceRadius:  this.field.coherenceRadius,
