@@ -178,13 +178,13 @@ export class CELF_Engine_AI_V5 {
 
   shouldActivateCapsule(capsule) {
     const phi   = 1.618033988749895
-    const orbit = capsule.phiOrbit
+    const orbit = this.#activeOrbit(capsule)   // projectedOrbit ?? phiOrbit
 
     const orbitDist  = Math.abs(((orbit - this.field.signature + this.cycle) % this.cycle))
     const orbitAlign = this.clamp01(1 - Math.min(orbitDist, this.cycle - orbitDist) / (this.cycle * 0.5))
 
     const phiAlignment = this.clamp01(
-      Math.abs(Math.sin((orbit * phi) % Math.PI))
+      Math.abs(Math.sin((capsule.phiOrbit * phi) % Math.PI))  // phiOrbit الأصلي للـ DNA
     )
 
     const need = this.clamp01(this.field.intentPressure * 0.5 + this.field.recallPotential * 0.5)
@@ -214,12 +214,13 @@ export class CELF_Engine_AI_V5 {
     for (const [id, cap] of this.hexVault) {
       if (!cap.source?.sealed) continue
 
+      const orbit          = this.#activeOrbit(cap)   // projectedOrbit ?? phiOrbit
       const similarity     = this.cosineSimilarity(queryVector, cap.semanticVector)
       const reinforcement  = this.clamp01((cap.reinforcement ?? 0) / 10)
       const phiAlignment   = this.clamp01(
-        Math.abs(Math.sin((cap.phiOrbit * 1.618033988749895) % Math.PI))
+        Math.abs(Math.sin((cap.phiOrbit * 1.618033988749895) % Math.PI))  // DNA الأصلي
       )
-      const orbitDist      = Math.abs(((cap.phiOrbit - this.field.signature + this.cycle) % this.cycle))
+      const orbitDist      = Math.abs(((orbit - this.field.signature + this.cycle) % this.cycle))
       const orbitScore     = this.clamp01(1 - Math.min(orbitDist, this.cycle - orbitDist) / (this.cycle * 0.5))
       const integrity      = (cap.source.sealed && cap.source.persistent) ? 1.0 : 0.0
 
@@ -247,6 +248,17 @@ export class CELF_Engine_AI_V5 {
         cap.attached = true
         active.push({ ...cap, _activationScore: true })
         cap.attached = false
+
+        // ── Local Field Perturbation ────────────────────────────
+        // الكبسولة تترك أثراً دلالياً عند تفعيلها
+        // semanticTrace فقط — لا p، لا pressure، لا conserveMass
+        const idx = this.thetaToIndex(this.#activeOrbit(cap))
+        const w   = this.clamp01((cap.reinforcement ?? 0) * 0.004)
+        for (let r = 0; r < this.ringCount; r++) {
+          this.rings[r][idx].semanticTrace = this.clamp01(
+            (this.rings[r][idx].semanticTrace ?? 0) + w
+          )
+        }
       }
     }
     return active
@@ -263,8 +275,53 @@ export class CELF_Engine_AI_V5 {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  //  CORE ENGINE PROCESS
+  //  CAPSULE REPROJECTION LAYER
+  //  phiOrbit        ← DNA ثابت للأبد — لا يُمس
+  //  projectedOrbit  ← موقع حي يتطور مع الحقل
   // ═══════════════════════════════════════════════════════════════
+
+  reprojectVault() {
+    const threshold = this.cycle * 0.25  // 90 درجة — حد الانجراف
+
+    for (const [, cap] of this.hexVault) {
+
+      // الموقع الحالي المستخدم للمقارنة
+      const currentOrbit = cap.projectedOrbit ?? cap.phiOrbit
+
+      // المسافة الدائرية بين الموقع الحالي والـ signature الجديد
+      const drift    = Math.abs(((currentOrbit - this.field.signature + this.cycle) % this.cycle))
+      const cirDrift = Math.min(drift, this.cycle - drift)
+
+      // فقط إذا الانجراف تجاوز العتبة
+      if (cirDrift < threshold) continue
+
+      // إسقاط تدريجي — لا قفزة مفاجئة
+      // phiOrbit الأصلي لا يُمس أبداً
+      cap.projectedOrbit = this.containTheta(
+        currentOrbit             * 0.85 +   // الموقع السابق يحتفظ بـ 85%
+        this.field.signature     * 0.15      // الحقل الجديد يؤثر 15%
+      )
+
+      // الكبسولة تترك أثراً في موقعها الجديد على الـ manifold
+      const D   = this.manifoldDimensions
+      const v   = cap.semanticVector
+      if (v?.length) {
+        const cx  = Math.min(Math.abs(Math.floor((v[0] ?? 0) * (D - 1))), D - 1)
+        const cy  = Math.min(Math.abs(Math.floor((v[1] ?? 0) * (D - 1))), D - 1)
+        const idx = cx * D + cy
+        this.field.manifold[idx] = this.clamp01(
+          (this.field.manifold[idx] ?? 0) + 0.012 * Math.min(1, cap.reinforcement ?? 0)
+        )
+      }
+    }
+  }
+
+  // helper — يُعيد الـ orbit الفعّال للاسترجاع والتفعيل
+  #activeOrbit(cap) {
+    return cap.projectedOrbit ?? cap.phiOrbit
+  }
+
+
 
   process(input, options = {}) {
     this._metricsCache     = null
@@ -816,6 +873,15 @@ export class CELF_Engine_AI_V5 {
     else if (m.pressure > 0.45 || m.fieldCurvature > 0.45 || this.field.intentPressure > 0.60)   phase = 'metastable'
 
     this.state.phase = phase
+
+    // ── Capsule Reprojection — عند الاستقرار فقط ─────────────────
+    if (
+      (phase === 'locked' || phase === 'stable') &&
+      this.hexVault.size > 0 &&
+      this.state.cycleCount % 5 === 0
+    ) {
+      this.reprojectVault()
+    }
   }
 
   updateFieldIdentity() {
@@ -1306,10 +1372,11 @@ export class CELF_Engine_AI_V5 {
       return {
         items,
         vaultHit: {
-          compressed:    vaultResult.capsule.source.compressed,
-          score:         this.round4(vaultResult.score),
-          phiOrbit:      this.round4(vaultResult.capsule.phiOrbit),
-          reinforcement: vaultResult.capsule.reinforcement ?? 0
+          compressed:     vaultResult.capsule.source.compressed,
+          score:          this.round4(vaultResult.score),
+          phiOrbit:       this.round4(vaultResult.capsule.phiOrbit),
+          projectedOrbit: this.round4(vaultResult.capsule.projectedOrbit ?? vaultResult.capsule.phiOrbit),
+          reinforcement:  vaultResult.capsule.reinforcement ?? 0
         }
       }
     }
@@ -1564,24 +1631,26 @@ export class CELF_Engine_AI_V5 {
 
     if (vaultResult) {
       vaultCapsules.push({
-        compressed:    vaultResult.capsule.source.compressed,
-        score:         this.round4(vaultResult.score),
-        phiOrbit:      this.round4(vaultResult.capsule.phiOrbit),
-        reinforcement: vaultResult.capsule.reinforcement ?? 0,
-        phase:         vaultResult.capsule.phase,
-        version:       vaultResult.capsule.version ?? 1
+        compressed:     vaultResult.capsule.source.compressed,
+        score:          this.round4(vaultResult.score),
+        phiOrbit:       this.round4(vaultResult.capsule.phiOrbit),
+        projectedOrbit: this.round4(vaultResult.capsule.projectedOrbit ?? vaultResult.capsule.phiOrbit),
+        reinforcement:  vaultResult.capsule.reinforcement ?? 0,
+        phase:          vaultResult.capsule.phase,
+        version:        vaultResult.capsule.version ?? 1
       })
     }
 
     for (const cap of (this.getActiveCapsules?.() ?? []).slice(0, 3)) {
       if (!vaultCapsules.find(v => v.compressed === cap.source?.compressed)) {
         vaultCapsules.push({
-          compressed:        cap.source?.compressed,
-          score:             0,
-          phiOrbit:          this.round4(cap.phiOrbit ?? 0),
-          reinforcement:     cap.reinforcement ?? 0,
-          phase:             cap.phase,
-          version:           cap.version ?? 1,
+          compressed:     cap.source?.compressed,
+          score:          0,
+          phiOrbit:       this.round4(cap.phiOrbit ?? 0),
+          projectedOrbit: this.round4(cap.projectedOrbit ?? cap.phiOrbit ?? 0),
+          reinforcement:  cap.reinforcement ?? 0,
+          phase:          cap.phase,
+          version:        cap.version ?? 1,
           activeByResonance: true
         })
       }
