@@ -1,27 +1,35 @@
-// ═══════════════════════════════════════════════════════════════
-//  context-builder.js — CELF Frame Builder
-//  المبدأ: CELF لا يلمس السؤال — يتحكم فقط في ما حوله
-// ═══════════════════════════════════════════════════════════════
-
 const FILLERS = new Set([
   'the','and','or','but','is','are','was','were','a','an','in','on','at','to','for',
   'ich','bin','ein','eine','der','die','das','und','wie','mit','von','auf','bei','für',
   'هل','في','من','على','مع','هو','هي','كان','لا','أو','و','ما','هذا','ذلك'
 ])
 
-// ── أدوات مساعدة ────────────────────────────────────────────────
+const MIN_ROUTE_SCORE = 0.25
+const MIN_VAULT_SCORE = 0.55
+const MAX_MEMORY_TOPICS = 3
+const MAX_TOPIC_WORDS = 10
 
-function semanticCompress(text, maxWords = 10) {
-  const cleaned = String(text ?? '').replace(/`[\s\S]*?`/g, '').trim()
-  const words   = cleaned.split(/\s+/).filter(w => w.length > 2 && !FILLERS.has(w.toLowerCase()))
+function semanticCompress(text, maxWords = MAX_TOPIC_WORDS) {
+  const cleaned = String(text ?? '')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/`[\s\S]*?`/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  const words = cleaned
+    .split(/\s+/)
+    .map(w => w.trim())
+    .filter(w => w.length > 2 && !FILLERS.has(w.toLowerCase()))
+
   return words.slice(0, maxWords).join(' ')
 }
 
 function validateRouteItem(item) {
   return (
+    item &&
     typeof item.score === 'number' &&
-    item.score >= 0.25 &&
-    typeof item.text  === 'string' &&
+    item.score >= MIN_ROUTE_SCORE &&
+    typeof item.text === 'string' &&
     item.text.trim().length > 5
   )
 }
@@ -29,87 +37,115 @@ function validateRouteItem(item) {
 function mapIntent(celfResult) {
   const s = celfResult?.perturbation?.semantic
   if (!s) return 'statement'
-  if (s.question)       return 'question'
-  if (s.intent?.execute)return 'command'
-  if (s.error)          return 'complaint'
-  if (s.emotional)      return 'emotional'
+  if (s.question) return 'question'
+  if (s.intent?.execute) return 'command'
+  if (s.error) return 'complaint'
+  if (s.emotional) return 'emotional'
   return 'statement'
 }
 
 function detectLang(signals) {
   const lang = signals?.lang ?? 'en'
-  if (lang === 'ar')    return 'ar'
-  if (lang === 'de')    return 'de'
+  if (lang === 'ar') return 'ar'
+  if (lang === 'de') return 'de'
   if (lang === 'mixed') return 'mixed'
   return lang ?? 'en'
 }
 
-// ── Layer 1: System Instruction ─────────────────────────────────
-// تُحوّل حالة CELF الرقمية إلى تعليمات مباشرة يفهمها الـ LLM
+function clamp01(v) {
+  const n = Number(v)
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0
+}
+
+function pickPrimaryMode({ er, continuity, novelty, drift, comp, phase }) {
+  const scores = {
+    code: er * 0.65 + continuity * 0.25 + (1 - drift) * 0.10,
+    fresh: novelty * 0.65 + (1 - continuity) * 0.25 + drift * 0.10,
+    direct: comp * 0.45 + continuity * 0.40 + (1 - novelty) * 0.15,
+    continue: continuity * 0.55 + (1 - novelty) * 0.25 + (phase === 'locked' ? 0.20 : 0),
+    reset: drift * 0.70 + novelty * 0.20 + (1 - continuity) * 0.10,
+    clarify: phase === 'turbulent' ? 1 : drift * 0.35 + (1 - continuity) * 0.20
+  }
+
+  return Object.entries(scores).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'balanced'
+}
 
 function buildSystemInstruction(celfResult, fieldPrompt, lang) {
-  const phase      = celfResult?.phase                           ?? 'warmup'
-  const continuity = Number(fieldPrompt?.continuity              ?? 0)
-  const novelty    = Number(celfResult?.field?.noveltyPressure   ?? 0)
-  const er         = Number(celfResult?.field?.executionReadiness?? 0)
-  const drift      = Number(fieldPrompt?.drift                   ?? 0)
-  const comp       = Number(celfResult?.field?.compressionPressure?? 0)
+  const phase = celfResult?.phase ?? 'warmup'
+  const continuity = clamp01(fieldPrompt?.continuity ?? 0)
+  const novelty = clamp01(celfResult?.field?.noveltyPressure ?? 0)
+  const er = clamp01(celfResult?.field?.executionReadiness ?? 0)
+  const drift = clamp01(fieldPrompt?.drift ?? celfResult?.field?.drift ?? 0)
+  const comp = clamp01(celfResult?.field?.compressionPressure ?? 0)
 
-  // ── اللغة ──────────────────────────────────────────────────
   const langLine = {
-    ar:    'أجب باللغة العربية.',
-    en:    'Reply in English.',
-    de:    'Antworte auf Deutsch.',
+    ar: 'أجب باللغة العربية.',
+    en: 'Reply in English.',
+    de: 'Antworte auf Deutsch.',
     mixed: 'أجب بنفس لغة المستخدم.'
   }[lang] ?? 'Reply in the user\'s language.'
 
-  // ── أسلوب الرد — من حالة الحقل ────────────────────────────
-  const style =
-    er > 0.6 && continuity > 0.5   ? 'اكتب كوداً كاملاً قابلاً للتشغيل. لا تختصر.'  :
-    novelty > 0.7 && continuity < 0.4 ? 'موضوع جديد كلياً. اشرح من الأساس.'          :
-    comp > 0.7 && continuity > 0.7  ? 'لا تعد الشرح. اذهب مباشرة للإجابة.'           :
-    continuity > 0.8 && novelty < 0.3 ? 'المستخدم يعرف ما سبق. كن مختصراً وتقنياً.' :
-    drift > 0.5                     ? 'الموضوع تغيّر. تجاهل السياق السابق وابدأ طازجاً.' :
-    phase === 'locked' && drift < 0.2 ? 'نحن في عمق الموضوع. ابقَ مركزاً بدون حيود.' :
-    phase === 'turbulent'           ? 'الموضوع غير واضح. اسأل عن المقصود إن لزم.'     :
-    null
+  const mode = pickPrimaryMode({ er, continuity, novelty, drift, comp, phase })
 
-  return [langLine, style].filter(Boolean).join('\n')
+  const modeLine = {
+    code: 'اكتب حلاً عملياً كاملاً عند الحاجة، ولا تختصر الكود المهم.',
+    fresh: 'موضوع جديد. اشرح من الأساس بدون افتراض سياق سابق.',
+    direct: 'اذهب مباشرة للإجابة بدون إعادة شرح ما سبق.',
+    continue: 'تابع من السياق السابق وحافظ على نفس خط النقاش.',
+    reset: 'الموضوع تغيّر. لا تعتمد على السياق السابق إلا إذا كان ضرورياً.',
+    clarify: 'إذا كان المقصود غير واضح، اسأل سؤالاً قصيراً قبل التفصيل.',
+    balanced: null
+  }[mode] ?? null
+
+  const styleLines = []
+
+  if (continuity > 0.7 && novelty < 0.45 && mode !== 'fresh' && mode !== 'reset') {
+    styleLines.push('لا تكرر المقدمة.')
+  }
+
+  if (er > 0.55) {
+    styleLines.push('كن تقنياً ودقيقاً.')
+  }
+
+  if (drift > 0.45 && mode !== 'reset') {
+    styleLines.push('تحقق من محور السؤال قبل استعمال الذاكرة.')
+  }
+
+  return [langLine, modeLine, ...styleLines].filter(Boolean).join('\n')
 }
-
-// ── Layer 2: Memory Layer ───────────────────────────────────────
-// يُحوّل ما استرجعه CELF من الذاكرة إلى سياق مقروء للـ LLM
 
 function buildMemoryLayer(memoryCard, vaultHit) {
   const lines = []
 
-  // من الـ Vault — أقوى ذاكرة طويلة الأمد
-  if (vaultHit?.compressed) {
-    lines.push(`[تحدثنا سابقاً] ${vaultHit.compressed}`)
+  if (vaultHit?.compressed && Number(vaultHit.score ?? 0) >= MIN_VAULT_SCORE) {
+    lines.push(`[سياق سابق محتمل] ${semanticCompress(vaultHit.compressed, 16)}`)
   }
 
-  // من الذاكرة قصيرة الأمد
-  if (memoryCard?.topics?.length) {
+  if (memoryCard?.topics?.length && memoryCard.confidence >= 0.35) {
     lines.push(`[السياق الحالي] ${memoryCard.topics.join(' — ')}`)
   }
 
   return lines.join('\n')
 }
 
-// ── Memory Card Builder ─────────────────────────────────────────
-// يبني بطاقة الذاكرة من routeContext
-
 function buildMemoryCard(routedContext = [], fieldPrompt = {}) {
   const valid = routedContext
     .filter(validateRouteItem)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 3)
+    .slice(0, MAX_MEMORY_TOPICS)
 
   if (!valid.length) return null
 
-  const topics = valid
-    .map(item => semanticCompress(item.text, 10))
-    .filter(Boolean)
+  const seen = new Set()
+  const topics = []
+
+  for (const item of valid) {
+    const topic = semanticCompress(item.text, MAX_TOPIC_WORDS)
+    const key = topic.toLowerCase()
+    if (!topic || seen.has(key)) continue
+    seen.add(key)
+    topics.push(topic)
+  }
 
   if (!topics.length) return null
 
@@ -117,32 +153,34 @@ function buildMemoryCard(routedContext = [], fieldPrompt = {}) {
 
   return {
     topics,
-    continuity:       fieldPrompt?.continuity  ?? 0,
-    semanticPressure: fieldPrompt?.pressure    ?? 'neutral',
-    zone:             fieldPrompt?.zone        ?? 'general',
-    confidence:       Math.round(avgScore * 1000) / 1000
+    continuity: clamp01(fieldPrompt?.continuity ?? 0),
+    semanticPressure: fieldPrompt?.pressure ?? 'neutral',
+    zone: fieldPrompt?.zone ?? 'general',
+    confidence: Math.round(avgScore * 1000) / 1000
   }
 }
 
-// ── Main Export ─────────────────────────────────────────────────
-
 export function build(adapterOutput) {
   const {
-    ok, signals, celfResult, passToLLM,
-    fieldPrompt, routedContext
+    ok,
+    signals,
+    celfResult,
+    passToLLM,
+    fieldPrompt,
+    routedContext
   } = adapterOutput
 
   if (!ok) {
     return {
-      passToLLM:  false,
-      reason:     'invalid_input',
-      context:    null,
+      passToLLM: false,
+      reason: 'invalid_input',
+      context: null,
       systemHint: null,
-      memoryCard: null
+      memoryCard: null,
+      vaultHit: null
     }
   }
 
-  // ── routeContext يُعيد array أو {items, vaultHit} ─────────
   const routeItems = Array.isArray(routedContext)
     ? routedContext
     : (routedContext?.items ?? [])
@@ -152,24 +190,26 @@ export function build(adapterOutput) {
     : (routedContext?.vaultHit ?? null)
 
   const intent = mapIntent(celfResult)
-  const lang   = detectLang(signals)
-  const phase  = celfResult?.phase ?? 'warmup'
-  const drift  = Number(celfResult?.field?.drift ?? 0)
+  const lang = detectLang(signals)
+  const phase = celfResult?.phase ?? 'warmup'
+  const drift = clamp01(celfResult?.field?.drift ?? fieldPrompt?.drift ?? 0)
 
   const context = {
-    lang, phase, intent, drift,
-    coherence:   Number(celfResult?.field?.coherence          ?? 0),
-    confidence:  Number(celfResult?.field?.semanticGrounding  ?? 0),
-    novelty:     Number(celfResult?.field?.noveltyPressure    ?? 0),
-    continuity:  Number(fieldPrompt?.continuity               ?? 0)
+    lang,
+    phase,
+    intent,
+    drift,
+    coherence: clamp01(celfResult?.field?.coherence ?? 0),
+    confidence: clamp01(celfResult?.field?.semanticGrounding ?? 0),
+    novelty: clamp01(celfResult?.field?.noveltyPressure ?? 0),
+    continuity: clamp01(fieldPrompt?.continuity ?? 0)
   }
 
-  // ── بناء طبقات الإطار ────────────────────────────────────
   const memoryCard = buildMemoryCard(routeItems, fieldPrompt)
 
   const systemHint = [
-    buildSystemInstruction(celfResult, fieldPrompt, lang),  // Layer 1
-    buildMemoryLayer(memoryCard, vaultHit)                  // Layer 2
+    buildSystemInstruction(celfResult, fieldPrompt, lang),
+    buildMemoryLayer(memoryCard, vaultHit)
   ].filter(Boolean).join('\n')
 
   return {
