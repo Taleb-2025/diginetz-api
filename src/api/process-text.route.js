@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
 //  process-text.route.js — CELF Frame Builder + Feedback Loop
 //  المبدأ: CELF لا يلمس السؤال — يتحكم في ما حوله ويقيس النتيجة
+//  Feedback Loop: يقيس التشابه الدلالي بين السؤال والرد
 // ═══════════════════════════════════════════════════════════════
 
 import express from 'express'
@@ -18,8 +19,8 @@ const MAX_TEXT_MAP    = 300
 const DEDUP_JACCARD_THRESHOLD = 0.72
 
 // ── عتبات الـ Feedback Loop ──────────────────────────────────────
-const COHERENCE_DROP_THRESHOLD = 0.25
-const DRIFT_INCREASE_THRESHOLD = 0.30
+const REPLY_RELEVANCE_THRESHOLD = 0.35   // أدنى تشابه مقبول بين السؤال والرد
+const FEEDBACK_TIME_BUDGET_MS   = 20000  // لا يُشغَّل إذا مضى أكثر من 20 ثانية
 
 const sessions         = new Map()
 const metricsStore     = new Map()
@@ -255,31 +256,35 @@ function buildHistoryLayer(history, continuity) {
 }
 
 // ── Feedback Loop ────────────────────────────────────────────────
-// CELF يقيس أثر الرد على الحقل ويُقرر إذا يحتاج تصحيح
+// يقيس التشابه الدلالي بين السؤال والرد
+// إذا الرد بعيد عن السؤال → CELF يطلب تصحيحاً
 
-function measureFieldDrop(fieldBefore, fieldAfter) {
-  const coherenceDrop = (fieldBefore.coherence  ?? 0) - (fieldAfter.continuity ?? 0)
-  const driftIncrease = (fieldAfter.drift        ?? 0) - (fieldBefore.drift     ?? 0)
+function measureReplyRelevance(engine, questionVector, reply) {
+  // CELF يقرأ الرد ويستخرج vector دلالي
+  const replySnapshot = engine.process(reply)
+  const replyVector   = replySnapshot?.perturbation?.semantic?.vector
+
+  if (!questionVector?.length || !replyVector?.length) {
+    return { similarity: 1, needsCorrection: false }
+  }
+
+  // قياس واحد فقط: هل الرد يتحدث عن نفس موضوع السؤال؟
+  const similarity = engine.cosineSimilarity(questionVector, replyVector)
 
   return {
-    coherenceDrop,
-    driftIncrease,
-    needsCorrection:
-      coherenceDrop > COHERENCE_DROP_THRESHOLD ||
-      driftIncrease > DRIFT_INCREASE_THRESHOLD
+    similarity:      Math.round(similarity * 1000) / 1000,
+    needsCorrection: similarity < REPLY_RELEVANCE_THRESHOLD
   }
 }
 
-function buildCorrectionHint(systemHint, memoryCard, fieldDrop) {
-  const reason = fieldDrop.driftIncrease > DRIFT_INCREASE_THRESHOLD
-    ? 'الرد السابق خرج عن الموضوع.'
-    : 'الرد السابق أضعف الترابط.'
-
+function buildCorrectionHint(systemHint, memoryCard, similarity) {
   const focus = memoryCard?.topics?.length
     ? `ركز على: ${memoryCard.topics.join(', ')}.`
-    : 'عد للموضوع الأصلي.'
+    : 'أجب عن السؤال مباشرة.'
 
-  return [systemHint, reason, focus].filter(Boolean).join('\n')
+  const reason = `الرد السابق بعيد عن الموضوع (تشابه: ${similarity}). ${focus}`
+
+  return [systemHint, reason].filter(Boolean).join('\n')
 }
 
 // ── HTTP Helpers ─────────────────────────────────────────────────
@@ -290,7 +295,7 @@ function checkPayload(systemHint, messages) {
   return size
 }
 
-async function fetchClaude(body, timeoutMs = 30000) {
+async function fetchClaude(body, timeoutMs = 50000) {
   const controller = new AbortController()
   const timer      = setTimeout(() => controller.abort(), timeoutMs)
   try {
@@ -357,7 +362,7 @@ router.get('/process-text', (_req, res) => {
     status:  'online',
     engine:  'CELF_Engine_AI_V5',
     llm:     'Claude Haiku 4.5',
-    version: '6.1'
+    version: '6.2'
   })
 })
 
@@ -376,7 +381,9 @@ router.post('/process-text', async (req, res) => {
   if (!hasText && !hasImage) return res.status(400).json({ error: 'missing_input' })
   if (hasImage && image.length > 5_000_000) return res.status(413).json({ error: 'image_too_large' })
 
-  const sid = sessionId || 'default'
+  const sid          = sessionId || 'default'
+  const requestStart = Date.now()
+
   if (processingLock.has(sid)) return res.status(429).json({ error: 'request_in_progress', retry: true })
 
   processingLock.add(sid)
@@ -396,12 +403,9 @@ router.post('/process-text', async (req, res) => {
     const engine      = getEngine(sid)
     const fieldPrompt = engine.buildFieldPrompt?.() ?? null
 
-    // ── لقطة الحقل قبل الرد ──────────────────────────────────
-    const fieldBefore = {
-      coherence:  Number(processed.celfResult.field?.coherence ?? 0),
-      drift:      Number(processed.celfResult.field?.drift     ?? 0),
-      continuity: Number(fieldPrompt?.continuity               ?? 0)
-    }
+    // ── Vector السؤال — للـ Feedback Loop ────────────────────
+    const questionVector = processed.result
+      ?.perturbation?.semantic?.vector ?? null
 
     // ── Inline Code Detection ─────────────────────────────────
     const structIndex = indexStore?.get(sid) ?? null
@@ -485,6 +489,7 @@ router.post('/process-text', async (req, res) => {
     let inputTokensTotal  = 0
     let outputTokensTotal = 0
     let feedbackTriggered = false
+    let replyRelevance    = null
 
     try {
       const claudeResponse = await fetchClaude({
@@ -520,24 +525,33 @@ router.post('/process-text', async (req, res) => {
 
       // ═══════════════════════════════════════════════════════
       //  Feedback Loop
-      //  CELF يقرأ الرد → يقيس الحقل → يصحح إن انجرف
+      //  يقيس: هل الرد يتحدث عن نفس موضوع السؤال؟
+      //  الأداة: cosineSimilarity(questionVector, replyVector)
+      //  يُشغَّل فقط إذا: نص + وقت كافٍ + vector موجود
       // ═══════════════════════════════════════════════════════
-      if (reply && !hasImage) {
-        engine.process(reply)
-        const fieldAfter = engine.buildFieldPrompt?.() ?? {}
-        const fieldDrop  = measureFieldDrop(fieldBefore, fieldAfter)
+      const elapsedMs    = Date.now() - requestStart
+      const canFeedback  = reply &&
+                           !hasImage &&
+                           questionVector?.length &&
+                           elapsedMs < FEEDBACK_TIME_BUDGET_MS
 
-        if (fieldDrop.needsCorrection) {
+      if (canFeedback) {
+        const relevance = measureReplyRelevance(engine, questionVector, reply)
+        replyRelevance  = relevance.similarity
+
+        if (relevance.needsCorrection) {
           feedbackTriggered = true
 
-          const correctedHint = buildCorrectionHint(systemHint, built.memoryCard, fieldDrop)
+          const correctedHint = buildCorrectionHint(
+            systemHint, built.memoryCard, relevance.similarity
+          )
 
           const retryResponse = await fetchClaude({
             model,
             max_tokens: maxTokens,
             system:     correctedHint,
             messages
-          })
+          }, 20000)
 
           const retryData = await retryResponse.json()
           const retryText = retryData?.content?.[0]?.text
@@ -546,7 +560,6 @@ router.post('/process-text', async (req, res) => {
             reply              = retryText
             inputTokensTotal  += retryData?.usage?.input_tokens  ?? 0
             outputTokensTotal += retryData?.usage?.output_tokens ?? 0
-            engine.process(retryText)
           }
         }
       }
@@ -564,8 +577,8 @@ router.post('/process-text', async (req, res) => {
     if (reply) {
       const analysis = analyze({
         reply,
-        fieldBefore,
-        fieldAfter: engine.buildFieldPrompt?.() ?? {}
+        fieldBefore: processed.celfResult.field,
+        fieldAfter:  engine.buildFieldPrompt?.() ?? {}
       })
       analysisStore.set(sid, analysis)
     }
@@ -583,6 +596,7 @@ router.post('/process-text', async (req, res) => {
       continuity,
       phase:            processed.celfResult.phase ?? 'warmup',
       feedbackTriggered,
+      replyRelevance,
       updatedAt:        new Date().toISOString()
     })
 
@@ -604,6 +618,7 @@ router.post('/process-text', async (req, res) => {
         inlineCode:       codeBlocks.length > 0,
         payloadSize,
         feedbackTriggered,
+        replyRelevance,   // ← درجة التشابه بين السؤال والرد
         truncated:        hasText && text.length > MAX_INPUT_CHARS
       }
     })
