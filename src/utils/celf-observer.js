@@ -175,9 +175,8 @@ export function observe({
   noiseRemoved = false,
   includeHints = true
 }) {
-  // CELF يقرأ الجواب داخلياً — لا API call
-  const replySnapshot = engine.process(replyText)
-  const replyVector   = replySnapshot?.perturbation?.semantic?.vector ?? null
+  // engine.semanticVector() هو المسار الصحيح في CELF_Engine_AI_V5
+  const replyVector = engine.semanticVector?.(replyText) ?? null
 
   // القياسات
   const relevance        = measureRelevance(engine, questionVector, replyVector)
