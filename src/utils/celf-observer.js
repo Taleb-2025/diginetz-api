@@ -5,23 +5,47 @@
 //  البنية:
 //  observations     ← للمستخدم يقرأ   (نص متحفظ)
 //  diagnostics      ← للنظام يتتبع   (labels + booleans)
-//  nextQuestionHints← اختيارية       (مشتقة من gaps)
+//  nextQuestionHints← اختيارية       (مشتقة من gaps حقيقية فقط)
 // ═══════════════════════════════════════════════════════════════
 
+// ── كلمات تُحذف من التحليل ──────────────────────────────────────
+
+// حروف وصلة وأدوات شائعة
 const FILLERS = new Set([
   'the','and','or','but','is','are','was','were','a','an','in','on','at','to','for',
   'ich','bin','ein','eine','der','die','das','und','wie','mit','von','auf','bei','für',
   'هل','في','من','على','مع','هو','هي','كان','لا','أو','و','ما','هذا','ذلك'
 ])
 
-// ── استخراج المصطلحات الرئيسية ──────────────────────────────────
+// كلمات أسلوب — تصف كيفية الشرح لا موضوعه
+// لا تُحسب في coverage لأنها ليست مصطلحات محتوى
+const STYLE_WORDS = new Set([
+  // عربي
+  'بطريقة','طريقة','بشكل','شكل','دقيقة','دقيق','علمية','علمي',
+  'مفصلة','مفصل','بسيطة','بسيط','واضحة','واضح','شاملة','شامل',
+  'سريعة','سريع','موجزة','موجز','عملية','عملي','نظرية','نظري',
+  'كاملة','كامل','محددة','محدد','صحيحة','صحيح','احترافية','احترافي',
+  // english
+  'detailed','scientific','simple','clear','brief','quick','full',
+  'accurate','correct','proper','exact','precise','complete','practical',
+  'theoretical','comprehensive','concise','professional','technical',
+  // deutsch
+  'genau','einfach','detailliert','wissenschaftlich','klar','kurz',
+  'vollständig','praktisch','theoretisch','präzise','korrekt'
+])
+
+// ── استخراج مصطلحات المحتوى فقط ────────────────────────────────
 
 function extractKeyTerms(text) {
   return String(text ?? '')
     .toLowerCase()
     .split(/\s+/)
-    .filter(w => w.length > 3 && !FILLERS.has(w))
-    .map(w => w.replace(/[.,!?؟،:]/g, ''))
+    .filter(w =>
+      w.length > 3 &&
+      !FILLERS.has(w) &&
+      !STYLE_WORDS.has(w)   // ← يستبعد كلمات الأسلوب
+    )
+    .map(w => w.replace(/[.,!?؟،:؛]/g, ''))
     .filter(Boolean)
 }
 
@@ -57,8 +81,7 @@ function measureMemoryContinuity(engine, replyVector) {
   return similarities.length ? Math.max(...similarities) : null
 }
 
-// ── confidence label ─────────────────────────────────────────────
-// نص يصف لا رقم يوحي بدقة
+// ── Labels ───────────────────────────────────────────────────────
 
 function confidenceLabel(relevance, coverageRatio) {
   if (relevance === null || coverageRatio === null) return 'unknown'
@@ -69,30 +92,28 @@ function confidenceLabel(relevance, coverageRatio) {
   return 'unclear'
 }
 
-// ── diagnostics labels ───────────────────────────────────────────
-
 function relevanceLabel(r) {
-  if (r === null)  return 'unknown'
-  if (r >= 0.70)   return 'high'
-  if (r >= 0.40)   return 'moderate'
+  if (r === null) return 'unknown'
+  if (r >= 0.70)  return 'high'
+  if (r >= 0.40)  return 'moderate'
   return 'low'
 }
 
 function coverageLabel(r) {
-  if (r === null)  return 'unknown'
-  if (r >= 0.80)   return 'full'
-  if (r >= 0.50)   return 'partial'
+  if (r === null) return 'unknown'
+  if (r >= 0.80)  return 'full'
+  if (r >= 0.50)  return 'partial'
   return 'limited'
 }
 
 function continuityLabel(c) {
-  if (c === null)  return 'unknown'
-  if (c >= 0.65)   return 'consistent'
-  if (c <= 0.25)   return 'new-topic'
+  if (c === null) return 'unknown'
+  if (c >= 0.65)  return 'consistent'
+  if (c <= 0.25)  return 'new-topic'
   return 'related'
 }
 
-// ── observations — نص متحفظ للمستخدم ────────────────────────────
+// ── Observations — نص متحفظ للمستخدم ────────────────────────────
 
 function buildObservations(relevance, coverage, memoryContinuity) {
   const lines = []
@@ -133,12 +154,13 @@ function buildObservations(relevance, coverage, memoryContinuity) {
   return lines
 }
 
-// ── nextQuestionHints — مشتقة من gaps فقط ───────────────────────
-// حقائق لا استنتاجات — "يمكنك" لا "يجب"
+// ── nextQuestionHints — من gaps حقيقية فقط ──────────────────────
 
 function buildNextQuestionHints(missing) {
   if (!missing?.length) return []
-  return missing
+  // فقط إذا المصطلح المفقود يبدو كمحتوى حقيقي لا كلمة أسلوب
+  const meaningful = missing.filter(t => t.length > 4)
+  return meaningful
     .slice(0, 3)
     .map(term => `يمكنك السؤال عن "${term}" بالتفصيل.`)
 }
@@ -153,7 +175,7 @@ export function observe({
   noiseRemoved = false,
   includeHints = true
 }) {
-  // CELF يقرأ الجواب
+  // CELF يقرأ الجواب داخلياً — لا API call
   const replySnapshot = engine.process(replyText)
   const replyVector   = replySnapshot?.perturbation?.semantic?.vector ?? null
 
@@ -175,7 +197,7 @@ export function observe({
       noiseRemoved
     },
 
-    // ── اختيارية — مشتقة من gaps ───────────────────────────
+    // ── اختيارية — من gaps محتوى فقط ────────────────────────
     nextQuestionHints: includeHints
       ? buildNextQuestionHints(coverage?.missing)
       : []
