@@ -1,17 +1,17 @@
 // ═══════════════════════════════════════════════════════════════
-//  process-text.route.js — CELF Observer Architecture
-//  المبدأ:
-//  1. CELF ينظف السؤال (شفاف)
-//  2. LLM يجيب بحرية كاملة
-//  3. CELF يحلل الجواب → ملاحظات للمستخدم
+//  process-text.route.js — v7.2
+//  الجديد:
+//  - Style TTL Store: تعليمات الأسلوب تُطبَّق N مرات ثم تُنسى
+//  - Similarity-based context injection
+//  - Style instruction filter من history
 // ═══════════════════════════════════════════════════════════════
 
-import express        from 'express'
+import express from 'express'
 import { CELF_Engine_AI_V5 } from '../engines/celf-engine-v5.js'
-import { parse }      from '../utils/lightweight-parser.js'
-import { build, cleanInput } from '../utils/context-builder.js'
-import { observe }    from '../utils/celf-observer.js'
-import { indexStore } from './index-code.route.js'
+import { parse }             from '../utils/lightweight-parser.js'
+import { build, cleanInput, filterStyleInstructions, detectStyleInstruction } from '../utils/context-builder.js'
+import { observe }           from '../utils/celf-observer.js'
+import { indexStore }        from './index-code.route.js'
 
 const router = express.Router()
 
@@ -24,12 +24,7 @@ const sessions         = new Map()
 const metricsStore     = new Map()
 const processingLock   = new Set()
 const semanticTextMaps = new Map()
-
-const FILLERS = new Set([
-  'the','and','or','but','is','are','was','were','a','an','in','on','at','to','for',
-  'ich','bin','ein','eine','der','die','das','und','wie','mit','von','auf','bei','für',
-  'هل','في','من','على','مع','هو','هي','كان','لا','أو','و','ما','هذا','ذلك'
-])
+const styleStore       = new Map()   // ← جديد: sid → { style, ttl }
 
 const TECH_KEYWORDS = {
   frameworks: ['fastapi','django','flask','express','nestjs','react','vue','spring'],
@@ -38,6 +33,29 @@ const TECH_KEYWORDS = {
   concepts:   ['caching','pooling','rate limiting','authentication','websocket',
                'async','optimization','deployment','monitoring','scaling','latency',
                'performance','connection','middleware','routing','security']
+}
+
+const FILLERS = new Set([
+  'the','and','or','but','is','are','was','were','a','an','in','on','at','to','for',
+  'ich','bin','ein','eine','der','die','das','und','wie','mit','von','auf','bei','für',
+  'هل','في','من','على','مع','هو','هي','كان','لا','أو','و','ما','هذا','ذلك'
+])
+
+// ── Style TTL Management ─────────────────────────────────────────
+
+function setStyle(sid, style, ttl) {
+  styleStore.set(sid, { style, ttl })
+}
+
+function getAndTickStyle(sid) {
+  const entry = styleStore.get(sid)
+  if (!entry) return null
+  if (entry.ttl <= 0) {
+    styleStore.delete(sid)
+    return null
+  }
+  entry.ttl--
+  return entry.style
 }
 
 // ── أدوات مساعدة ────────────────────────────────────────────────
@@ -65,8 +83,7 @@ function jaccardSimilarity(textA, textB) {
   let overlap = 0
   for (const w of setA) if (setB.has(w)) overlap++
   return (setA.size + setB.size - overlap) > 0
-    ? overlap / (setA.size + setB.size - overlap)
-    : 0
+    ? overlap / (setA.size + setB.size - overlap) : 0
 }
 
 function detectCodeBlocks(text) {
@@ -82,8 +99,9 @@ function detectCodeBlocks(text) {
       /^(import|export|const|let|var|function|class|async)\s/m,
       /=>\s*\{/, /\bthis\.\w+\s*=/, /^\s{2,}(const|let|var|return|if|for)\s/m
     ]
-    const looksLikeCode = codeSignals.filter(p => p.test(text)).length >= 2
-    if (looksLikeCode && text.length > 50 && text.length < 20000) blocks.push(text)
+    if (codeSignals.filter(p => p.test(text)).length >= 2 &&
+        text.length > 50 && text.length < 20000)
+      blocks.push(text)
   }
   return blocks
 }
@@ -99,6 +117,7 @@ function getEngine(sessionId) {
     const oldest = sessions.keys().next().value
     sessions.delete(oldest)
     semanticTextMaps.delete(oldest)
+    styleStore.delete(oldest)
   }
   const engine = new CELF_Engine_AI_V5({
     resolution: 120, ringCount: 3, cycle: 360,
@@ -127,11 +146,11 @@ function feed(sessionId, text) {
   const engine   = getEngine(sessionId)
   const snapshot = engine.process(text)
 
-  const field      = snapshot.field        ?? {}
-  const metrics    = snapshot.metrics      ?? {}
-  const control    = snapshot.control      ?? {}
+  const field        = snapshot.field        ?? {}
+  const metrics      = snapshot.metrics      ?? {}
+  const control      = snapshot.control      ?? {}
   const perturbation = snapshot.perturbation ?? {}
-  const attractors = snapshot.attractors   ?? []
+  const attractors   = snapshot.attractors   ?? []
 
   const coherence  = Number(field.coherence        ?? 0)
   const resonance  = Number(field.resonance         ?? 0)
@@ -146,10 +165,7 @@ function feed(sessionId, text) {
   return {
     ok: true, passToLLM, signals,
     result: snapshot,
-    celfResult: {
-      phase: snapshot.phase, t: snapshot.t,
-      field, metrics, control, perturbation, attractors
-    }
+    celfResult: { phase: snapshot.phase, t: snapshot.t, field, metrics, control, perturbation, attractors }
   }
 }
 
@@ -224,11 +240,15 @@ function compressAssistantMessage(content) {
 
 function buildHistoryLayer(history, continuity) {
   if (continuity < 0.65) return []
-  const clean = history
+
+  const filtered = filterStyleInstructions(history)
+  const clean    = filtered
     .filter(h => h && (h.role === 'user' || h.role === 'assistant') &&
       typeof h.content === 'string' && h.content.length > 0)
     .slice(-4)
+
   if (clean.length < 2) return []
+
   return clean.map(h => ({
     role:    h.role,
     content: h.role === 'assistant'
@@ -306,9 +326,8 @@ router.get('/process-text', (_req, res) => {
   res.json({
     ok: true, status: 'online',
     engine: 'CELF_Engine_AI_V5',
-    llm: 'Claude Haiku 4.5',
-    version: '7.0',
-    architecture: 'observer'
+    llm:    'Claude Haiku 4.5',
+    version: '7.2'
   })
 })
 
@@ -330,20 +349,28 @@ router.post('/process-text', async (req, res) => {
   processingLock.add(sid)
 
   try {
-    // ═══════════════════════════════════════════════════════════
-    //  المرحلة 1: تنظيف السؤال — شفاف للمستخدم
-    // ═══════════════════════════════════════════════════════════
-    const rawText   = hasText && text.length > MAX_INPUT_CHARS
+    // ── تنظيف السؤال ─────────────────────────────────────────
+    const rawText      = hasText && text.length > MAX_INPUT_CHARS
       ? text.slice(0, MAX_INPUT_CHARS) + '\n\n[... truncated ...]'
       : text
-
     const cleanedText  = hasText ? cleanInput(rawText) : rawText
     const noiseRemoved = hasText && cleanedText !== rawText
     const inputText    = cleanedText || '(image)'
 
-    // ═══════════════════════════════════════════════════════════
-    //  المرحلة 2: CELF يعالج السؤال داخلياً
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════
+    //  Style TTL — استخراج وتخزين
+    // ══════════════════════════════════════════════════════════
+    if (hasText) {
+      const styleDetected = detectStyleInstruction(cleanedText)
+      if (styleDetected) {
+        setStyle(sid, styleDetected.style, styleDetected.ttl)
+      }
+    }
+
+    // activeStyle: اقرأ وانقص TTL
+    const activeStyle = getAndTickStyle(sid)
+
+    // ── CELF يعالج ───────────────────────────────────────────
     const processed = feed(sid, inputText)
     if (!processed.ok) return res.status(422).json({ error: processed.reason || 'processing_failed' })
 
@@ -353,8 +380,16 @@ router.post('/process-text', async (req, res) => {
     const engine      = getEngine(sid)
     const fieldPrompt = engine.buildFieldPrompt?.() ?? null
 
-    // vector السؤال — للـ Observer لاحقاً
-    const questionVector = processed.result?.perturbation?.semantic?.vector ?? null
+    // ── Similarity مع السؤال السابق ──────────────────────────
+    const questionVector   = processed.result?.perturbation?.semantic?.vector ?? null
+    const semanticMemory   = engine.field?.semanticMemory ?? []
+    const prevVector       = semanticMemory.length >= 2 ? semanticMemory.at(-2)?.vector : null
+    const questionSimilarity = (questionVector && prevVector)
+      ? engine.cosineSimilarity(questionVector, prevVector)
+      : null
+
+    const textMap       = semanticTextMaps.get(sid)
+    const lastTopicText = textMap?.get(tValue - 1)?.text ?? null
 
     // ── Inline Code Detection ─────────────────────────────────
     const structIndex = indexStore?.get(sid) ?? null
@@ -373,32 +408,26 @@ router.post('/process-text', async (req, res) => {
     const routedContext = enrichRouteContext(routeItems, sid)
     const routeConf     = calcRouteConfidence(routedContext)
 
-    // ═══════════════════════════════════════════════════════════
-    //  المرحلة 3: بناء الإطار — لغة + ذاكرة خام فقط
-    // ═══════════════════════════════════════════════════════════
+    // ── Build Frame ───────────────────────────────────────────
     const built = build({
-      ok:           true,
-      signals:      processed.signals,
-      celfResult:   processed.celfResult,
-      passToLLM:    processed.passToLLM,
-      routedContext: vaultHit ? { items: routedContext, vaultHit } : routedContext
+      ok:                true,
+      signals:           processed.signals,
+      celfResult:        processed.celfResult,
+      passToLLM:         processed.passToLLM,
+      routedContext:     vaultHit ? { items: routedContext, vaultHit } : routedContext,
+      questionSimilarity,
+      lastTopicText,
+      activeStyle        // ← Style TTL
     })
 
-    if (built.blocked) {
-      return res.status(422).json({ blocked: true, reason: 'semantic_constraint' })
-    }
+    if (built.blocked) return res.status(422).json({ blocked: true, reason: 'semantic_constraint' })
+    if (!built.passToLLM && !hasImage) return res.json({ reply: null, skippedLLM: true, reason: 'weak_semantic_field' })
 
-    if (!built.passToLLM && !hasImage) {
-      return res.json({ reply: null, skippedLLM: true, reason: 'weak_semantic_field' })
-    }
-
-    const systemHint = built.systemHint ?? ''
+    const systemHint = built.systemHint ?? null
     const continuity = built.context?.continuity ?? 0
     const maxTokens  = 4096
 
-    // ═══════════════════════════════════════════════════════════
-    //  المرحلة 4: LLM يرى السؤال الصافي — بدون تقييد
-    // ═══════════════════════════════════════════════════════════
+    // ── Messages ──────────────────────────────────────────────
     const userContent     = hasImage
       ? [
           { type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } },
@@ -406,7 +435,8 @@ router.post('/process-text', async (req, res) => {
         ]
       : cleanedText
 
-    const historyMessages = hasImage ? [] : buildHistoryLayer(history, continuity)
+    const filteredHistory = filterStyleInstructions(history)
+    const historyMessages = hasImage ? [] : buildHistoryLayer(filteredHistory, continuity)
     const messages        = [
       ...historyMessages,
       { role: 'user', content: hasImage ? userContent : cleanedText }
@@ -419,11 +449,11 @@ router.post('/process-text', async (req, res) => {
       return res.status(413).json({ error: 'prompt_too_large', detail: e.message })
     }
 
-    // Model selection
     const cogTarget = engine.buildCognitiveTarget?.(cleanedText, structIndex)
     const useDeep   = cogTarget?._meta?.deepAnalysis === true
     const model     = useDeep ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001'
 
+    // ── Claude Call ───────────────────────────────────────────
     let claudeData
     let reply             = null
     let inputTokensTotal  = 0
@@ -432,21 +462,19 @@ router.post('/process-text', async (req, res) => {
     try {
       const claudeResponse = await fetchClaude({
         model, max_tokens: maxTokens,
-        system: systemHint,  // لغة + ذاكرة فقط
+        system:   systemHint,
         messages
       })
 
       claudeData = await claudeResponse.json()
 
-      if (!claudeResponse.ok) {
+      if (!claudeResponse.ok)
         throw new Error(`Claude error: ${claudeData?.error?.message ?? claudeResponse.status}`)
-      }
 
       reply             = claudeData?.content?.[0]?.text ?? null
       inputTokensTotal  = claudeData?.usage?.input_tokens  ?? 0
       outputTokensTotal = claudeData?.usage?.output_tokens ?? 0
 
-      // Continuation
       const MAX_CONTINUATIONS = 2
       let continuationCount   = 0
       while (reply && isTruncated(claudeData) && continuationCount < MAX_CONTINUATIONS) {
@@ -465,11 +493,8 @@ router.post('/process-text', async (req, res) => {
       throw err
     }
 
-    // ═══════════════════════════════════════════════════════════
-    //  المرحلة 5: CELF يحلل الجواب → ملاحظات للمستخدم
-    // ═══════════════════════════════════════════════════════════
+    // ── Observer ──────────────────────────────────────────────
     let observerBox = null
-
     if (reply && !hasImage && questionVector?.length) {
       observerBox = observe({
         engine,
@@ -480,48 +505,44 @@ router.post('/process-text', async (req, res) => {
       })
     }
 
-    // Metrics
+    // ── Metrics ───────────────────────────────────────────────
     const costUSD = parseFloat(
       ((inputTokensTotal / 1_000_000) * 1.0 + (outputTokensTotal / 1_000_000) * 5.0).toFixed(6)
     )
 
     metricsStore.set(sid, {
-      sessionId:       sid,
-      inputTokens:     inputTokensTotal,
-      outputTokens:    outputTokensTotal,
-      totalTokens:     inputTokensTotal + outputTokensTotal,
-      costUSD,
-      maxTokens,
-      payloadSize,
-      routeConfidence: Math.round(routeConf * 1000) / 1000,
+      sessionId:          sid,
+      inputTokens:        inputTokensTotal,
+      outputTokens:       outputTokensTotal,
+      totalTokens:        inputTokensTotal + outputTokensTotal,
+      costUSD, maxTokens, payloadSize,
+      routeConfidence:    Math.round(routeConf * 1000) / 1000,
       continuity,
-      phase:           processed.celfResult.phase ?? 'warmup',
+      phase:              processed.celfResult.phase ?? 'warmup',
+      questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null,
+      activeStyle,
       noiseRemoved,
-      updatedAt:       new Date().toISOString()
+      updatedAt:          new Date().toISOString()
     })
 
-    // ═══════════════════════════════════════════════════════════
-    //  المرحلة 6: الرد + صندوق الملاحظات للمستخدم
-    // ═══════════════════════════════════════════════════════════
     return res.json({
       reply,
-
-      // ── صندوق الملاحظات ─────────────────────────────────────
       observer: observerBox,
-
       metrics: {
-        inputTokens:     inputTokensTotal,
-        outputTokens:    outputTokensTotal,
-        totalTokens:     inputTokensTotal + outputTokensTotal,
-        costUSD,
-        maxTokens,
-        routeConfidence: Math.round(routeConf * 1000) / 1000,
-        vaultHit:        vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null,
+        inputTokens:        inputTokensTotal,
+        outputTokens:       outputTokensTotal,
+        totalTokens:        inputTokensTotal + outputTokensTotal,
+        costUSD, maxTokens,
+        routeConfidence:    Math.round(routeConf * 1000) / 1000,
+        vaultHit:           vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null,
         model,
-        inlineCode:      codeBlocks.length > 0,
+        inlineCode:         codeBlocks.length > 0,
         payloadSize,
+        questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null,
+        activeStyle,        // ← هل يوجد style نشط؟
+        styleTtlRemaining:  styleStore.get(sid)?.ttl ?? 0,
         noiseRemoved,
-        truncated:       hasText && text.length > MAX_INPUT_CHARS
+        truncated:          hasText && text.length > MAX_INPUT_CHARS
       }
     })
 
@@ -551,6 +572,7 @@ router.delete('/session/:id', (req, res) => {
   sessions.delete(req.params.id)
   metricsStore.delete(req.params.id)
   semanticTextMaps.delete(req.params.id)
+  styleStore.delete(req.params.id)
   processingLock.delete(req.params.id)
   return res.json({ ok: true })
 })
