@@ -1,9 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
 //  process-text.route.js — v7.2
-//  الجديد:
-//  - Style TTL Store: تعليمات الأسلوب تُطبَّق N مرات ثم تُنسى
-//  - Similarity-based context injection
-//  - Style instruction filter من history
+//  إصلاح: system لا يُرسل لـ Claude إذا كان null
 // ═══════════════════════════════════════════════════════════════
 
 import express from 'express'
@@ -24,7 +21,7 @@ const sessions         = new Map()
 const metricsStore     = new Map()
 const processingLock   = new Set()
 const semanticTextMaps = new Map()
-const styleStore       = new Map()   // ← جديد: sid → { style, ttl }
+const styleStore       = new Map()
 
 const TECH_KEYWORDS = {
   frameworks: ['fastapi','django','flask','express','nestjs','react','vue','spring'],
@@ -41,7 +38,7 @@ const FILLERS = new Set([
   'هل','في','من','على','مع','هو','هي','كان','لا','أو','و','ما','هذا','ذلك'
 ])
 
-// ── Style TTL Management ─────────────────────────────────────────
+// ── Style TTL ────────────────────────────────────────────────────
 
 function setStyle(sid, style, ttl) {
   styleStore.set(sid, { style, ttl })
@@ -50,10 +47,7 @@ function setStyle(sid, style, ttl) {
 function getAndTickStyle(sid) {
   const entry = styleStore.get(sid)
   if (!entry) return null
-  if (entry.ttl <= 0) {
-    styleStore.delete(sid)
-    return null
-  }
+  if (entry.ttl <= 0) { styleStore.delete(sid); return null }
   entry.ttl--
   return entry.style
 }
@@ -263,6 +257,7 @@ function checkPayload(systemHint, messages) {
   return size
 }
 
+// ✅ إصلاح: system لا يُرسل إذا كان null أو فارغ
 async function fetchClaude(body, timeoutMs = 50000) {
   const controller = new AbortController()
   const timer      = setTimeout(() => controller.abort(), timeoutMs)
@@ -280,6 +275,15 @@ async function fetchClaude(body, timeoutMs = 50000) {
   } finally {
     clearTimeout(timer)
   }
+}
+
+// ✅ بناء Claude body بدون system إذا كان null
+function buildClaudeBody(model, maxTokens, systemHint, messages) {
+  const body = { model, max_tokens: maxTokens, messages }
+  if (systemHint && String(systemHint).trim()) {
+    body.system = String(systemHint).trim()
+  }
+  return body
 }
 
 function isTruncated(claudeData) {
@@ -308,15 +312,14 @@ async function continuationCall(currentText, partialReply, systemHint, timeoutMs
     ? 'continue exactly from where you stopped — complete the open code block, do not repeat what was already written'
     : 'continue exactly from where you stopped — do not repeat what was already written'
 
-  const response = await fetchClaude({
-    model, max_tokens: 4096, system: systemHint,
-    messages: [
-      { role: 'user',      content: currentText },
-      { role: 'assistant', content: partialReply },
-      { role: 'user',      content: continuePrompt }
-    ]
-  }, timeoutMs)
+  // ✅ إصلاح: system لا يُرسل إذا كان null
+  const body = buildClaudeBody(model, 4096, systemHint, [
+    { role: 'user',      content: currentText },
+    { role: 'assistant', content: partialReply },
+    { role: 'user',      content: continuePrompt }
+  ])
 
+  const response = await fetchClaude(body, timeoutMs)
   return await response.json()
 }
 
@@ -357,20 +360,14 @@ router.post('/process-text', async (req, res) => {
     const noiseRemoved = hasText && cleanedText !== rawText
     const inputText    = cleanedText || '(image)'
 
-    // ══════════════════════════════════════════════════════════
-    //  Style TTL — استخراج وتخزين
-    // ══════════════════════════════════════════════════════════
+    // ── Style TTL ─────────────────────────────────────────────
     if (hasText) {
       const styleDetected = detectStyleInstruction(cleanedText)
-      if (styleDetected) {
-        setStyle(sid, styleDetected.style, styleDetected.ttl)
-      }
+      if (styleDetected) setStyle(sid, styleDetected.style, styleDetected.ttl)
     }
-
-    // activeStyle: اقرأ وانقص TTL
     const activeStyle = getAndTickStyle(sid)
 
-    // ── CELF يعالج ───────────────────────────────────────────
+    // ── CELF ──────────────────────────────────────────────────
     const processed = feed(sid, inputText)
     if (!processed.ok) return res.status(422).json({ error: processed.reason || 'processing_failed' })
 
@@ -380,7 +377,7 @@ router.post('/process-text', async (req, res) => {
     const engine      = getEngine(sid)
     const fieldPrompt = engine.buildFieldPrompt?.() ?? null
 
-    // ── Similarity مع السؤال السابق ──────────────────────────
+    // ── Similarity ────────────────────────────────────────────
     const questionVector   = processed.result?.perturbation?.semantic?.vector ?? null
     const semanticMemory   = engine.field?.semanticMemory ?? []
     const prevVector       = semanticMemory.length >= 2 ? semanticMemory.at(-2)?.vector : null
@@ -391,7 +388,7 @@ router.post('/process-text', async (req, res) => {
     const textMap       = semanticTextMaps.get(sid)
     const lastTopicText = textMap?.get(tValue - 1)?.text ?? null
 
-    // ── Inline Code Detection ─────────────────────────────────
+    // ── Inline Code ───────────────────────────────────────────
     const structIndex = indexStore?.get(sid) ?? null
     const codeBlocks  = detectCodeBlocks(cleanedText)
     if (codeBlocks.length > 0 && structIndex) {
@@ -417,13 +414,13 @@ router.post('/process-text', async (req, res) => {
       routedContext:     vaultHit ? { items: routedContext, vaultHit } : routedContext,
       questionSimilarity,
       lastTopicText,
-      activeStyle        // ← Style TTL
+      activeStyle
     })
 
     if (built.blocked) return res.status(422).json({ blocked: true, reason: 'semantic_constraint' })
     if (!built.passToLLM && !hasImage) return res.json({ reply: null, skippedLLM: true, reason: 'weak_semantic_field' })
 
-    const systemHint = built.systemHint ?? null
+    const systemHint = built.systemHint  // قد يكون null — سيُعالَج في buildClaudeBody
     const continuity = built.context?.continuity ?? 0
     const maxTokens  = 4096
 
@@ -453,18 +450,18 @@ router.post('/process-text', async (req, res) => {
     const useDeep   = cogTarget?._meta?.deepAnalysis === true
     const model     = useDeep ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001'
 
-    // ── Claude Call ───────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════
+    //  ✅ إصلاح: buildClaudeBody لا يُرسل system إذا كان null
+    // ═══════════════════════════════════════════════════════════
     let claudeData
     let reply             = null
     let inputTokensTotal  = 0
     let outputTokensTotal = 0
 
     try {
-      const claudeResponse = await fetchClaude({
-        model, max_tokens: maxTokens,
-        system:   systemHint,
-        messages
-      })
+      const claudeResponse = await fetchClaude(
+        buildClaudeBody(model, maxTokens, systemHint, messages)
+      )
 
       claudeData = await claudeResponse.json()
 
@@ -511,10 +508,10 @@ router.post('/process-text', async (req, res) => {
     )
 
     metricsStore.set(sid, {
-      sessionId:          sid,
-      inputTokens:        inputTokensTotal,
-      outputTokens:       outputTokensTotal,
-      totalTokens:        inputTokensTotal + outputTokensTotal,
+      sessionId: sid,
+      inputTokens: inputTokensTotal,
+      outputTokens: outputTokensTotal,
+      totalTokens: inputTokensTotal + outputTokensTotal,
       costUSD, maxTokens, payloadSize,
       routeConfidence:    Math.round(routeConf * 1000) / 1000,
       continuity,
@@ -539,7 +536,7 @@ router.post('/process-text', async (req, res) => {
         inlineCode:         codeBlocks.length > 0,
         payloadSize,
         questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null,
-        activeStyle,        // ← هل يوجد style نشط؟
+        activeStyle,
         styleTtlRemaining:  styleStore.get(sid)?.ttl ?? 0,
         noiseRemoved,
         truncated:          hasText && text.length > MAX_INPUT_CHARS
