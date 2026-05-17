@@ -1,7 +1,10 @@
 // ═══════════════════════════════════════════════════════════════
-//  context-builder.js — CELF Frame Builder
-//  المبدأ: LLM يرى السؤال الصافي فقط
-//  لا تعليمات — لا توجيه أسلوب — لغة + ذاكرة خام فقط
+//  context-builder.js — v7.2
+//
+//  systemHint يُبنى من ثلاث طبقات:
+//  1. context injection  (similarity-based)
+//  2. vault hit          (memory)
+//  3. style hint         (TTL-based)
 // ═══════════════════════════════════════════════════════════════
 
 const FILLERS = new Set([
@@ -9,6 +12,17 @@ const FILLERS = new Set([
   'ich','bin','ein','eine','der','die','das','und','wie','mit','von','auf','bei','für',
   'هل','في','من','على','مع','هو','هي','كان','لا','أو','و','ما','هذا','ذلك'
 ])
+
+// ── Style TTL Store (per session) ───────────────────────────────
+// يُدار من الـ Route — يُمرَّر هنا للبناء فقط
+
+const STYLE_HINTS = {
+  concise:  'أجب بإيجاز.',
+  detailed: 'أجب بتفصيل كامل.',
+  arabic:   'أجب باللغة العربية.',
+  english:  'Reply in English.',
+  german:   'Antworte auf Deutsch.'
+}
 
 // ── أدوات مساعدة ────────────────────────────────────────────────
 
@@ -20,8 +34,8 @@ function semanticCompress(text, maxWords = 10) {
 
 function validateRouteItem(item) {
   return (
-    typeof item.score  === 'number' && item.score >= 0.25 &&
-    typeof item.text   === 'string' && item.text.trim().length > 5
+    typeof item.score === 'number' && item.score >= 0.25 &&
+    typeof item.text  === 'string' && item.text.trim().length > 5
   )
 }
 
@@ -44,25 +58,50 @@ function detectLang(signals) {
 }
 
 // ── تنظيف السؤال ────────────────────────────────────────────────
-// يحذف Noise والتكرار فقط — لا يمس المحتوى
 
 export function cleanInput(text) {
   let cleaned = String(text ?? '').trim()
-
-  // حذف تكرار الكلمات المتتالية
   cleaned = cleaned.replace(/\b(\w+)\s+\1\b/gi, '$1')
-
-  // حذف تكرار علامات الترقيم
-  cleaned = cleaned.replace(/([!?.]){3,}/g, '$1')
-
-  // حذف whitespace زائد
+  cleaned = cleaned.replace(/([!?.،]){3,}/g, '$1')
   cleaned = cleaned.replace(/\s{2,}/g, ' ').trim()
-
   return cleaned
 }
 
-// ── بناء الذاكرة الخام ──────────────────────────────────────────
-// حقائق فقط — لا استنتاجات
+// ── Style Instruction Detection ──────────────────────────────────
+// يُحدد إذا الرسالة تعليمة أسلوب — ويُرجع style + ttl
+
+export function detectStyleInstruction(text) {
+  const t     = String(text ?? '').trim()
+  const words = t.split(/\s+/).length
+
+  // رسالة قصيرة أسلوبية فقط (أقل من 10 كلمات)
+  if (words > 10) return null
+
+  if (/أجب\s*مختصر|موجز|باختصار|كن\s*وجيز/i.test(t))
+    return { style: 'concise', ttl: 3 }
+
+  if (/بالتفصيل|مفصل|اشرح\s*كامل|comprehensive|detailed/i.test(t))
+    return { style: 'detailed', ttl: 3 }
+
+  if (/brief(ly)?|concise|short\s*answer/i.test(t))
+    return { style: 'concise', ttl: 3 }
+
+  if (/kurz|knapp/i.test(t))
+    return { style: 'concise', ttl: 3 }
+
+  return null
+}
+
+// ── تصفية تعليمات الأسلوب من History ────────────────────────────
+
+export function filterStyleInstructions(history) {
+  return history.filter(h => {
+    if (h.role !== 'user') return true
+    return !detectStyleInstruction(h.content)
+  })
+}
+
+// ── بناء Memory Card ─────────────────────────────────────────────
 
 function buildMemoryCard(routedContext = []) {
   const valid = routedContext
@@ -79,16 +118,35 @@ function buildMemoryCard(routedContext = []) {
   return topics.length ? { topics } : null
 }
 
-function buildMemoryLayer(memoryCard, vaultHit) {
-  const lines = []
+// ── systemHint Builder ───────────────────────────────────────────
 
-  if (vaultHit?.compressed)
-    lines.push(`[سبق] ${vaultHit.compressed}`)
+function buildSystemHint({ similarity, lastTopicText, vaultHit, activeStyle }) {
+  const parts = []
 
-  if (memoryCard?.topics?.length)
-    lines.push(`[سياق] ${memoryCard.topics.join(' — ')}`)
+  // ── Layer 1: Context Injection ───────────────────────────────
+  if (similarity !== null && similarity > 0.80 && lastTopicText) {
+    parts.push(`[متابعة عن: ${lastTopicText}]`)
+  }
 
-  return lines.join('\n')
+  // ── Layer 2: Vault Hit ───────────────────────────────────────
+  if (vaultHit?.compressed) {
+    parts.push(`[سبق] ${vaultHit.compressed}`)
+  }
+
+  // ── Layer 3: Style TTL ───────────────────────────────────────
+  if (activeStyle && STYLE_HINTS[activeStyle]) {
+    parts.push(STYLE_HINTS[activeStyle])
+  }
+
+  // بعيد جداً — امسح الـ context لكن احتفظ بالـ style
+  if (similarity !== null && similarity < 0.30) {
+    const styleOnly = activeStyle && STYLE_HINTS[activeStyle]
+      ? [STYLE_HINTS[activeStyle]]
+      : []
+    return styleOnly.length ? styleOnly.join('\n') : null
+  }
+
+  return parts.length ? parts.join('\n') : null
 }
 
 // ── Main Export ─────────────────────────────────────────────────
@@ -96,17 +154,14 @@ function buildMemoryLayer(memoryCard, vaultHit) {
 export function build(adapterOutput) {
   const {
     ok, signals, celfResult, passToLLM,
-    routedContext
+    routedContext,
+    questionSimilarity = null,
+    lastTopicText      = null,
+    activeStyle        = null
   } = adapterOutput
 
   if (!ok) {
-    return {
-      passToLLM:  false,
-      reason:     'invalid_input',
-      context:    null,
-      systemHint: null,
-      memoryCard: null
-    }
+    return { passToLLM: false, systemHint: null, memoryCard: null, context: null }
   }
 
   const routeItems = Array.isArray(routedContext)
@@ -119,31 +174,22 @@ export function build(adapterOutput) {
 
   const intent = mapIntent(celfResult)
   const lang   = detectLang(signals)
-  const phase  = celfResult?.phase ?? 'warmup'
 
   const context = {
-    lang, phase, intent,
-    coherence:  Number(celfResult?.field?.coherence        ?? 0),
-    confidence: Number(celfResult?.field?.semanticGrounding?? 0),
-    novelty:    Number(celfResult?.field?.noveltyPressure  ?? 0),
-    continuity: Number(celfResult?.field?.continuity       ?? 0)
+    lang, intent,
+    continuity:  Number(celfResult?.field?.continuity ?? 0),
+    similarity:  questionSimilarity,
+    activeStyle
   }
 
-  // ── اللغة فقط — أدنى تدخل ────────────────────────────────
-  const langLine = {
-    ar:    'أجب باللغة العربية.',
-    en:    'Reply in English.',
-    de:    'Antworte auf Deutsch.',
-    mixed: 'أجب بنفس لغة المستخدم.'
-  }[lang] ?? 'Reply in the user\'s language.'
-
-  // ── ذاكرة خام — حقائق لا تعليمات ────────────────────────
   const memoryCard = buildMemoryCard(routeItems)
-  const memoryLayer = buildMemoryLayer(memoryCard, vaultHit)
 
-  // ── systemHint: لغة + ذاكرة فقط ─────────────────────────
-  const systemHint = [langLine, memoryLayer]
-    .filter(Boolean).join('\n')
+  const systemHint = buildSystemHint({
+    similarity:    questionSimilarity,
+    lastTopicText,
+    vaultHit,
+    activeStyle
+  })
 
   return {
     passToLLM,
