@@ -379,6 +379,7 @@ router.post('/process-text', async (req, res) => {
 
     // ── Similarity ────────────────────────────────────────────
     const questionVector   = processed.result?.perturbation?.semantic?.vector ?? null
+    console.log('CELF vector length:', questionVector?.length ?? 'NULL')
     const semanticMemory   = engine.field?.semanticMemory ?? []
     const prevVector       = semanticMemory.length >= 2 ? semanticMemory.at(-2)?.vector : null
     const questionSimilarity = (questionVector && prevVector)
@@ -388,12 +389,16 @@ router.post('/process-text', async (req, res) => {
     const textMap = semanticTextMaps.get(sid)
 
     // ── lastTopicText مع fallback من history ─────────────────
-    // يعمل حتى بعد server restart
+    // يستخدم السؤال السابق لا الحالي (الحالي آخر عنصر في history)
+    const userMsgs    = (history ?? []).filter(h => h.role === 'user')
+    const prevUserMsg = userMsgs.length >= 2
+      ? userMsgs[userMsgs.length - 2]
+      : null
+
     const lastTopicText =
       textMap?.get(tValue - 1)?.text
-      ?? (history.findLast?.(h => h.role === 'user')
-          ?.content?.split(/\s+/).slice(0, 8).join(' ')
-          ?? null)
+      ?? prevUserMsg?.content?.split(/\s+/).slice(0, 8).join(' ')
+      ?? null
 
     // ── Inline Code ───────────────────────────────────────────
     const structIndex = indexStore?.get(sid) ?? null
