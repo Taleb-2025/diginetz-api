@@ -526,6 +526,19 @@ router.post('/process-text', async (req, res) => {
     return res.json({
       reply,
       observer: observerBox,
+
+      debug: {
+        systemHint,
+        messageCount:       messages.length,
+        historyCount:       historyMessages.length,
+        questionSimilarity: questionSimilarity !== null
+          ? Math.round(questionSimilarity * 100) / 100
+          : null,
+        activeStyle,
+        lastTopicText,
+        vaultHitUsed:       !!vaultHit?.compressed
+      },
+
       metrics: {
         inputTokens:        inputTokensTotal,
         outputTokens:       outputTokensTotal,
