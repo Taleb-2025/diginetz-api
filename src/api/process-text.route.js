@@ -512,7 +512,8 @@ router.post('/process-text', async (req, res) => {
         questionText:   cleanedText,
         questionVector,
         replyText:      reply,
-        noiseRemoved
+        noiseRemoved,
+        lang:           processed.signals?.lang ?? 'en'
       })
     }
 
