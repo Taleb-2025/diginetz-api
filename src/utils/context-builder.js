@@ -1,10 +1,14 @@
 // ═══════════════════════════════════════════════════════════════
-//  context-builder.js — v7.2
+//  context-builder.js — v7.3
 //
 //  systemHint يُبنى من ثلاث طبقات:
-//  1. context injection  (similarity-based)
+//  1. context injection  (similarity + short query)
 //  2. vault hit          (memory)
 //  3. style hint         (TTL-based)
+//
+//  إصلاح v7.3:
+//  السؤال القصير (≤3 كلمات) + سياق سابق
+//  → يُحقن السياق دائماً بغض النظر عن similarity
 // ═══════════════════════════════════════════════════════════════
 
 const FILLERS = new Set([
@@ -12,9 +16,6 @@ const FILLERS = new Set([
   'ich','bin','ein','eine','der','die','das','und','wie','mit','von','auf','bei','für',
   'هل','في','من','على','مع','هو','هي','كان','لا','أو','و','ما','هذا','ذلك'
 ])
-
-// ── Style TTL Store (per session) ───────────────────────────────
-// يُدار من الـ Route — يُمرَّر هنا للبناء فقط
 
 const STYLE_HINTS = {
   concise:  'أجب بإيجاز.',
@@ -68,13 +69,11 @@ export function cleanInput(text) {
 }
 
 // ── Style Instruction Detection ──────────────────────────────────
-// يُحدد إذا الرسالة تعليمة أسلوب — ويُرجع style + ttl
 
 export function detectStyleInstruction(text) {
   const t     = String(text ?? '').trim()
   const words = t.split(/\s+/).length
 
-  // رسالة قصيرة أسلوبية فقط (أقل من 10 كلمات)
   if (words > 10) return null
 
   if (/أجب\s*مختصر|موجز|باختصار|كن\s*وجيز/i.test(t))
@@ -118,32 +117,59 @@ function buildMemoryCard(routedContext = []) {
   return topics.length ? { topics } : null
 }
 
+// ── Context Injection ────────────────────────────────────────────
+//
+//  ثلاث حالات تستوجب الحقن:
+//
+//  1. سؤال قصير (≤3 كلمات) + سياق سابق
+//     "التجارب" → [في سياق: التشابك الكمومي]
+//     بغض النظر عن similarity
+//
+//  2. similarity > 0.80 + سياق سابق
+//     سؤال متابعة واضح
+//     [متابعة عن: X]
+//
+//  3. similarity 0.30-0.80 → vault hit فقط
+//
+//  4. similarity < 0.30 + سؤال طويل → لا حقن
+
+function buildContextLayer(text, similarity, lastTopicText) {
+  const wordCount = String(text ?? '').trim().split(/\s+/).length
+
+  // حالة 1: سؤال قصير جداً + سياق سابق
+  if (wordCount <= 3 && lastTopicText) {
+    return `[في سياق: ${lastTopicText}]`
+  }
+
+  // حالة 2: قريب جداً + سياق سابق
+  if (similarity !== null && similarity > 0.80 && lastTopicText) {
+    return `[متابعة عن: ${lastTopicText}]`
+  }
+
+  return null
+}
+
 // ── systemHint Builder ───────────────────────────────────────────
 
-function buildSystemHint({ similarity, lastTopicText, vaultHit, activeStyle }) {
+function buildSystemHint({ text, similarity, lastTopicText, vaultHit, activeStyle }) {
   const parts = []
 
   // ── Layer 1: Context Injection ───────────────────────────────
-  if (similarity !== null && similarity > 0.80 && lastTopicText) {
-    parts.push(`[متابعة عن: ${lastTopicText}]`)
-  }
+  const contextLayer = buildContextLayer(text, similarity, lastTopicText)
+  if (contextLayer) parts.push(contextLayer)
 
   // ── Layer 2: Vault Hit ───────────────────────────────────────
-  if (vaultHit?.compressed) {
+  // لا يُضاف إذا السؤال بعيد جداً وطويل (موضوع جديد حقيقي)
+  const wordCount = String(text ?? '').trim().split(/\s+/).length
+  const isTrulyNew = similarity !== null && similarity < 0.30 && wordCount > 3
+
+  if (!isTrulyNew && vaultHit?.compressed) {
     parts.push(`[سبق] ${vaultHit.compressed}`)
   }
 
   // ── Layer 3: Style TTL ───────────────────────────────────────
   if (activeStyle && STYLE_HINTS[activeStyle]) {
     parts.push(STYLE_HINTS[activeStyle])
-  }
-
-  // بعيد جداً — امسح الـ context لكن احتفظ بالـ style
-  if (similarity !== null && similarity < 0.30) {
-    const styleOnly = activeStyle && STYLE_HINTS[activeStyle]
-      ? [STYLE_HINTS[activeStyle]]
-      : []
-    return styleOnly.length ? styleOnly.join('\n') : null
   }
 
   return parts.length ? parts.join('\n') : null
@@ -155,6 +181,7 @@ export function build(adapterOutput) {
   const {
     ok, signals, celfResult, passToLLM,
     routedContext,
+    questionText       = '',
     questionSimilarity = null,
     lastTopicText      = null,
     activeStyle        = null
@@ -185,6 +212,7 @@ export function build(adapterOutput) {
   const memoryCard = buildMemoryCard(routeItems)
 
   const systemHint = buildSystemHint({
+    text:          questionText,        // ← النص الكامل للحكم على طوله
     similarity:    questionSimilarity,
     lastTopicText,
     vaultHit,
