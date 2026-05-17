@@ -378,7 +378,8 @@ router.post('/process-text', async (req, res) => {
     const fieldPrompt = engine.buildFieldPrompt?.() ?? null
 
     // ── Similarity ────────────────────────────────────────────
-    const questionVector   = processed.result?.perturbation?.semantic?.vector ?? null
+    // engine.semanticVector() هو المسار الصحيح في CELF_Engine_AI_V5
+    const questionVector = engine.semanticVector?.(cleanedText) ?? null
     console.log('CELF vector length:', questionVector?.length ?? 'NULL')
     const semanticMemory   = engine.field?.semanticMemory ?? []
     const prevVector       = semanticMemory.length >= 2 ? semanticMemory.at(-2)?.vector : null
