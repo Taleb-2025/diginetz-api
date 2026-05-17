@@ -412,6 +412,7 @@ router.post('/process-text', async (req, res) => {
       celfResult:        processed.celfResult,
       passToLLM:         processed.passToLLM,
       routedContext:     vaultHit ? { items: routedContext, vaultHit } : routedContext,
+      questionText:      cleanedText,    // ← للحكم على طول السؤال
       questionSimilarity,
       lastTopicText,
       activeStyle
