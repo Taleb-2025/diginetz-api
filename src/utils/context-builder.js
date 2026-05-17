@@ -138,12 +138,12 @@ function buildContextLayer(text, similarity, lastTopicText) {
 
   // حالة 1: سؤال قصير جداً + سياق سابق
   if (wordCount <= 3 && lastTopicText) {
-    return `[في سياق: ${lastTopicText}]`
+    return `[context: ${lastTopicText}]`
   }
 
-  // حالة 2: قريب جداً + سياق سابق
+  // case 2: high similarity + previous topic
   if (similarity !== null && similarity > 0.80 && lastTopicText) {
-    return `[متابعة عن: ${lastTopicText}]`
+    return `[follow-up on: ${lastTopicText}]`
   }
 
   return null
@@ -164,7 +164,7 @@ function buildSystemHint({ text, similarity, lastTopicText, vaultHit, activeStyl
   const isTrulyNew = similarity !== null && similarity < 0.30 && wordCount > 3
 
   if (!isTrulyNew && vaultHit?.compressed) {
-    parts.push(`[سبق] ${vaultHit.compressed}`)
+    parts.push(`[previously] ${vaultHit.compressed}`)
   }
 
   // ── Layer 3: Style TTL ───────────────────────────────────────
