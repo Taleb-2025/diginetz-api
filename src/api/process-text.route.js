@@ -385,8 +385,15 @@ router.post('/process-text', async (req, res) => {
       ? engine.cosineSimilarity(questionVector, prevVector)
       : null
 
-    const textMap       = semanticTextMaps.get(sid)
-    const lastTopicText = textMap?.get(tValue - 1)?.text ?? null
+    const textMap = semanticTextMaps.get(sid)
+
+    // ── lastTopicText مع fallback من history ─────────────────
+    // يعمل حتى بعد server restart
+    const lastTopicText =
+      textMap?.get(tValue - 1)?.text
+      ?? (history.findLast?.(h => h.role === 'user')
+          ?.content?.split(/\s+/).slice(0, 8).join(' ')
+          ?? null)
 
     // ── Inline Code ───────────────────────────────────────────
     const structIndex = indexStore?.get(sid) ?? null
