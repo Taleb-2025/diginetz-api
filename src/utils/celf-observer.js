@@ -1,39 +1,53 @@
 // ═══════════════════════════════════════════════════════════════
-//  celf-observer.js — v3.0
-//  Semantic Coverage بدلاً من Lexical Matching
-//
-//  التغيير الجذري:
-//  قبل: reply.includes(term)       ← lexical fragile
-//  بعد: cosine(termVector, replyVector) > threshold  ← semantic
+//  celf-observer.js — v4.0
+//  Concept Aliases + محسّن STYLE_WORDS
+//  القرار المعماري: Doc 11 أفضل لأن CELF vectors = hash-based
 // ═══════════════════════════════════════════════════════════════
 
 const FILLERS = new Set([
-  'the','and','or','but','is','are','was','were','a','an','in','on','at','to','for',
-  'ich','bin','ein','eine','der','die','das','und','wie','mit','von','auf','bei','für',
-  'هل','في','من','على','مع','هو','هي','كان','لا','أو','و','ما','هذا','ذلك'
+  'the','and','or','but','is','are','was','were','a','an','in','on','at','to','for','by','from','with','about','into','over',
+  'ich','bin','ein','eine','einer','eines','einem','der','die','das','den','dem','des','und','oder','aber','wie','mit','von','auf','bei','für','im','in','am','an','zu','zur','zum','über',
+  'هل','في','من','على','مع','هو','هي','كان','لا','أو','و','ما','هذا','ذلك','عن','إلى','الى','بـ','فيه','منه'
 ])
 
 const STYLE_WORDS = new Set([
-  // عربي — أسلوب وطلب
-  'بطريقة','طريقة','بشكل','شكل','دقيقة','دقيق','علمية','علمي',
-  'مفصلة','مفصل','بسيطة','بسيط','واضحة','واضح','شاملة','شامل',
-  'سريعة','سريع','موجزة','موجز','كاملة','كامل','احترافية','احترافي',
-  'اشرح','فسر','أشرح','اذكر','وضح','أوضح','أخبرني','حلل','أريد',
-  // deutsch — Stil und Anfrage
-  'genau','einfach','detailliert','wissenschaftlich','klar','kurz',
-  'vollständig','praktisch','theoretisch','präzise','ausführlich',
-  'kannst','erklären','erkläre','bitte','mehr','zeige','schreibe',
-  'mache','nenne','sag','beschreibe','definiere','was','ist','wie',
-  'warum','welche','welcher','wann','wer','gibt','können','biite',
-  'detaillierte','antwot','antwort',
-  // english — style and request
-  'detailed','scientific','simple','clear','brief','quick','full',
-  'accurate','correct','precise','complete','comprehensive','concise',
-  'please','explain','show','tell','give','describe','define',
-  'what','how','why','when','where','which','who','can','could'
+  // عربي — أسلوب
+  'بطريقة','طريقة','بشكل','شكل','دقيقة','دقيق','علمية','علمي','مفصلة','مفصل','بسيطة','بسيط','واضحة','واضح','شاملة','شامل','سريعة','سريع','موجزة','موجز','عملية','عملي','نظرية','نظري','كاملة','كامل','محددة','محدد','صحيحة','صحيح','احترافية','احترافي',
+  // عربي — طلب
+  'اشرح','فسر','أشرح','اذكر','وضح','أوضح','أخبرني','قارن','حلل','أريد','أعطني','ساعدني','هات',
+  // deutsch — Stil
+  'genau','einfach','detailliert','wissenschaftlich','klar','kurz','vollständig','praktisch','theoretisch','präzise','korrekt','ausführlich','genauer','detaillierte','verständliche','verständlich','einfache',
+  // deutsch — Anfrage
+  'kannst','erklären','erkläre','bitte','mehr','zeige','schreibe','mache','nenne','erklar','erklärung','biite','sag','beschreibe','definiere','zeig','nenn','was','ist','wie','warum','welche','welches','welcher','wann','wer','gibt','können','könntest',
+  // deutsch — Adjektive/Nomen die keine Konzepte sind
+  'antwort','antwot','beigetragen','entwicklung','neuer','neue','neues','konzepte','konzept','zusammenhang','unterschied','bedeutung','beispiel','ergebnis',
+  // english — style
+  'detailed','scientific','simple','clear','brief','quick','full','accurate','correct','proper','exact','precise','complete','comprehensive','concise','professional','technical',
+  // english — request
+  'please','explain','show','tell','give','describe','define','what','how','why','when','where','which','who','can','could','would','should','list','name','compare','analyze'
 ])
 
-// ── نصوص الملاحظات بكل لغة ────────────────────────────────────
+// ── Concept Aliases — مفاهيم متعددة اللغات ────────────────────────
+const CONCEPT_ALIASES = [
+  { id: 'quantum',            labels: { ar: 'الكم',               de: 'Quantum',                  en: 'quantum'              }, aliases: ['quantum','quanten','quantenmechanik','quantencomputer','qubit','qubits','كم','كمومي','كمومية'] },
+  { id: 'quantum_computing',  labels: { ar: 'الحوسبة الكمومية',  de: 'Quantum Computing',         en: 'quantum computing'    }, aliases: ['quantum computing','quantencomputer','quantencomputing','qubits','qubit','حاسوب كمومي','الحوسبة الكمومية','كمبيوتر كمومي'] },
+  { id: 'superposition',      labels: { ar: 'التراكب',            de: 'Superposition',             en: 'superposition'        }, aliases: ['superposition','überlagerung','ueberlagerung','تراكب','التراكب'] },
+  { id: 'entanglement',       labels: { ar: 'التشابك الكمومي',   de: 'Quantenverschränkung',      en: 'quantum entanglement' }, aliases: ['entanglement','verschränkung','verschraenkung','quantenverschränkung','تشابك','التشابك','التشابك الكمومي'] },
+  { id: 'double_slit',        labels: { ar: 'تجربة الشقين',      de: 'Doppelspalt-Experiment',    en: 'double-slit'          }, aliases: ['doppelspalt','doppelspalt-experiment','double slit','double-slit','شقين','الشقين','تجربة الشقين'] },
+  { id: 'measurement',        labels: { ar: 'مشكلة القياس',      de: 'Messproblem',               en: 'measurement problem'  }, aliases: ['messproblem','messung','measurement problem','measurement','قياس','القياس','مشكلة القياس'] },
+  { id: 'bell_theorem',       labels: { ar: 'مبرهنة بيل',        de: 'Bell-Theorem',              en: 'Bell theorem'         }, aliases: ['bell','bell theorem','bells theorem','bell-theorem','bell ungleichung','bell inequalities','مبرهنة بيل','بيل'] },
+  { id: 'interference',       labels: { ar: 'التداخل',            de: 'Interferenz',               en: 'interference'         }, aliases: ['interferenz','interference','تداخل','التداخل'] },
+  { id: 'decoherence',        labels: { ar: 'فقدان الترابط',     de: 'Dekohärenz',                en: 'decoherence'          }, aliases: ['dekoherenz','dekohärenz','decoherence','فقدان الترابط'] },
+  { id: 'photon',             labels: { ar: 'الفوتون',            de: 'Photon',                    en: 'photon'               }, aliases: ['photon','photonen','فوتون','الفوتون'] },
+  { id: 'electron',           labels: { ar: 'الإلكترون',          de: 'Elektron',                  en: 'electron'             }, aliases: ['electron','elektron','elektronen','إلكترون','الإلكترون'] },
+  { id: 'wave_function',      labels: { ar: 'دالة الموجة',       de: 'Wellenfunktion',            en: 'wave function'        }, aliases: ['wellenfunktion','wave function','wavefunction','دالة الموجة','الموجة الكمومية'] },
+  { id: 'cryptography',       labels: { ar: 'التشفير',            de: 'Kryptographie',             en: 'cryptography'         }, aliases: ['kryptographie','cryptography','verschlüsselung','encryption','تشفير','التشفير'] },
+  { id: 'machine_learning',   labels: { ar: 'تعلم الآلة',        de: 'Machine Learning',          en: 'machine learning'     }, aliases: ['machine learning','maschinelles lernen','ml','تعلم الآلة','تعلم آلي'] },
+  { id: 'neural_network',     labels: { ar: 'الشبكة العصبية',   de: 'Neuronales Netz',           en: 'neural network'       }, aliases: ['neural network','neuronales netz','neuronale netze','شبكة عصبية','الشبكة العصبية'] },
+  { id: 'algorithm',          labels: { ar: 'الخوارزمية',         de: 'Algorithmus',               en: 'algorithm'            }, aliases: ['algorithm','algorithmus','algorithmen','خوارزمية','الخوارزمية','خوارزميات'] }
+]
+
+// ── نصوص الملاحظات بكل لغة ────────────────────────────────────────
 const OBS = {
   ar: {
     relevanceHigh:  'لاحظت أن الجواب يبدو متعلقاً بسؤالك.',
@@ -41,9 +55,9 @@ const OBS = {
     relevanceLow:   'لاحظت أن الجواب قد لا يكون متعلقاً تماماً بسؤالك.',
     coverageFull:   'لاحظت أن الجواب غطى معظم ما طرحته.',
     coveragePart:   'لاحظت أن الجواب غطى جانباً من سؤالك.',
-    coverageMiss1:  t => `لاحظت أن "${t}" لم يظهر بوضوح في الجواب.`,
     coverageLow:    'لاحظت أن الجواب قد يكون جزئياً.',
-    coverageMiss2:  t => `لاحظت أن "${t}" لم يُتطرق إليه دلالياً.`,
+    coverageMiss1:  t => `لاحظت أن "${t}" لم يظهر بوضوح في الجواب.`,
+    coverageMiss2:  t => `لاحظت أن "${t}" لم يُتطرق إليه.`,
     memConsistent:  'لاحظت أن هذا الموضوع ذُكر سابقاً والجواب يبدو متسقاً معه.',
     memNew:         'لاحظت أن هذا الموضوع يبدو جديداً عن سياق المحادثة.',
     hint:           t => `يمكنك السؤال عن "${t}" بالتفصيل.`
@@ -52,11 +66,11 @@ const OBS = {
     relevanceHigh:  'Ich bemerke, dass die Antwort zu deiner Frage zu passen scheint.',
     relevanceMed:   'Ich bemerke, dass die Antwort teilweise zu deiner Frage passt.',
     relevanceLow:   'Ich bemerke, dass die Antwort möglicherweise nicht ganz zu deiner Frage passt.',
-    coverageFull:   'Ich bemerke, dass die Antwort die meisten deiner Punkte abgedeckt hat.',
-    coveragePart:   'Ich bemerke, dass die Antwort einen Teil deiner Frage abgedeckt hat.',
-    coverageMiss1:  t => `Ich bemerke, dass "${t}" semantisch nicht deutlich in der Antwort erscheint.`,
+    coverageFull:   'Ich bemerke, dass die Antwort die meisten deiner Kernpunkte abgedeckt hat.',
+    coveragePart:   'Ich bemerke, dass die Antwort einen Teil deiner Kernpunkte abgedeckt hat.',
     coverageLow:    'Ich bemerke, dass die Antwort möglicherweise unvollständig ist.',
-    coverageMiss2:  t => `Ich bemerke, dass "${t}" semantisch nicht behandelt wurde.`,
+    coverageMiss1:  t => `Ich bemerke, dass "${t}" nicht deutlich behandelt wurde.`,
+    coverageMiss2:  t => `Ich bemerke, dass "${t}" nicht behandelt wurde.`,
     memConsistent:  'Ich bemerke, dass dieses Thema bereits erwähnt wurde und die Antwort konsistent erscheint.',
     memNew:         'Ich bemerke, dass dieses Thema neu im Gesprächskontext zu sein scheint.',
     hint:           t => `Du kannst nach "${t}" im Detail fragen.`
@@ -65,94 +79,116 @@ const OBS = {
     relevanceHigh:  'I notice the answer seems relevant to your question.',
     relevanceMed:   'I notice the answer seems partially relevant to your question.',
     relevanceLow:   'I notice the answer may not be fully relevant to your question.',
-    coverageFull:   'I notice the answer covered most of what you asked.',
-    coveragePart:   'I notice the answer covered part of your question.',
-    coverageMiss1:  t => `I notice "${t}" did not appear to be semantically covered.`,
+    coverageFull:   'I notice the answer covered most of your core points.',
+    coveragePart:   'I notice the answer covered part of your core points.',
     coverageLow:    'I notice the answer may be incomplete.',
-    coverageMiss2:  t => `I notice "${t}" was not semantically addressed.`,
+    coverageMiss1:  t => `I notice "${t}" was not clearly addressed.`,
+    coverageMiss2:  t => `I notice "${t}" was not addressed.`,
     memConsistent:  'I notice this topic was mentioned before and the answer seems consistent.',
     memNew:         'I notice this topic seems new to the conversation context.',
-    hint:           t => `You can ask about "${t}" in more detail.`
+    hint:           t => `You can ask about "${t}" in detail.`
   }
 }
 
-// ── كشف لغة السؤال ───────────────────────────────────────────────
+// ── أدوات مساعدة ──────────────────────────────────────────────────
+function normalizeText(text) {
+  return String(text ?? '')
+    .toLowerCase()
+    .replace(/[""„"'«»]/g, '')
+    .replace(/[.,!?؟،:؛()[\]{}<>]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function tokenize(text) {
+  return normalizeText(text).split(/\s+/).filter(Boolean)
+}
+
 function detectObsLang(text) {
   const t       = String(text ?? '')
   const arabic  = (t.match(/[\u0600-\u06FF]/g) ?? []).length
   const german  = (t.match(/[äöüßÄÖÜ]/g) ?? []).length
-  const words   = t.toLowerCase().split(/\s+/)
-  const deWords = new Set(['bitte','mehr','was','ist','wie','kann','ich',
-    'dir','mir','das','die','der','und','von','auf','kannst','erklären',
-    'hallo','danke','oder','dann','auch','nicht','noch'])
+  const words   = tokenize(t)
+  const deWords = new Set(['bitte','mehr','was','ist','wie','kann','ich','dir','mir',
+    'das','die','der','und','von','auf','kannst','erklären','danke','ja','nein','hallo'])
   const deCount = words.filter(w => deWords.has(w)).length
 
-  if (arabic > 3)                    return 'ar'
-  if (german > 0 || deCount >= 2)    return 'de'
+  if (arabic > 3)                 return 'ar'
+  if (german > 0 || deCount >= 2) return 'de'
   return 'en'
 }
 
-// ── استخراج مصطلحات المحتوى الحقيقية ───────────────────────────
-function extractKeyTerms(text) {
-  return String(text ?? '')
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(w =>
-      w.length > 3 &&
-      !FILLERS.has(w) &&
-      !STYLE_WORDS.has(w)
-    )
-    .map(w => w.replace(/[.,!?؟،:؛"'«»()[\]{}]/g, ''))
-    .filter(w => w.length > 3)
+function includesAlias(text, alias) {
+  const nText  = ` ${normalizeText(text)} `
+  const nAlias = normalizeText(alias)
+  if (!nAlias) return false
+  return nText.includes(` ${nAlias} `) || nText.includes(nAlias)
 }
 
-// ── Relevance ─────────────────────────────────────────────────────
+function conceptLabel(concept, lang) {
+  return concept.labels?.[lang] ?? concept.labels?.en ?? concept.id
+}
+
+// ── استخراج المفاهيم المعروفة ──────────────────────────────────────
+function extractKnownConcepts(text, lang) {
+  return CONCEPT_ALIASES
+    .filter(c => c.aliases.some(alias => includesAlias(text, alias)))
+    .map(c => ({ id: c.id, label: conceptLabel(c, lang), aliases: c.aliases }))
+}
+
+// ── استخراج مصطلحات احتياطية ──────────────────────────────────────
+function isConceptCandidate(term) {
+  if (!term || term.length < 6) return false
+  if (/^\d+$/.test(term))        return false
+  if (FILLERS.has(term))         return false
+  if (STYLE_WORDS.has(term))     return false
+  if (!/[a-zäöüß\u0600-\u06FF]/i.test(term)) return false
+  return true
+}
+
+function extractFallbackConcepts(text, lang) {
+  const known = extractKnownConcepts(text, lang)
+  return [...new Set(tokenize(text))]
+    .filter(isConceptCandidate)
+    .filter(t => !known.some(k => k.aliases.some(a =>
+      includesAlias(t, a) || includesAlias(a, t))))
+    .slice(0, 4)
+    .map(t => ({ id: `term:${t}`, label: t, aliases: [t] }))
+}
+
+function extractConcepts(text, lang) {
+  const known    = extractKnownConcepts(text, lang)
+  const fallback = extractFallbackConcepts(text, lang)
+  return [...known, ...fallback].slice(0, 6)
+}
+
+// ── القياسات ──────────────────────────────────────────────────────
 function measureRelevance(engine, questionVector, replyVector) {
   if (!questionVector?.length || !replyVector?.length) return null
   return engine.cosineSimilarity(questionVector, replyVector)
 }
 
-// ── Semantic Coverage — القلب الجديد ─────────────────────────────
-//
-//  بدلاً من: reply.includes(term)         ← حرفي هش
-//  نستخدم:  cosine(termVector, replyVector) > threshold  ← دلالي
-//
-//  "entwicklung" و "Entwicklungen" تُعطيان نفس النتيجة ✅
-//  "antwot" (خطأ إملائي) لها vector مشابه لـ "antwort" لكن
-//  similarity مع الجواب ستكون منخفضة → missing بشكل صحيح ✅
+function measureConceptCoverage(questionText, replyText, lang) {
+  const concepts = extractConcepts(questionText, lang)
+  if (!concepts.length) return { ratio: null, covered: [], missing: [], concepts: [] }
 
-const COVERAGE_THRESHOLD = 0.45  // عتبة التشابه الدلالي
+  const results = concepts.map(concept => ({
+    id:      concept.id,
+    label:   concept.label,
+    covered: concept.aliases.some(alias => includesAlias(replyText, alias))
+  }))
 
-function measureSemanticCoverage(questionText, replyVector, engine) {
-  const terms = extractKeyTerms(questionText)
-  if (!terms.length || !replyVector?.length) {
-    return { ratio: null, covered: [], missing: [] }
-  }
-
-  const results = terms.map(term => {
-    const termVector = engine.semanticVector?.(term) ?? null
-
-    if (!termVector?.length) {
-      // Fallback: lexical check إذا فشل vectorization
-      const inReply = String(replyVector).toLowerCase().includes(term)
-      return { term, covered: inReply, sim: inReply ? 1 : 0 }
-    }
-
-    const sim = engine.cosineSimilarity(termVector, replyVector)
-    return { term, covered: sim >= COVERAGE_THRESHOLD, sim }
-  })
-
-  const covered = results.filter(r => r.covered).map(r => r.term)
-  const missing  = results.filter(r => !r.covered).map(r => r.term)
+  const covered = results.filter(r =>  r.covered).map(r => r.label)
+  const missing  = results.filter(r => !r.covered).map(r => r.label)
 
   return {
-    ratio:   results.length ? covered.length / results.length : null,
-    covered: [...new Set(covered)].slice(0, 5),
-    missing: [...new Set(missing)].slice(0, 5)
+    ratio:    covered.length / results.length,
+    covered:  covered.slice(0, 5),
+    missing:  missing.slice(0, 3),
+    concepts: results
   }
 }
 
-// ── Memory Continuity ─────────────────────────────────────────────
 function measureMemoryContinuity(engine, replyVector) {
   if (!replyVector?.length) return null
   const capsules = engine.getActiveCapsules?.() ?? []
@@ -165,8 +201,19 @@ function measureMemoryContinuity(engine, replyVector) {
 
 // ── Labels ────────────────────────────────────────────────────────
 function confidenceLabel(relevance, coverageRatio) {
-  if (relevance === null || coverageRatio === null) return 'unknown'
-  const score = (relevance * 0.6) + (coverageRatio * 0.4)
+  if (relevance === null && coverageRatio === null) return 'unknown'
+  if (coverageRatio !== null && relevance === null) {
+    if (coverageRatio >= 0.80) return 'high'
+    if (coverageRatio >= 0.50) return 'partial'
+    if (coverageRatio >= 0.30) return 'low'
+    return 'unclear'
+  }
+  if (coverageRatio === null && relevance !== null) {
+    if (relevance >= 0.70) return 'high'
+    if (relevance >= 0.40) return 'partial'
+    return 'low'
+  }
+  const score = (relevance * 0.45) + (coverageRatio * 0.55)
   if (score >= 0.75) return 'high'
   if (score >= 0.50) return 'partial'
   if (score >= 0.30) return 'low'
@@ -194,7 +241,7 @@ function continuityLabel(c) {
   return 'related'
 }
 
-// ── بناء الملاحظات بلغة المحادثة ─────────────────────────────────
+// ── بناء الملاحظات ────────────────────────────────────────────────
 function buildObservations(relevance, coverage, memoryContinuity, lang) {
   const L     = OBS[lang] ?? OBS.en
   const lines = []
@@ -224,18 +271,13 @@ function buildObservations(relevance, coverage, memoryContinuity, lang) {
     else if (memoryContinuity <= 0.25) lines.push(L.memNew)
   }
 
-  return lines
+  return lines.slice(0, 3)  // max 3 ملاحظات
 }
 
-// ── Hints بلغة المحادثة ───────────────────────────────────────────
 function buildNextQuestionHints(missing, lang) {
   if (!missing?.length) return []
   const L = OBS[lang] ?? OBS.en
-  // فقط المصطلحات ذات المعنى — طول > 5 لتجنب الكلمات التافهة
-  return missing
-    .filter(t => t.length > 5)
-    .slice(0, 3)
-    .map(t => L.hint(t))
+  return missing.slice(0, 2).map(t => L.hint(t))  // max 2 hints
 }
 
 // ── Main Export ───────────────────────────────────────────────────
@@ -252,10 +294,7 @@ export function observe({
   const replyVector = engine.semanticVector?.(replyText) ?? null
 
   const relevance        = measureRelevance(engine, questionVector, replyVector)
-
-  // ── Semantic Coverage بدلاً من Lexical ───────────────────────
-  const coverage         = measureSemanticCoverage(questionText, replyVector, engine)
-
+  const coverage         = measureConceptCoverage(questionText, replyText, obsLang)
   const memoryContinuity = measureMemoryContinuity(engine, replyVector)
 
   return {
@@ -267,7 +306,8 @@ export function observe({
       coverage:         coverageLabel(coverage?.ratio ?? null),
       memoryContinuity: continuityLabel(memoryContinuity),
       noiseRemoved,
-      lang:             obsLang
+      lang:             obsLang,
+      concepts:         coverage?.concepts ?? []
     },
 
     nextQuestionHints: includeHints
