@@ -444,7 +444,15 @@ router.post('/process-text', async (req, res) => {
     if (!processed.ok) return res.status(422).json({ error: processed.reason || 'processing_failed' })
 
     const tValue = processed.result.t
-    storeSemanticEntry(sid, tValue, inputText)
+    // ── تخزين ذكي: السؤال فقط بدون الكود الخام ─────────────────
+    // الكود سيُخزَّن لاحقاً كـ codeHint بعد AST parsing
+    const textForMemory = cleanedText
+      .replace(/```[\s\S]*?```/g, '')     // احذف code blocks
+      .replace(/^\s*export\s+class\s+\w+[\s\S]*$/m, '') // احذف inline class
+      .replace(/^\s*function\s+\w+[\s\S]*$/m, '')        // احذف inline function
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+    storeSemanticEntry(sid, tValue, textForMemory || inputText)
 
     const engine      = getEngine(sid)
     const fieldPrompt = engine.buildFieldPrompt?.() ?? null
@@ -498,6 +506,16 @@ router.post('/process-text', async (req, res) => {
 
       // ── هيكل الكود للـ LLM ───────────────────────────────────
       codeHint = buildCodeHint(structIndex)
+
+      // ── حدّث الذاكرة بالمعنى لا بالكود ──────────────────────
+      // codeHint = وصف وظيفي → أفضل بكثير من الكود الخام
+      if (codeHint) {
+        const codeMemory = codeHint
+          .replace('[code structure]', '')
+          .replace('analyze: practical usage and risks — not philosophy', '')
+          .trim()
+        if (codeMemory) storeSemanticEntry(sid, tValue + 0.5, codeMemory)
+      }
     }
 
     // ── Route Context ─────────────────────────────────────────
