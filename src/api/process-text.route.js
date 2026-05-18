@@ -194,6 +194,78 @@ function calcRouteConfidence(routedContext) {
   return valid.reduce((s, i) => s + i.score, 0) / valid.length
 }
 
+// ── نسيان الكبسولات المتغيرة ────────────────────────────────────
+// عندما تتغير دالة → كبسولتها القديمة تتلاشى بسرعة
+function decayChangedCapsules(engine, changedNodeIds, structIndex) {
+  if (!engine || !changedNodeIds?.length || !structIndex) return
+
+  for (const nodeId of changedNodeIds) {
+    const node = structIndex.nodes.get(nodeId)
+    if (!node?.vaultCapsuleId) continue
+
+    // أوجد الكبسولة في الـ vault وخفّض وزنها
+    const capsule = engine.vault?.get?.(node.vaultCapsuleId)
+      ?? engine.getActiveCapsules?.().find(c => c.id === node.vaultCapsuleId)
+
+    if (capsule && typeof capsule.weight === 'number') {
+      capsule.weight = Math.max(0, capsule.weight * 0.25)  // نسيان سريع
+    }
+
+    // أزل الرابط لإجبار إعادة البناء
+    node.vaultCapsuleId = null
+    structIndex.capsuleLinks.delete(nodeId)
+  }
+}
+
+// ── اكتشاف الـ nodes المتغيرة عند تحديث الكود ──────────────────
+function getChangedNodeIds(structIndex, path) {
+  const changedIds = []
+  for (const [id, node] of structIndex.nodes.entries()) {
+    if (!id.startsWith(path + '::')) continue
+    // node موجود في المسار لكن وزن الكبسولة عالٍ → كان موجوداً قبل
+    if (node.vaultCapsuleId) {
+      changedIds.push(id)
+    }
+  }
+  return changedIds
+}
+
+function buildCodeHint(structIndex) {
+  if (!structIndex) return null
+  const nodes = [...structIndex.nodes.values()]
+  if (!nodes.length) return null
+
+  const classes = nodes
+    .filter(n => n.type === 'class')
+    .map(n => n.symbol)
+
+  const methods = nodes
+    .filter(n => n.type === 'method' || n.type === 'function')
+    .sort((a, b) => (b.usedBy?.length ?? 0) - (a.usedBy?.length ?? 0))
+    .slice(0, 6)
+    .map(n => n.symbol)
+
+  const extDeps = [...new Set(
+    nodes.flatMap(n => n.imports ?? [])
+         .filter(i => !i.startsWith('.'))
+  )].slice(0, 4)
+
+  const callChain = nodes
+    .filter(n => n.calls?.length > 0)
+    .sort((a, b) => (b.usedBy?.length ?? 0) - (a.usedBy?.length ?? 0))
+    .slice(0, 3)
+    .map(n => `${n.symbol} → ${n.calls.slice(0,2).join(', ')}`)
+
+  return [
+    '[code structure]',
+    classes.length   ? `class: ${classes.join(', ')}`         : null,
+    methods.length   ? `methods: ${methods.join(', ')}`        : null,
+    extDeps.length   ? `external: ${extDeps.join(', ')}`       : null,
+    callChain.length ? `flow: ${callChain.join(' | ')}`        : null,
+    'analyze: practical usage and risks — not philosophy'
+  ].filter(Boolean).join('\n')
+}
+
 function extractCodePurpose(lang, surroundingText, codeContent) {
   const combined     = (surroundingText + ' ' + codeContent.slice(0, 300)).toLowerCase()
   const allTech      = [...TECH_KEYWORDS.frameworks, ...TECH_KEYWORDS.databases, ...TECH_KEYWORDS.infra]
@@ -404,11 +476,28 @@ router.post('/process-text', async (req, res) => {
     // ── Inline Code ───────────────────────────────────────────
     const structIndex = indexStore?.get(sid) ?? null
     const codeBlocks  = detectCodeBlocks(cleanedText)
+    let   codeHint    = null
+
     if (codeBlocks.length > 0 && structIndex) {
       const tempPath = `session_inline/${sid}/msg_${tValue}.js`
-      structIndex.updateFile(tempPath, codeBlocks.join('\n\n'))
+
+      // ── كشف النسخة السابقة قبل التحديث ──────────────────────
+      const changedNodeIds = getChangedNodeIds(structIndex, tempPath)
+
+      // ── تحديث AST بالكود الجديد ──────────────────────────────
+      const updateResult = structIndex.updateFile(tempPath, codeBlocks.join('\n\n'))
+
+      // ── نسيان الكبسولات المتغيرة ─────────────────────────────
+      if (updateResult?.changed && changedNodeIds.length > 0) {
+        decayChangedCapsules(engine, changedNodeIds, structIndex)
+      }
+
+      // ── بناء كبسولات جديدة من الكود المحدث ──────────────────
       structIndex.injectSemanticVectors(engine)
       structIndex.injectIntoVault(engine)
+
+      // ── هيكل الكود للـ LLM ───────────────────────────────────
+      codeHint = buildCodeHint(structIndex)
     }
 
     // ── Route Context ─────────────────────────────────────────
@@ -434,7 +523,10 @@ router.post('/process-text', async (req, res) => {
     if (built.blocked) return res.status(422).json({ blocked: true, reason: 'semantic_constraint' })
     if (!built.passToLLM && !hasImage) return res.json({ reply: null, skippedLLM: true, reason: 'weak_semantic_field' })
 
-    const systemHint = built.systemHint  // قد يكون null — سيُعالَج في buildClaudeBody
+    // ── دمج codeHint مع systemHint ──────────────────────────
+    const systemHint = [codeHint, built.systemHint]
+      .filter(Boolean)
+      .join('\n') || null
     const continuity = built.context?.continuity ?? 0
     const maxTokens  = 4096
 
