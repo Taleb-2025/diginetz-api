@@ -760,8 +760,26 @@ router.post('/process-text', async (req, res) => {
     }
 
     // ── Observer ──────────────────────────────────────────────
+    // لا يعمل في:
+    // 1. السؤال الأول (لا سياق للمقارنة)
+    // 2. الصور
+    // 3. الأسئلة الحوارية القصيرة جداً (≤ 2 كلمة)
+    // 4. إذا لا يوجد vector
+
+    const wordCount     = cleanedText.trim().split(/\s+/).length
+    const isFirstMsg    = (tValue <= 1)
+    const isTooShort    = (wordCount <= 2)
+    const isCodeOnly    = (codeBlocks.length > 0 && wordCount <= 8)
+
     let observerBox = null
-    if (reply && !hasImage && questionVector?.length) {
+    const shouldObserve = reply &&
+      !hasImage &&
+      !isFirstMsg &&
+      !isTooShort &&
+      !isCodeOnly &&
+      questionVector?.length
+
+    if (shouldObserve) {
       observerBox = observe({
         engine,
         questionText:   cleanedText,
