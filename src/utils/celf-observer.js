@@ -40,7 +40,23 @@ const STYLE_WORDS = new Set([
   'detailed','scientific','simple','clear','brief','quick','full','accurate','correct','proper',
   'exact','precise','complete','comprehensive','concise','professional','technical',
   'please','explain','show','tell','give','describe','define','what','how','why','when',
-  'where','which','who','can','could','would','should','list','name','compare','analyze'
+  'where','which','who','can','could','would','should','list','name','compare','analyze',
+
+  // JavaScript / Programming syntax — never concepts
+  'export','import','class','extends','const','let','var','function','return',
+  'async','await','new','this','super','throw','catch','try','if','else','for',
+  'while','switch','case','break','continue','typeof','instanceof','static',
+  'get','set','null','undefined','true','false','default','from','of','in',
+  'constructor','prototype','module','require','interface','type','enum',
+  'public','private','protected','readonly','abstract','implements','declare',
+
+  // Arabic — request + direction words (never concepts)
+  'أخبرني','اخبرني','أعطني','اعطني','اشرحلي','وضحلي','حدثني',
+  'برمجيا','برمجياً','علمياً','علميا','بالتفصيل','بالتفاصيل',
+  'بالامثلة','بمثال','بالمثال','تفصيلياً','تفصيليا',
+  'السياق','الهدف','الدور','الغرض','الوظيفة','الفائدة',
+  'نقاط','نقطة','القوة','الضعف','المشاكل','الاخطاء','الأخطاء',
+  'والسياق','والهدف','والدور','والاخطاء','والأخطاء','والقوة','والضعف'
 ])
 
 // ── CONCEPT_ALIASES — المصدر الموثوق للـ coverage ──────────────────
