@@ -304,23 +304,129 @@ function compressAssistantMessage(content) {
   return [textParts.join('\n').trim(), labelParts.join(', ')].filter(Boolean).join('\n') || '[response provided]'
 }
 
-function buildHistoryLayer(history, continuity) {
-  if (continuity < 0.65) return []
+// ══════════════════════════════════════════════════════════════
+//  Soft Continuity Weighting — نظام ذاكرة متدرج
+//
+//  Tier 1  continuity >= 0.70  → تاريخ كامل (6 رسائل)
+//  Tier 2  continuity 0.40-0.70 → مضغوط (3) + observer capsules
+//  Tier 3  continuity 0.20-0.40 → capsules + persistent anchors
+//  Tier 4  continuity < 0.20   → raw fragments + vault fallback
+// ══════════════════════════════════════════════════════════════
 
+// ── مخزن الكبسولات والـ anchors per session ──────────────────────
+const capsuleMemory = new Map()  // sid → [{ topic, covered, missing, t }]
+const anchorMemory  = new Map()  // sid → [{ concept, weight, t }]
+
+// ── حفظ كبسولة من نتيجة Observer ─────────────────────────────────
+function storeCapsule(sid, observer, topicText, t) {
+  if (!observer?.diagnostics) return
+  const d = observer.diagnostics
+  if (d.confidence === 'unknown') return
+
+  const store = capsuleMemory.get(sid) ?? []
+  store.push({
+    topic:   topicText ?? 'general',
+    covered: observer.observations?.filter(o => o.includes('غطى') || o.includes('covered')) ?? [],
+    missing: observer.nextQuestionHints?.map(h => h.replace(/.*"(.+)".*/,'$1')) ?? [],
+    lang:    d.lang ?? 'en',
+    t
+  })
+  if (store.length > 10) store.shift()
+  capsuleMemory.set(sid, store)
+}
+
+// ── تحديث الـ Anchors من ECF أو CELF ─────────────────────────────
+function updateAnchors(sid, topicText, weight) {
+  if (!topicText || weight < 0.3) return
+  const store = anchorMemory.get(sid) ?? []
+  const existing = store.find(a => a.concept === topicText)
+  if (existing) {
+    existing.weight = Math.min(1, existing.weight * 0.9 + weight * 0.1)
+  } else {
+    store.push({ concept: topicText, weight, t: Date.now() })
+  }
+  store.sort((a, b) => b.weight - a.weight)
+  if (store.length > 5) store.pop()
+  anchorMemory.set(sid, store)
+}
+
+// ── بناء context message من الكبسولات ────────────────────────────
+function buildCapsuleContext(sid) {
+  const caps = capsuleMemory.get(sid) ?? []
+  if (!caps.length) return []
+  const recent = caps.slice(-3)
+  const lines = recent.map(c => {
+    const parts = [`[topic: ${c.topic}]`]
+    if (c.covered?.length) parts.push(`covered: ${c.covered.slice(0,2).join(', ')}`)
+    if (c.missing?.length) parts.push(`pending: ${c.missing.slice(0,2).join(', ')}`)
+    return parts.join(' | ')
+  })
+  return [{ role: 'user', content: `[session context]
+${lines.join('
+')}` }]
+}
+
+// ── بناء context من الـ Anchors ───────────────────────────────────
+function buildAnchorContext(sid) {
+  const anchors = anchorMemory.get(sid) ?? []
+  if (!anchors.length) return []
+  const top = anchors.slice(0, 3).map(a => `${a.concept}(${Math.round(a.weight*100)}%)`).join(', ')
+  return [{ role: 'user', content: `[persistent topics: ${top}]` }]
+}
+
+// ── raw fragments من آخر جواب ─────────────────────────────────────
+function buildFragmentContext(sid, history) {
+  const lastAssistant = [...history].reverse().find(h => h.role === 'assistant')
+  if (!lastAssistant) return buildAnchorContext(sid)
+  const fragment = compressAssistantMessage(lastAssistant.content).slice(0, 200)
+  return [
+    ...buildAnchorContext(sid),
+    { role: 'assistant', content: `[fragment] ${fragment}` }
+  ]
+}
+
+// ── buildHistoryLayer المتدرج ─────────────────────────────────────
+function buildHistoryLayer(history, continuity, sid) {
   const filtered = filterStyleInstructions(history)
-  const clean    = filtered
-    .filter(h => h && (h.role === 'user' || h.role === 'assistant') &&
-      typeof h.content === 'string' && h.content.length > 0)
-    .slice(-4)
+  const clean    = filtered.filter(h =>
+    h && (h.role === 'user' || h.role === 'assistant') &&
+    typeof h.content === 'string' && h.content.length > 0
+  )
 
-  if (clean.length < 2) return []
+  // Tier 1: continuity عالٍ → تاريخ كامل
+  if (continuity >= 0.70) {
+    const msgs = clean.slice(-6)
+    if (msgs.length < 2) return []
+    return msgs.map(h => ({
+      role:    h.role,
+      content: h.role === 'assistant'
+        ? compressAssistantMessage(h.content)
+        : h.content.slice(0, 400)
+    }))
+  }
 
-  return clean.map(h => ({
-    role:    h.role,
-    content: h.role === 'assistant'
-      ? compressAssistantMessage(h.content)
-      : h.content.slice(0, 300)
-  }))
+  // Tier 2: متوسط → مضغوط + capsules
+  if (continuity >= 0.40) {
+    const msgs = clean.slice(-3)
+    const compressed = msgs.length >= 2 ? msgs.map(h => ({
+      role:    h.role,
+      content: h.role === 'assistant'
+        ? compressAssistantMessage(h.content)
+        : h.content.slice(0, 300)
+    })) : []
+    return [...compressed, ...buildCapsuleContext(sid)]
+  }
+
+  // Tier 3: منخفض → capsules + anchors
+  if (continuity >= 0.20) {
+    return [
+      ...buildCapsuleContext(sid),
+      ...buildAnchorContext(sid)
+    ]
+  }
+
+  // Tier 4: منخفض جداً → fragments + vault fallback
+  return buildFragmentContext(sid, history)
 }
 
 function checkPayload(systemHint, messages) {
@@ -557,7 +663,7 @@ router.post('/process-text', async (req, res) => {
       : cleanedText
 
     const filteredHistory = filterStyleInstructions(history)
-    const historyMessages = hasImage ? [] : buildHistoryLayer(filteredHistory, continuity)
+    const historyMessages = hasImage ? [] : buildHistoryLayer(filteredHistory, continuity, sid)
     const messages        = [
       ...historyMessages,
       { role: 'user', content: hasImage ? userContent : cleanedText }
@@ -625,6 +731,12 @@ router.post('/process-text', async (req, res) => {
         noiseRemoved,
         lang:           processed.signals?.lang ?? 'en'
       })
+
+      // ── تحويل Observer → Capsule + Anchor ────────────────────
+      if (observerBox) {
+        storeCapsule(sid, observerBox, lastTopicText, tValue)
+        updateAnchors(sid, lastTopicText, questionSimilarity ?? 0.5)
+      }
     }
 
     // ── Metrics ───────────────────────────────────────────────
@@ -655,6 +767,12 @@ router.post('/process-text', async (req, res) => {
         systemHint,
         messageCount:       messages.length,
         historyCount:       historyMessages.length,
+        continuityTier:     continuity >= 0.70 ? 'T1-full'
+                          : continuity >= 0.40 ? 'T2-compressed+capsules'
+                          : continuity >= 0.20 ? 'T3-capsules+anchors'
+                          : 'T4-fragments',
+        capsules:           (capsuleMemory.get(sid) ?? []).length,
+        anchors:            (anchorMemory.get(sid)  ?? []).length,
         questionSimilarity: questionSimilarity !== null
           ? Math.round(questionSimilarity * 100) / 100
           : null,
