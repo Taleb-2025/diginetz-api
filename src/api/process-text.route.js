@@ -304,6 +304,28 @@ function compressAssistantMessage(content) {
   return [textParts.join('\n').trim(), labelParts.join(', ')].filter(Boolean).join('\n') || '[response provided]'
 }
 
+// ── ضغط رسالة المستخدم في history ───────────────────────────────
+// يحذف الكود الخام ويستبدله بـ [code attached] لمنع الاقتطاع
+function compressUserMessage(content) {
+  if (typeof content !== 'string') return content.slice(0, 400)
+
+  // إذا لا يوجد كود → اقطع عند 400 حرف
+  const hasCode = /```[\s\S]*?```/.test(content) ||
+                  /export\s+class\s+\w+/.test(content) ||
+                  /function\s+\w+\s*\(/.test(content)
+
+  if (!hasCode) return content.slice(0, 400)
+
+  // احذف الكود → أضف إشارة [code attached]
+  const withoutCode = content
+    .replace(/```[\s\S]*?```/g, '[code attached]')
+    .replace(/export\s+(class|function|const|default)\s+[\s\S]{0,50}/g, '[code attached]')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+
+  return withoutCode.slice(0, 300) || '[code message]'
+}
+
 // ══════════════════════════════════════════════════════════════
 //  Soft Continuity Weighting — نظام ذاكرة متدرج
 //
@@ -407,7 +429,7 @@ function buildHistoryLayer(history, continuity, sid) {
     typeof h.content === 'string' && h.content.length > 0
   )
 
-  // Tier 1: continuity عالٍ → تاريخ كامل
+  // Tier 1: continuity عالٍ → تاريخ كامل مع ضغط ذكي
   if (continuity >= 0.70) {
     const msgs = clean.slice(-6)
     if (msgs.length < 2) return []
@@ -415,7 +437,7 @@ function buildHistoryLayer(history, continuity, sid) {
       role:    h.role,
       content: h.role === 'assistant'
         ? compressAssistantMessage(h.content)
-        : h.content.slice(0, 400)
+        : compressUserMessage(h.content)  // ← ذكي: يحذف كود خام
     }))
   }
 
@@ -426,7 +448,7 @@ function buildHistoryLayer(history, continuity, sid) {
       role:    h.role,
       content: h.role === 'assistant'
         ? compressAssistantMessage(h.content)
-        : h.content.slice(0, 300)
+        : compressUserMessage(h.content)  // ← ذكي: يحذف كود خام
     })) : []
     return [...compressed, ...buildCapsuleContext(sid)]
   }
