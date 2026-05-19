@@ -361,9 +361,7 @@ function buildCapsuleContext(sid) {
     if (c.missing?.length) parts.push(`pending: ${c.missing.slice(0,2).join(', ')}`)
     return parts.join(' | ')
   })
-  return [{ role: 'user', content: `[session context]
-${lines.join('
-')}` }]
+  return [{ role: 'user', content: `[session context]\n${lines.join('\n')}` }]
 }
 
 // ── بناء context من الـ Anchors ───────────────────────────────────
