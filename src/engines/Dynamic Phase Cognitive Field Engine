@@ -1,4 +1,3 @@
-
 export class DynamicCognitiveFieldEngine {
 
   constructor({
@@ -67,6 +66,12 @@ export class DynamicCognitiveFieldEngine {
     return Math.min(diff, this.cycle - diff)
   }
 
+  signedAngularDistance(thetaA, thetaB) {
+    const forward  = (thetaB - thetaA + this.cycle) % this.cycle
+    const backward = forward - this.cycle
+    return Math.abs(backward) < Math.abs(forward) ? backward : forward
+  }
+
   angularSimilarity(thetaA, thetaB) {
     return this.normalize(1 - this.angularDistance(thetaA, thetaB) / (this.cycle / 2))
   }
@@ -123,8 +128,8 @@ export class DynamicCognitiveFieldEngine {
         this.excludedDomains.add(domain)
         const field = this.fields.get(domain)
         if (field) {
-          field.weight    = 0
-          field.amplitude = 0
+          field.weight     = 0
+          field.amplitude  = 0
           field.superposed = false
           this.fields.set(domain, field)
         }
@@ -241,19 +246,20 @@ export class DynamicCognitiveFieldEngine {
       if (!fieldA || !fieldB) continue
       if (this.excludedDomains.has(domainA) || this.excludedDomains.has(domainB)) continue
 
-      const angSim  = this.angularSimilarity(fieldA.theta, fieldB.theta)
-      const pull    = strength * angSim
-      const delta   = (fieldA.weight - fieldB.weight) * pull * 0.5
+      const angSim   = this.angularSimilarity(fieldA.theta, fieldB.theta)
+      const pull     = strength * angSim
+      const delta    = (fieldA.weight - fieldB.weight) * pull * 0.5
 
       fieldA.weight    = this.normalize(fieldA.weight - delta)
       fieldB.weight    = this.normalize(fieldB.weight + delta)
       fieldA.amplitude = this.waveAmplitude(fieldA)
       fieldB.amplitude = this.waveAmplitude(fieldB)
 
-      const thetaPull = pull * 0.05
-      const direction = ((fieldB.theta - fieldA.theta + this.cycle) % this.cycle) < this.cycle / 2 ? 1 : -1
-      fieldA.theta    = this.containTheta(fieldA.theta + direction * thetaPull)
-      fieldB.theta    = this.containTheta(fieldB.theta - direction * thetaPull)
+      const thetaPull  = pull * 0.05
+      const thetaDelta = this.signedAngularDistance(fieldA.theta, fieldB.theta)
+
+      fieldA.theta = this.containTheta(fieldA.theta + thetaDelta * thetaPull)
+      fieldB.theta = this.containTheta(fieldB.theta - thetaDelta * thetaPull)
 
       this.fields.set(domainA, fieldA)
       this.fields.set(domainB, fieldB)
@@ -294,7 +300,9 @@ export class DynamicCognitiveFieldEngine {
     const thetaStability = this.normalize(
       1 - field.history.reduce((sum, h, i) => {
         if (i === 0) return sum
-        return sum + Math.abs(h.theta - field.history[i - 1].theta) / (this.cycle / 2)
+        return sum + Math.abs(
+          this.signedAngularDistance(field.history[i - 1].theta, h.theta)
+        ) / (this.cycle / 2)
       }, 0) / Math.max(field.history.length - 1, 1)
     )
     return this.normalize(avgActivation * 0.70 + thetaStability * 0.30)
@@ -461,8 +469,9 @@ export class DynamicCognitiveFieldEngine {
       )
 
       if (theta !== null) {
-        current.theta = this.containTheta(current.theta * 0.85 + theta * 0.15)
-        current.phase = this.clamp01(current.phase * 0.95 + activation * 0.05)
+        const thetaDelta = this.signedAngularDistance(current.theta, theta)
+        current.theta    = this.containTheta(current.theta + thetaDelta * 0.15)
+        current.phase    = this.clamp01(current.phase * 0.95 + activation * 0.05)
       }
 
       current.amplitude = this.waveAmplitude(current)
@@ -517,9 +526,9 @@ export class DynamicCognitiveFieldEngine {
       .filter(([d, f]) => !this.excludedDomains.has(d) && !f.superposed)
       .map(([, f]) => f)
       .sort((a, b) => {
-        const scoreA = a.weight * 0.50 + Math.abs(a.amplitude) * 0.30 + this.attractorStrength(a.domain) * 0.20
-        const scoreB = b.weight * 0.50 + Math.abs(b.amplitude) * 0.30 + this.attractorStrength(b.domain) * 0.20
-        return scoreB - scoreA
+        const sA = a.weight * 0.50 + Math.abs(a.amplitude) * 0.30 + this.attractorStrength(a.domain) * 0.20
+        const sB = b.weight * 0.50 + Math.abs(b.amplitude) * 0.30 + this.attractorStrength(b.domain) * 0.20
+        return sB - sA
       })
 
     const top = entries[0] ?? null
