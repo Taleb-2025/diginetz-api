@@ -1,1 +1,706 @@
 
+export class DynamicCognitiveFieldEngine {
+
+  constructor({
+    decayRate         = 0.92,
+    reinforcement     = 0.12,
+    collapseThreshold = 0.68,
+    entropyLimit      = 0.45,
+    adaptEvery        = 10,
+    bufferThreshold   = 20,
+    cycle             = 360,
+    resolution        = 360,
+    conservation      = true,
+    llm               = {}
+  } = {}) {
+
+    this.decayRate         = decayRate
+    this.reinforcement     = reinforcement
+    this.collapseThreshold = collapseThreshold
+    this.entropyLimit      = entropyLimit
+    this.adaptEvery        = adaptEvery
+    this.bufferThreshold   = bufferThreshold
+    this.cycle             = cycle
+    this.resolution        = resolution
+    this.conservation      = conservation
+
+    this.llm = {
+      endpoint: llm.endpoint ?? 'https://api.anthropic.com/v1/messages',
+      apiKey:   llm.apiKey   ?? (typeof process !== 'undefined' ? process.env?.LLM_API_KEY : '') ?? '',
+      model:    llm.model    ?? 'claude-sonnet-4-20250514',
+      enabled:  llm.enabled  ?? true
+    }
+
+    this.fields          = new Map()
+    this.entangled       = new Map()
+    this.semanticMap     = new Map()
+    this.cooccurrence    = new Map()
+    this.zeroRules       = []
+    this.excludedDomains = new Set()
+
+    this._t                = 0
+    this._adaptLog         = []
+    this._collapseLog      = []
+    this._perceptionBuffer = []
+    this._cyclePhase       = 0
+    this._llmCache         = new Map()
+    this._zeroLog          = []
+  }
+
+  clamp01(v) {
+    const n = Number(v)
+    if (!Number.isFinite(n)) return 0
+    return Math.max(0, Math.min(1, n))
+  }
+
+  normalize(value) {
+    if (Number.isNaN(value)) return 0
+    return Math.max(0, Math.min(1, value))
+  }
+
+  containTheta(v) {
+    return ((Number(v) % this.cycle) + this.cycle) % this.cycle
+  }
+
+  angularDistance(thetaA, thetaB) {
+    const diff = Math.abs(thetaA - thetaB) % this.cycle
+    return Math.min(diff, this.cycle - diff)
+  }
+
+  angularSimilarity(thetaA, thetaB) {
+    return this.normalize(1 - this.angularDistance(thetaA, thetaB) / (this.cycle / 2))
+  }
+
+  waveAmplitude(field) {
+    const angle = (field.theta / this.cycle) * 2 * Math.PI * field.phase
+    return field.weight * Math.cos(angle)
+  }
+
+  createField(domain, theta = 0) {
+    return {
+      domain,
+      weight:     0,
+      amplitude:  0,
+      theta:      this.containTheta(theta),
+      phase:      1.0,
+      lastUpdate: this._t,
+      history:    [],
+      superposed: true
+    }
+  }
+
+  _conserveAmplitudes() {
+    if (!this.conservation) return
+    const active = [...this.fields.values()].filter(f => !this.excludedDomains.has(f.domain))
+    if (!active.length) return
+    const totalAbs = active.reduce((s, f) => s + Math.abs(f.weight), 0)
+    if (totalAbs <= 0) return
+    for (const field of active) {
+      field.weight    = field.weight / totalAbs
+      field.amplitude = this.waveAmplitude(field)
+      this.fields.set(field.domain, field)
+    }
+  }
+
+  addZeroRule({ name, condition, exclude = [], collapseToNull = false }) {
+    if (typeof condition !== 'function') return this
+    this.zeroRules.push({ name, condition, exclude, collapseToNull })
+    return this
+  }
+
+  removeZeroRule(name) {
+    this.zeroRules = this.zeroRules.filter(r => r.name !== name)
+    return this
+  }
+
+  applyZeroRules() {
+    this.excludedDomains.clear()
+    const triggered = []
+    for (const rule of this.zeroRules) {
+      if (!rule.condition(this.fields, this)) continue
+      triggered.push(rule.name)
+      for (const domain of rule.exclude) {
+        this.excludedDomains.add(domain)
+        const field = this.fields.get(domain)
+        if (field) {
+          field.weight    = 0
+          field.amplitude = 0
+          field.superposed = false
+          this.fields.set(domain, field)
+        }
+      }
+      this._zeroLog.push({ t: this._t, rule: rule.name, excluded: [...rule.exclude] })
+      if (this._zeroLog.length > 64) this._zeroLog.shift()
+    }
+    return triggered
+  }
+
+  _cooccurrenceKey(a, b) { return [a, b].sort().join('::') }
+
+  _recordCooccurrence(domains) {
+    for (let i = 0; i < domains.length; i++) {
+      for (let j = i + 1; j < domains.length; j++) {
+        const key     = this._cooccurrenceKey(domains[i], domains[j])
+        const current = this.cooccurrence.get(key) ?? { count: 0, conflict: 0 }
+        current.count += 1
+        this.cooccurrence.set(key, current)
+      }
+    }
+  }
+
+  _recordConflict(domainA, domainB) {
+    const key     = this._cooccurrenceKey(domainA, domainB)
+    const current = this.cooccurrence.get(key) ?? { count: 0, conflict: 0 }
+    current.conflict += 1
+    this.cooccurrence.set(key, current)
+  }
+
+  _updateEntanglementFromCooccurrence() {
+    for (const [key, data] of this.cooccurrence.entries()) {
+      const [domainA, domainB] = key.split('::')
+      const total   = data.count + data.conflict
+      if (total < 3) continue
+      const harmony = this.normalize((data.count - data.conflict) / total)
+      const current = this.entangled.get(key) ?? 0.0
+      const updated = this.normalize(current * 0.90 + harmony * 0.10)
+      updated > 0.05 ? this.entangled.set(key, updated) : this.entangled.delete(key)
+    }
+  }
+
+  _shouldAskLLM(domain, context = {}) {
+    if (!this.llm.enabled || !this.llm.apiKey) return false
+    const isNew       = !this.semanticMap.has(domain)
+    const hasConflict = (context.conflict ?? 0) > 0.7
+    const lowCs       = (context.Cs ?? 1) < 0.25
+    const cacheKey    = `${domain}::${JSON.stringify(context)}`
+    if (this._llmCache.has(cacheKey)) return false
+    return isNew || hasConflict || lowCs
+  }
+
+  async _askLLM(domain, activeDomains = []) {
+    const cacheKey = `${domain}::${activeDomains.sort().join(',')}`
+    if (this._llmCache.has(cacheKey)) return this._llmCache.get(cacheKey)
+
+    const prompt = [
+      `You are a semantic relation analyzer.`,
+      `Given the domain: "${domain}"`,
+      `And the active domains: ${activeDomains.map(d => `"${d}"`).join(', ')}`,
+      `Return ONLY a JSON array of relations, no explanation, no markdown:`,
+      `[{"domain":"X","relation":0.0}]`,
+      `relation is a float from -1.0 (opposite) to 1.0 (identical).`
+    ].join('\n')
+
+    try {
+      const response = await fetch(this.llm.endpoint, {
+        method:  'POST',
+        headers: {
+          'Content-Type':      'application/json',
+          'x-api-key':         this.llm.apiKey,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model:      this.llm.model,
+          max_tokens: 512,
+          messages:   [{ role: 'user', content: prompt }]
+        })
+      })
+      const data      = await response.json()
+      const text      = data?.content?.[0]?.text ?? '[]'
+      let   relations = []
+      try { relations = JSON.parse(text) } catch { relations = [] }
+      const result = {}
+      for (const r of relations) {
+        if (r.domain && Number.isFinite(r.relation)) {
+          result[r.domain] = this.normalize((r.relation + 1) / 2)
+        }
+      }
+      this._llmCache.set(cacheKey, result)
+      for (const [target, strength] of Object.entries(result)) {
+        const key = this._cooccurrenceKey(domain, target)
+        if (!this.cooccurrence.has(key)) {
+          this.cooccurrence.set(key, { count: Math.round(strength * 5), conflict: 0 })
+        }
+      }
+      this.semanticMap.set(domain, { relations: result, learnedAt: this._t })
+      return result
+    } catch {
+      return {}
+    }
+  }
+
+  getEntanglement(domainA, domainB) {
+    const key = this._cooccurrenceKey(domainA, domainB)
+    return this.entangled.get(key) ?? 0
+  }
+
+  applyEntanglement() {
+    for (const [key, strength] of this.entangled.entries()) {
+      const [domainA, domainB] = key.split('::')
+      const fieldA = this.fields.get(domainA)
+      const fieldB = this.fields.get(domainB)
+      if (!fieldA || !fieldB) continue
+      if (this.excludedDomains.has(domainA) || this.excludedDomains.has(domainB)) continue
+
+      const angSim  = this.angularSimilarity(fieldA.theta, fieldB.theta)
+      const pull    = strength * angSim
+      const delta   = (fieldA.weight - fieldB.weight) * pull * 0.5
+
+      fieldA.weight    = this.normalize(fieldA.weight - delta)
+      fieldB.weight    = this.normalize(fieldB.weight + delta)
+      fieldA.amplitude = this.waveAmplitude(fieldA)
+      fieldB.amplitude = this.waveAmplitude(fieldB)
+
+      const thetaPull = pull * 0.05
+      const direction = ((fieldB.theta - fieldA.theta + this.cycle) % this.cycle) < this.cycle / 2 ? 1 : -1
+      fieldA.theta    = this.containTheta(fieldA.theta + direction * thetaPull)
+      fieldB.theta    = this.containTheta(fieldB.theta - direction * thetaPull)
+
+      this.fields.set(domainA, fieldA)
+      this.fields.set(domainB, fieldB)
+    }
+  }
+
+  applyInterference(domain, activation) {
+    if (this.excludedDomains.has(domain)) return 0
+    const self = this.fields.get(domain)
+    if (!self) return activation
+
+    let result = activation
+
+    for (const [other, field] of this.fields.entries()) {
+      if (other === domain) continue
+      if (this.excludedDomains.has(other)) continue
+
+      const angSim       = this.angularSimilarity(self.theta, field.theta)
+      const entanglement = this.getEntanglement(domain, other)
+
+      if (entanglement > 0) {
+        result += field.amplitude * entanglement * angSim * 0.3
+      } else {
+        result -= Math.abs(field.amplitude) * (1 - angSim) * 0.05
+      }
+    }
+
+    return this.normalize(result)
+  }
+
+  attractorStrength(domain) {
+    if (this.excludedDomains.has(domain)) return 0
+    const field = this.fields.get(domain)
+    if (!field || field.history.length === 0) return 0
+    const avgActivation =
+      field.history.reduce((sum, h) => sum + h.activation, 0)
+      / field.history.length
+    const thetaStability = this.normalize(
+      1 - field.history.reduce((sum, h, i) => {
+        if (i === 0) return sum
+        return sum + Math.abs(h.theta - field.history[i - 1].theta) / (this.cycle / 2)
+      }, 0) / Math.max(field.history.length - 1, 1)
+    )
+    return this.normalize(avgActivation * 0.70 + thetaStability * 0.30)
+  }
+
+  cognitiveState() {
+    if (this.fields.size === 0) return { value: 0, terms: [], t: this._t }
+    const terms = []
+    let   total = 0
+    for (const [domain, field] of this.fields.entries()) {
+      const excluded     = this.excludedDomains.has(domain)
+      const wi           = excluded ? 0 : field.weight
+      const Ai           = excluded ? 0 : this.attractorStrength(domain)
+      const contribution = wi * Ai
+      terms.push({
+        domain,
+        weight:       Number(wi.toFixed(4)),
+        amplitude:    Number((excluded ? 0 : field.amplitude).toFixed(4)),
+        theta:        Number(field.theta.toFixed(4)),
+        phase:        Number(field.phase.toFixed(4)),
+        attractor:    Number(Ai.toFixed(4)),
+        contribution: Number(contribution.toFixed(4)),
+        superposed:   field.superposed,
+        excluded,
+        semantic:     this.semanticMap.has(domain)
+      })
+      total += contribution
+    }
+    terms.sort((a, b) => b.contribution - a.contribution)
+    return {
+      value: Number(this.normalize(total).toFixed(4)),
+      terms,
+      t:     this._t
+    }
+  }
+
+  ingest(signal) {
+    if (!signal || !signal.domain) return this
+    const { domain, similarity=0, continuity=0, relevance=0, pressure=0 } = signal
+
+    const theta = this.containTheta(
+      this._cyclePhase +
+      (similarity * this.cycle * 0.25) +
+      (relevance  * this.cycle * 0.15)
+    )
+
+    this._perceptionBuffer.push({
+      domain,
+      similarity: this.normalize(similarity),
+      continuity: this.normalize(continuity),
+      relevance:  this.normalize(relevance),
+      pressure:   this.normalize(pressure),
+      theta,
+      index: this._perceptionBuffer.length
+    })
+
+    this._cyclePhase = this.containTheta(
+      this._cyclePhase + (this.cycle / this.resolution)
+    )
+
+    if (!this.fields.has(domain)) {
+      this.fields.set(domain, this.createField(domain, theta))
+    }
+
+    if (this._perceptionBuffer.length >= this.bufferThreshold) {
+      return this.flush()
+    }
+
+    return this
+  }
+
+  async flush() {
+    if (this._perceptionBuffer.length === 0) return this.snapshot()
+
+    const compressed = this._compressBuffer(this._perceptionBuffer)
+    this._perceptionBuffer = []
+    this._cyclePhase       = 0
+
+    const activeDomains = compressed.map(s => s.domain)
+    this._recordCooccurrence(activeDomains)
+
+    for (const signal of compressed) {
+      if (signal.conflict > 0.7) {
+        const others = activeDomains.filter(d => d !== signal.domain)
+        for (const other of others) this._recordConflict(signal.domain, other)
+      }
+    }
+
+    this._updateEntanglementFromCooccurrence()
+    const triggeredRules = this.applyZeroRules()
+    const Cs = this.cognitiveState()
+
+    for (const signal of compressed) {
+      if (this.excludedDomains.has(signal.domain)) continue
+      if (this._shouldAskLLM(signal.domain, { conflict: signal.conflict, Cs: Cs.value })) {
+        await this._askLLM(signal.domain, activeDomains.filter(d => d !== signal.domain))
+      }
+    }
+
+    for (const [domain, field] of this.fields.entries()) {
+      if (!this.excludedDomains.has(domain)) field.superposed = false
+      this.fields.set(domain, field)
+    }
+
+    const snap   = this.evolve(compressed)
+    const result = this.collapse()
+
+    return { ...snap, collapse: result, bufferFlushed: true, zeroRules: triggeredRules }
+  }
+
+  _compressBuffer(buffer) {
+    const grouped = new Map()
+    for (const signal of buffer) {
+      const { domain } = signal
+      if (!grouped.has(domain)) grouped.set(domain, [])
+      grouped.get(domain).push(signal)
+    }
+    const compressed = []
+    for (const [domain, entries] of grouped.entries()) {
+      const count    = entries.length
+      const mean     = (key) => entries.reduce((sum, e) => sum + e[key], 0) / count
+      const variance = (key) => {
+        const avg = mean(key)
+        return entries.reduce((sum, e) => sum + (e[key] - avg) ** 2, 0) / count
+      }
+      const conflict =
+        (variance('similarity') + variance('continuity') +
+         variance('relevance')  + variance('pressure'))  / 4
+      const avgTheta = entries.reduce((sum, e) => sum + e.theta, 0) / count
+      compressed.push({
+        domain,
+        similarity: this.normalize(mean('similarity') * (1 - conflict)),
+        continuity: this.normalize(mean('continuity') * (1 - conflict)),
+        relevance:  this.normalize(mean('relevance')  * (1 - conflict)),
+        pressure:   this.normalize(mean('pressure')   * (1 - conflict)),
+        theta:      this.containTheta(avgTheta),
+        count,
+        conflict:   Number(conflict.toFixed(4))
+      })
+    }
+    return compressed
+  }
+
+  evolve(signals = []) {
+    this._t++
+    this.decay()
+
+    for (const signal of signals) {
+      const { domain, similarity=0, continuity=0, relevance=0, pressure=0, theta=null } = signal
+      if (!domain || this.excludedDomains.has(domain)) continue
+
+      const current = this.fields.get(domain) ?? this.createField(domain, theta ?? 0)
+
+      const rawActivation =
+        (similarity * 0.40) +
+        (continuity * 0.30) +
+        (relevance  * 0.20) +
+        (pressure   * 0.10)
+
+      const activation = this.applyInterference(domain, rawActivation)
+
+      current.weight = this.normalize(
+        current.weight + (activation * this.reinforcement)
+      )
+
+      if (theta !== null) {
+        current.theta = this.containTheta(current.theta * 0.85 + theta * 0.15)
+        current.phase = this.clamp01(current.phase * 0.95 + activation * 0.05)
+      }
+
+      current.amplitude = this.waveAmplitude(current)
+      current.superposed  = false
+      current.lastUpdate  = this._t
+      current.history.push({ t: this._t, activation, theta: current.theta })
+      if (current.history.length > 12) current.history.shift()
+      this.fields.set(domain, current)
+    }
+
+    this.applyEntanglement()
+    this._conserveAmplitudes()
+
+    const snap = this.snapshot()
+    this._adaptLog.push({ t: this._t, Cs: snap.C_s.value, entropy: snap.entropy })
+    if (this._adaptLog.length > 64) this._adaptLog.shift()
+    if (this._t % this.adaptEvery === 0) this.adapt()
+
+    return snap
+  }
+
+  decay() {
+    for (const [domain, field] of this.fields.entries()) {
+      if (this.excludedDomains.has(domain)) continue
+      field.weight    *= this.decayRate
+      field.weight     = this.normalize(field.weight)
+      field.amplitude  = this.waveAmplitude(field)
+      if (field.weight < 0.03 && !field.superposed) {
+        this.fields.delete(domain)
+        continue
+      }
+      this.fields.set(domain, field)
+    }
+  }
+
+  entropy() {
+    const values =
+      [...this.fields.entries()]
+      .filter(([d]) => !this.excludedDomains.has(d))
+      .map(([, f]) => Math.abs(f.amplitude))
+      .filter(v => v > 0)
+    if (!values.length) return 0
+    const total   = values.reduce((a, b) => a + b, 0)
+    const probs   = values.map(v => v / total)
+    const entropy = -probs.reduce((sum, p) => sum + (p * Math.log2(p)), 0)
+    return entropy / Math.log2(probs.length || 1)
+  }
+
+  dominant() {
+    const entries =
+      [...this.fields.entries()]
+      .filter(([d, f]) => !this.excludedDomains.has(d) && !f.superposed)
+      .map(([, f]) => f)
+      .sort((a, b) => {
+        const scoreA = a.weight * 0.50 + Math.abs(a.amplitude) * 0.30 + this.attractorStrength(a.domain) * 0.20
+        const scoreB = b.weight * 0.50 + Math.abs(b.amplitude) * 0.30 + this.attractorStrength(b.domain) * 0.20
+        return scoreB - scoreA
+      })
+
+    const top = entries[0] ?? null
+    if (!top) return null
+    const entropy = this.entropy()
+    if (top.weight >= this.collapseThreshold && entropy <= this.entropyLimit) {
+      return {
+        domain:    top.domain,
+        weight:    top.weight,
+        amplitude: top.amplitude,
+        theta:     top.theta,
+        phase:     top.phase,
+        entropy
+      }
+    }
+    return null
+  }
+
+  superposition(limit = 5) {
+    return [...this.fields.entries()]
+      .filter(([d]) => !this.excludedDomains.has(d))
+      .map(([, f]) => f)
+      .sort((a, b) => {
+        const sA = a.weight * 0.50 + Math.abs(a.amplitude) * 0.30 + this.attractorStrength(a.domain) * 0.20
+        const sB = b.weight * 0.50 + Math.abs(b.amplitude) * 0.30 + this.attractorStrength(b.domain) * 0.20
+        return sB - sA
+      })
+      .slice(0, limit)
+      .map(f => ({
+        domain:    f.domain,
+        weight:    Number(f.weight.toFixed(4)),
+        amplitude: Number(f.amplitude.toFixed(4)),
+        theta:     Number(f.theta.toFixed(4)),
+        phase:     Number(f.phase.toFixed(4)),
+        superposed: f.superposed,
+        semantic:  this.semanticMap.has(f.domain)
+      }))
+  }
+
+  collapse() {
+    const dominant = this.dominant()
+
+    if (!dominant) {
+      this._collapseLog.push({ t: this._t, collapsed: false })
+      return {
+        collapsed:    false,
+        activeDomain: null,
+        entropy:      this.entropy(),
+        C_s:          this.cognitiveState(),
+        excluded:     [...this.excludedDomains]
+      }
+    }
+
+    for (const [domain, field] of this.fields.entries()) {
+      if (this.excludedDomains.has(domain)) continue
+
+      const angSim = this.angularSimilarity(field.theta, dominant.theta)
+
+      if (domain === dominant.domain) {
+        field.weight    = Math.min(1, field.weight * 1.08)
+        field.phase     = this.clamp01(field.phase  * 1.04)
+      } else {
+        const suppressFactor = 0.65 - angSim * 0.15
+        field.weight         = this.normalize(field.weight * suppressFactor)
+      }
+
+      field.amplitude  = this.waveAmplitude(field)
+      field.superposed = false
+      this.fields.set(domain, field)
+    }
+
+    this._conserveAmplitudes()
+    this._collapseLog.push({ t: this._t, collapsed: true, domain: dominant.domain })
+    if (this._collapseLog.length > 64) this._collapseLog.shift()
+
+    return {
+      collapsed:    true,
+      activeDomain: dominant.domain,
+      weight:       dominant.weight,
+      amplitude:    dominant.amplitude,
+      theta:        dominant.theta,
+      phase:        dominant.phase,
+      entropy:      dominant.entropy,
+      C_s:          this.cognitiveState(),
+      excluded:     [...this.excludedDomains]
+    }
+  }
+
+  snapshot() {
+    return {
+      t:             this._t,
+      entropy:       Number(this.entropy().toFixed(4)),
+      activeDomain:  this.dominant(),
+      superposition: this.superposition(),
+      C_s:           this.cognitiveState(),
+      bufferSize:    this._perceptionBuffer.length,
+      cyclePhase:    Number(this.containTheta(this._cyclePhase).toFixed(4)),
+      semanticSize:  this.semanticMap.size,
+      relations:     this.entangled.size,
+      excluded:      [...this.excludedDomains],
+      zeroLog:       this._zeroLog.slice(-5)
+    }
+  }
+
+  volatility() {
+    const log = this._adaptLog
+    if (log.length < 2) return 0
+    let changes = 0
+    for (let i = 1; i < log.length; i++) changes += Math.abs(log[i].Cs - log[i - 1].Cs)
+    return changes / log.length
+  }
+
+  avgCs() {
+    const log = this._adaptLog
+    if (!log.length) return 0
+    return log.reduce((s, e) => s + e.Cs, 0) / log.length
+  }
+
+  falseCollapseRate() {
+    const recent    = this._collapseLog.slice(-20)
+    if (!recent.length) return 0
+    const collapsed = recent.filter(e => e.collapsed).length
+    const reversed  = recent.filter((e, i) =>
+      e.collapsed && recent[i + 1] && !recent[i + 1].collapsed
+    ).length
+    return collapsed > 0 ? reversed / collapsed : 0
+  }
+
+  adapt() {
+    const v   = this.volatility()
+    const avg = this.avgCs()
+    const fcr = this.falseCollapseRate()
+
+    if (v > 0.7)         this.decayRate         = Math.min(0.99, this.decayRate + 0.005)
+    else if (v < 0.3)    this.decayRate         = Math.max(0.80, this.decayRate - 0.005)
+
+    if (avg > 0.75)      this.reinforcement     = Math.max(0.05, this.reinforcement - 0.002)
+    else if (avg < 0.35) this.reinforcement     = Math.min(0.25, this.reinforcement + 0.002)
+
+    if (fcr > 0.4)       this.collapseThreshold = Math.min(0.90, this.collapseThreshold + 0.01)
+    else if (this._collapseLog.filter(e => e.collapsed).length === 0) {
+      this.collapseThreshold = Math.max(0.50, this.collapseThreshold - 0.01)
+    }
+
+    return {
+      t:                 this._t,
+      decayRate:         Number(this.decayRate.toFixed(4)),
+      reinforcement:     Number(this.reinforcement.toFixed(4)),
+      collapseThreshold: Number(this.collapseThreshold.toFixed(4)),
+      volatility:        Number(v.toFixed(4)),
+      avgCs:             Number(avg.toFixed(4)),
+      falseCollapseRate: Number(fcr.toFixed(4))
+    }
+  }
+
+  getSemanticMap() {
+    const result = {}
+    for (const [domain, data] of this.semanticMap.entries()) result[domain] = data
+    return result
+  }
+
+  getRelations() {
+    const result = {}
+    for (const [key, strength] of this.entangled.entries()) result[key] = Number(strength.toFixed(4))
+    return result
+  }
+
+  getZeroLog() { return [...this._zeroLog] }
+
+  reset() {
+    this.fields.clear()
+    this.entangled.clear()
+    this.semanticMap.clear()
+    this.cooccurrence.clear()
+    this.excludedDomains.clear()
+    this._t                = 0
+    this._adaptLog         = []
+    this._collapseLog      = []
+    this._perceptionBuffer = []
+    this._cyclePhase       = 0
+    this._llmCache.clear()
+    this._zeroLog          = []
+  }
+}
