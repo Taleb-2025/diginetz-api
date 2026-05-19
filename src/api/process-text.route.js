@@ -497,6 +497,9 @@ function buildClaudeBody(model, maxTokens, systemHint, messages) {
   if (systemHint && String(systemHint).trim()) {
     body.system = String(systemHint).trim()
   }
+  // ── Web Search — اتصال بالإنترنت ─────────────────────────────
+  // Claude يبحث تلقائياً عند الحاجة (طقس، أخبار، أسعار...)
+  body.tools = [{ type: 'web_search_20250305', name: 'web_search' }]
   return body
 }
 
@@ -737,7 +740,13 @@ router.post('/process-text', async (req, res) => {
       if (!claudeResponse.ok)
         throw new Error(`Claude error: ${claudeData?.error?.message ?? claudeResponse.status}`)
 
-      reply             = claudeData?.content?.[0]?.text ?? null
+      // ── استخرج النص من الجواب — يدعم web_search tool ──────────
+      // عند البحث: content = [tool_use, tool_result, text]
+      reply = claudeData?.content
+        ?.filter(c => c.type === 'text')
+        .map(c => c.text)
+        .join('\n')
+        .trim() || null
       inputTokensTotal  = claudeData?.usage?.input_tokens  ?? 0
       outputTokensTotal = claudeData?.usage?.output_tokens ?? 0
 
