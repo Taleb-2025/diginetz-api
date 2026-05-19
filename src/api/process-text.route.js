@@ -317,18 +317,31 @@ function compressAssistantMessage(content) {
 const capsuleMemory = new Map()  // sid → [{ topic, covered, missing, t }]
 const anchorMemory  = new Map()  // sid → [{ concept, weight, t }]
 
-// ── حفظ كبسولة من نتيجة Observer ─────────────────────────────────
+// ── حفظ كبسولة منظمة من نتيجة Observer ──────────────────────────
+// #5: Structured Capsules — objects لا prose
 function storeCapsule(sid, observer, topicText, t) {
   if (!observer?.diagnostics) return
   const d = observer.diagnostics
   if (d.confidence === 'unknown') return
 
+  // استخرج المفاهيم المغطاة والناقصة من diagnostics
+  const coveredConcepts = d.concepts
+    ?.filter(c => c.covered)
+    .map(c => c.label) ?? []
+
+  const pendingConcepts = d.concepts
+    ?.filter(c => !c.covered)
+    .map(c => c.label) ?? []
+
   const store = capsuleMemory.get(sid) ?? []
   store.push({
-    topic:   topicText ?? 'general',
-    covered: observer.observations?.filter(o => o.includes('غطى') || o.includes('covered')) ?? [],
-    missing: observer.nextQuestionHints?.map(h => h.replace(/.*"(.+)".*/,'$1')) ?? [],
-    lang:    d.lang ?? 'en',
+    topic:      topicText ?? 'general',
+    covered:    coveredConcepts,    // ← مفاهيم فعلية لا prose
+    pending:    pendingConcepts,    // ← ما تبقى
+    confidence: d.confidence,       // ← high/partial/low
+    coverage:   d.coverage,         // ← full/partial/limited
+    source:     'observer',         // ← provenance بسيط
+    lang:       d.lang ?? 'en',
     t
   })
   if (store.length > 10) store.shift()
@@ -350,18 +363,21 @@ function updateAnchors(sid, topicText, weight) {
   anchorMemory.set(sid, store)
 }
 
-// ── بناء context message من الكبسولات ────────────────────────────
+// ── بناء context منظم من الكبسولات ─────────────────────────────
+// #5 + #6: Structured capsules → messages لا system
 function buildCapsuleContext(sid) {
   const caps = capsuleMemory.get(sid) ?? []
   if (!caps.length) return []
   const recent = caps.slice(-3)
   const lines = recent.map(c => {
-    const parts = [`[topic: ${c.topic}]`]
-    if (c.covered?.length) parts.push(`covered: ${c.covered.slice(0,2).join(', ')}`)
-    if (c.missing?.length) parts.push(`pending: ${c.missing.slice(0,2).join(', ')}`)
+    const parts = [`topic:${c.topic}`]
+    if (c.covered?.length)    parts.push(`covered:${c.covered.slice(0,3).join(',')}`)
+    if (c.pending?.length)    parts.push(`pending:${c.pending.slice(0,2).join(',')}`)
+    if (c.confidence)         parts.push(`conf:${c.confidence}`)
     return parts.join(' | ')
   })
-  return [{ role: 'user', content: `[session context]\n${lines.join('\n')}` }]
+  // يذهب إلى messages لا system ✅
+  return [{ role: 'user', content: `[memory]\n${lines.join('\n')}` }]
 }
 
 // ── بناء context من الـ Anchors ───────────────────────────────────
@@ -645,7 +661,10 @@ router.post('/process-text', async (req, res) => {
     if (built.blocked) return res.status(422).json({ blocked: true, reason: 'semantic_constraint' })
     if (!built.passToLLM && !hasImage) return res.json({ reply: null, skippedLLM: true, reason: 'weak_semantic_field' })
 
-    // ── دمج codeHint مع systemHint ──────────────────────────
+    // ── #6 System/User Separation ────────────────────────────
+    // system: behavioral + structural hints فقط (لا كود خام)
+    // codeHint = structural summary ✅ (ليس كوداً خاماً)
+    // built.systemHint = context/memory/style ✅
     const systemHint = [codeHint, built.systemHint]
       .filter(Boolean)
       .join('\n') || null
