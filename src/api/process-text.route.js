@@ -764,7 +764,8 @@ router.get('/process-text', (_req, res) => {
 router.post('/process-text', async (req, res) => {
   const {
     text = '', sessionId, history = [],
-    image = null, imageMimeType = 'image/jpeg'
+    image = null, imageMimeType = 'image/jpeg',
+    savedCode = null
   } = req.body
 
   const hasText  = typeof text  === 'string' && text.trim().length > 0
@@ -810,10 +811,17 @@ router.post('/process-text', async (req, res) => {
     storeSemanticEntry(sid, tValue, textForMemory || inputText)
 
     // ── كشف وحفظ الكود الخام (بدون backticks) ────────────────────
-    // إذا المستخدم أرسل كوداً مباشرة بدون ``` يتجاهله detectCodeBlocks
     const CODE_PATTERN = /export\s+class|^class\s+\w+|^function\s+\w+|^const\s+\w+\s*=\s*(async\s+)?\(|^async\s+function/m
     if (CODE_PATTERN.test(cleanedText) && !fullCodeStore.has(sid)) {
       storeFullCode(sid, cleanedText, null, null)
+    }
+
+    // ── savedCode من localStorage الـ frontend ───────────────────
+    // يُستخدم إذا لم يُرسل كود في الطلب الحالي
+    if (savedCode && !fullCodeStore.has(sid)) {
+      const isValidCode = CODE_PATTERN.test(savedCode) ||
+        /```[\s\S]*?```/.test(savedCode)
+      if (isValidCode) storeFullCode(sid, savedCode, null, null)
     }
 
     const engine      = getEngine(sid)
