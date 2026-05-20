@@ -418,15 +418,21 @@ function retrieveContext(sid, question, engine) {
       break
 
     case 'follow_up':
-      // آخر جواب فقط
+      // آخر جواب + هيكل الكود
       if (lastAnswer?.answer)
         parts.push('[previous answer]\n' + lastAnswer.answer.slice(0, 600))
       if (fullCode?.hint)
         parts.push('[code structure]\n' + fullCode.hint)
+      // إذا لا يوجد شيء → أرسل الكود كاملاً
+      if (!parts.length && fullCode?.raw)
+        parts.push('[full code]\n' + fullCode.raw)
       break
 
     default: // general
-      // لا كبسولات — سؤال عام
+      // حتى للأسئلة العامة — أضف buildCodeHint إذا يوجد كود
+      // 50 token فقط → Claude يعرف السياق دائماً
+      if (fullCode?.hint) parts.push(fullCode.hint)
+      else if (fullCode?.raw) parts.push('[code] ' + fullCode.raw.slice(0, 500))
       break
   }
 
