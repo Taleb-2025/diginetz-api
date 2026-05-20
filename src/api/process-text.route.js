@@ -340,6 +340,123 @@ function compressUserMessage(content) {
 const capsuleMemory    = new Map()  // sid → [{ topic, covered, missing, t }]
 const anchorMemory     = new Map()  // sid → [{ concept, weight, t }]
 const codeCapsulesStore = new Map() // sid → Map(symbol → { code, calls, vector })
+const fullCodeStore     = new Map() // sid → { raw, hint, name, t }
+const answerCapsules    = new Map() // sid → [{ type, question, answer, t }]
+
+// ══════════════════════════════════════════════════════════════
+//  Question Classifier — يُحدد نوع السؤال بدقة
+//  الأنواع:
+//  code_review     ← تحليل / أخطاء / نقاط قوة وضعف
+//  code_modify     ← تعديل / إصلاح / تحسين الكود
+//  code_explain    ← شرح دالة / مفهوم في الكود
+//  follow_up       ← "أكمل" / "اشرح أكثر" / "كيف؟"
+//  general         ← سؤال عام لا علاقة له بكود
+// ══════════════════════════════════════════════════════════════
+
+const Q_PATTERNS = {
+  code_review: [
+    /أخطاء|خطأ|error|bug|مشكل|ضعف|قوة|strengths|weakness|review|analyze|حلل|تحليل/i,
+    /ما.*الخطأ|ما.*المشكل|كيف.*يعمل|نقاط|مقارنة/i
+  ],
+  code_modify: [
+    /عدّل|عدل|modify|fix|إصلاح|اصلح|حسّن|حسن|improve|refactor|تعديل|غيّر/i,
+    /يجب.*تعديل|هل.*تعديل|كيف.*نعدل|أضف|add|remove|احذف/i
+  ],
+  code_explain: [
+    /اشرح|شرح|explain|وضّح|describe|ما.*دور|ما.*وظيفة|كيف.*تعمل|معنى/i,
+    /ما هو|what is|ما.*collapse|ما.*ingest|كيف.*collapse/i
+  ],
+  follow_up: [
+    /أكمل|كمّل|continue|أكثر|mehr|بالتفصيل|تفصيل|استمر|أضف.*شرح/i,
+    /^(نعم|yes|ja|okay|ok|صح|طيب|ممتاز|جيد)\.?$/i
+  ]
+}
+
+function classifyQuestion(text, hasCapsules) {
+  if (!hasCapsules) return 'general'
+  const t = text.trim()
+  for (const [type, patterns] of Object.entries(Q_PATTERNS)) {
+    if (patterns.some(p => p.test(t))) return type
+  }
+  // إذا قصير جداً → follow_up
+  if (t.split(/\s+/).length <= 4) return 'follow_up'
+  return 'general'
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Smart Capsule Retrieval — يختار ما يحتاجه Claude
+// ══════════════════════════════════════════════════════════════
+
+function retrieveContext(sid, question, engine) {
+  const questionType = classifyQuestion(question, fullCodeStore.has(sid))
+  const fullCode     = fullCodeStore.get(sid)
+  const answers      = answerCapsules.get(sid) ?? []
+  const lastAnswer   = answers[answers.length - 1] ?? null
+  const codeCaps     = codeCapsulesStore.get(sid)
+
+  const parts = []
+
+  switch (questionType) {
+
+    case 'code_review':
+    case 'code_modify':
+      // الكود كاملاً + آخر جواب إذا وجد
+      if (fullCode?.raw)
+        parts.push('[full code: ' + (fullCode.name ?? 'code') + ']\n' + fullCode.raw)
+      if (lastAnswer?.answer)
+        parts.push('[previous analysis]\n' + lastAnswer.answer.slice(0, 400))
+      break
+
+    case 'code_explain':
+      // دالة محددة + الكود الكامل اختياري
+      if (codeCaps?.size) {
+        const relevant = findRelevantCapsules(question, codeCaps, engine, 2)
+        if (relevant.length) parts.push(buildCodeContext(relevant))
+      }
+      if (!parts.length && fullCode?.raw)
+        parts.push('[code]\n' + fullCode.raw)
+      break
+
+    case 'follow_up':
+      // آخر جواب فقط
+      if (lastAnswer?.answer)
+        parts.push('[previous answer]\n' + lastAnswer.answer.slice(0, 600))
+      if (fullCode?.hint)
+        parts.push('[code structure]\n' + fullCode.hint)
+      break
+
+    default: // general
+      // لا كبسولات — سؤال عام
+      break
+  }
+
+  return {
+    context:      parts.length ? parts.join('\n\n') : null,
+    questionType
+  }
+}
+
+// ── حفظ الكود الكامل عند إرساله ──────────────────────────────────
+function storeFullCode(sid, rawCode, hint, name) {
+  fullCodeStore.set(sid, { raw: rawCode, hint, name: name ?? 'code', t: Date.now() })
+}
+
+// ── حفظ جواب مهم كـ capsule ──────────────────────────────────────
+function storeAnswerCapsule(sid, question, answer, questionType) {
+  // لا نحفظ الأجوبة العامة أو القصيرة
+  if (questionType === 'general') return
+  if (!answer || answer.length < 50) return
+
+  const store = answerCapsules.get(sid) ?? []
+  store.push({
+    type:     questionType,
+    question: question.slice(0, 100),
+    answer:   answer.slice(0, 800),  // آخر 800 حرف من الجواب
+    t:        Date.now()
+  })
+  if (store.length > 5) store.shift()  // max 5 أجوبة
+  answerCapsules.set(sid, store)
+}
 
 // ══════════════════════════════════════════════════════════════
 //  Hybrid Code Capsules — تقسيم الكود لكبسولات ذكية
@@ -747,10 +864,16 @@ router.post('/process-text', async (req, res) => {
       // ── هيكل الكود (buildCodeHint: 50 token دائماً) ──────────────
       codeHint = buildCodeHint(structIndex)
 
-      // ── قسّم الكود لكبسولات في الذاكرة ─────────────────────
-      const rawCode = codeBlocks.join('\n\n')
-      const caps    = extractCodeCapsules(rawCode, structIndex)
+      // ── قسّم الكود لكبسولات + احفظ الكود كاملاً ────────────
+      const rawCode  = codeBlocks.join('\n\n')
+      const caps     = extractCodeCapsules(rawCode, structIndex)
       if (caps.size > 0) codeCapsulesStore.set(sid, caps)
+
+      // احفظ الكود الكامل للاسترجاع بالـ code_review / code_modify
+      const codeName = structIndex
+        ? [...structIndex.nodes.values()].find(n => n.type === 'class')?.symbol
+        : null
+      storeFullCode(sid, rawCode, codeHint, codeName)
 
       // ── حدّث الذاكرة الدلالية ───────────────────────────────
       if (codeHint) {
@@ -785,16 +908,12 @@ router.post('/process-text', async (req, res) => {
     if (built.blocked) return res.status(422).json({ blocked: true, reason: 'semantic_constraint' })
     if (!built.passToLLM && !hasImage) return res.json({ reply: null, skippedLLM: true, reason: 'weak_semantic_field' })
 
-    // ── Hybrid: buildCodeHint + Relevant Capsule ─────────────────
-    // في كل طلب → ابحث عن كبسولة ذات صلة بالسؤال
-    let capsuleContext = null
-    const sessionCaps = codeCapsulesStore.get(sid)
-    if (sessionCaps?.size) {
-      const relevant = findRelevantCapsules(cleanedText, sessionCaps, engine)
-      if (relevant.length) capsuleContext = buildCodeContext(relevant)
-    }
+    // ── Smart Capsule Retrieval ────────────────────────────────
+    // CELF يُحدد نوع السؤال → يختار الكبسولة الصحيحة
+    const { context: capsuleContext, questionType } =
+      retrieveContext(sid, cleanedText, engine)
 
-    // system = hint (50 token) + capsule (200 token إذا لزم)
+    // system = hint + capsule_ذات_صلة فقط + built hint
     const systemHint = [codeHint, capsuleContext, built.systemHint]
       .filter(Boolean)
       .join('\n') || null
@@ -929,6 +1048,9 @@ router.post('/process-text', async (req, res) => {
         storeCapsule(sid, observerBox, lastTopicText, tValue)
         updateAnchors(sid, lastTopicText, questionSimilarity ?? 0.5)
       }
+
+      // ── احفظ الجواب كـ Answer Capsule ────────────────────────
+      storeAnswerCapsule(sid, cleanedText, reply, questionType)
     }
 
     // ── Metrics ───────────────────────────────────────────────
