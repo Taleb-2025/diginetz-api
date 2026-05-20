@@ -786,14 +786,12 @@ router.post('/process-text', async (req, res) => {
     if (!built.passToLLM && !hasImage) return res.json({ reply: null, skippedLLM: true, reason: 'weak_semantic_field' })
 
     // ── Hybrid: buildCodeHint + Relevant Capsule ─────────────────
-    // إذا لا يوجد كود جديد → ابحث عن كبسولة ذات صلة
+    // في كل طلب → ابحث عن كبسولة ذات صلة بالسؤال
     let capsuleContext = null
-    if (!codeBlocks.length) {
-      const sessionCaps = codeCapsulesStore.get(sid)
-      if (sessionCaps?.size) {
-        const relevant = findRelevantCapsules(cleanedText, sessionCaps, engine)
-        if (relevant.length) capsuleContext = buildCodeContext(relevant)
-      }
+    const sessionCaps = codeCapsulesStore.get(sid)
+    if (sessionCaps?.size) {
+      const relevant = findRelevantCapsules(cleanedText, sessionCaps, engine)
+      if (relevant.length) capsuleContext = buildCodeContext(relevant)
     }
 
     // system = hint (50 token) + capsule (200 token إذا لزم)
