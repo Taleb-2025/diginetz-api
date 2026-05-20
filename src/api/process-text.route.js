@@ -9,34 +9,7 @@ import { parse }             from '../utils/lightweight-parser.js'
 import { build, cleanInput, filterStyleInstructions, detectStyleInstruction } from '../utils/context-builder.js'
 import { observe }           from '../utils/celf-observer.js'
 import { indexStore }        from './index-code.route.js'
-import { createClient }      from 'redis'
 
-// ── Redis — تخزين دائم لملخصات الكود ────────────────────────────
-// يعمل إذا REDIS_URL موجود — وإلا يتجاهل بهدوء
-let redis = null
-async function initRedis() {
-  if (!process.env.REDIS_URL) return
-  try {
-    redis = createClient({ url: process.env.REDIS_URL })
-    redis.on('error', () => { redis = null })
-    await redis.connect()
-    console.log('CELF Redis: connected ✅')
-  } catch { redis = null }
-}
-initRedis()
-
-async function redisSave(key, value, ttlSeconds = 86400) {
-  if (!redis) return
-  try { await redis.set(key, JSON.stringify(value), { EX: ttlSeconds }) } catch {}
-}
-
-async function redisGet(key) {
-  if (!redis) return null
-  try {
-    const v = await redis.get(key)
-    return v ? JSON.parse(v) : null
-  } catch { return null }
-}
 
 const router = express.Router()
 
@@ -364,8 +337,95 @@ function compressUserMessage(content) {
 // ══════════════════════════════════════════════════════════════
 
 // ── مخزن الكبسولات والـ anchors per session ──────────────────────
-const capsuleMemory = new Map()  // sid → [{ topic, covered, missing, t }]
-const anchorMemory  = new Map()  // sid → [{ concept, weight, t }]
+const capsuleMemory    = new Map()  // sid → [{ topic, covered, missing, t }]
+const anchorMemory     = new Map()  // sid → [{ concept, weight, t }]
+const codeCapsulesStore = new Map() // sid → Map(symbol → { code, calls, vector })
+
+// ══════════════════════════════════════════════════════════════
+//  Hybrid Code Capsules — تقسيم الكود لكبسولات ذكية
+//  buildCodeHint: دائماً (50 token) — البنية العامة
+//  Capsule محدد: عند الحاجة (200 token) — الكود الفعلي
+// ══════════════════════════════════════════════════════════════
+
+// ── استخراج كود كل دالة من المصدر ───────────────────────────────
+function extractCodeCapsules(sourceCode, structIndex) {
+  const capsules = new Map()
+  const nodes    = [...structIndex.nodes.values()]
+
+  for (const node of nodes) {
+    if (node.type !== 'function' && node.type !== 'method') continue
+    const name    = node.symbol
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+    // أنماط مختلفة لتعريف الدالة
+    const patterns = [
+      new RegExp(`(?:async\\s+)?${escaped}\\s*\\([^)]*\\)\\s*\\{`, 's'),
+      new RegExp(`(?:async\\s+)?function\\s+${escaped}\\s*\\(`, 's'),
+      new RegExp(`${escaped}\\s*=\\s*(?:async\\s+)?(?:function\\s*)?\\(`, 's'),
+    ]
+
+    for (const pat of patterns) {
+      const start = sourceCode.search(pat)
+      if (start < 0) continue
+
+      // استخرج body بعد أول {
+      let depth = 0, i = start, found = false
+      while (i < sourceCode.length) {
+        if (sourceCode[i] === '{') { depth++; found = true }
+        if (sourceCode[i] === '}') { depth-- }
+        if (found && depth === 0) {
+          capsules.set(name, {
+            symbol: name,
+            type:   node.type,
+            code:   sourceCode.slice(start, i + 1).trim(),
+            calls:  node.calls ?? [],
+            vector: node.semanticVector ?? null
+          })
+          break
+        }
+        i++
+      }
+      if (capsules.has(name)) break
+    }
+  }
+  return capsules
+}
+
+// ── ابحث عن الكبسولات الأقرب للسؤال ─────────────────────────────
+function findRelevantCapsules(query, capsules, engine, max = 2) {
+  if (!capsules?.size) return []
+  const q      = query.toLowerCase()
+  const qVec   = engine.semanticVector?.(query) ?? null
+  const scored = []
+
+  for (const [symbol, cap] of capsules.entries()) {
+    let score = 0
+
+    // اسم الدالة مذكور في السؤال
+    if (q.includes(symbol.toLowerCase()))            score += 0.9
+
+    // دوال تستدعيها مذكورة
+    for (const call of (cap.calls ?? []))
+      if (q.includes(call.toLowerCase()))            score += 0.3
+
+    // تشابه دلالي
+    if (qVec && cap.vector)
+      score += engine.cosineSimilarity(qVec, cap.vector) * 0.5
+
+    if (score > 0.2) scored.push({ ...cap, score })
+  }
+
+  return scored.sort((a, b) => b.score - a.score).slice(0, max)
+}
+
+// ── بناء code context للـ LLM ────────────────────────────────────
+function buildCodeContext(capsules) {
+  if (!capsules?.length) return null
+  const blocks = capsules.map(c =>
+    `// ${c.symbol}(${c.calls?.length ? 'calls: ' + c.calls.slice(0,3).join(', ') : ''})\n${c.code}`
+  )
+  return `[relevant code]\n\`\`\`js\n${blocks.join('\n\n')}\n\`\`\``
+}
 
 // ── حفظ كبسولة منظمة من نتيجة Observer ──────────────────────────
 // #5: Structured Capsules — objects لا prose
@@ -659,14 +719,7 @@ router.post('/process-text', async (req, res) => {
     const codeBlocks  = detectCodeBlocks(cleanedText)
     let   codeHint    = null
 
-    // استرجع hint محفوظ من Redis إذا لم يوجد كود في الطلب الحالي
-    if (!codeBlocks.length) {
-      const cached = await redisGet(`codehint:${sid}`)
-      if (cached?.hint) {
-        codeHint = cached.hint
-        console.log('CELF Redis: code hint retrieved ✅')
-      }
-    }
+
 
     if (codeBlocks.length > 0 && structIndex) {
       const tempPath = `session_inline/${sid}/msg_${tValue}.js`
@@ -686,25 +739,22 @@ router.post('/process-text', async (req, res) => {
       structIndex.injectSemanticVectors(engine)
       structIndex.injectIntoVault(engine)
 
-      // ── هيكل الكود للـ LLM ───────────────────────────────────
+      // ── هيكل الكود (buildCodeHint: 50 token دائماً) ──────────────
       codeHint = buildCodeHint(structIndex)
 
-      // ── احفظ في Redis للاسترجاع المستقبلي ────────────────────
+      // ── قسّم الكود لكبسولات في الذاكرة ─────────────────────
+      const rawCode = codeBlocks.join('\n\n')
+      const caps    = extractCodeCapsules(rawCode, structIndex)
+      if (caps.size > 0) codeCapsulesStore.set(sid, caps)
+
+      // ── حدّث الذاكرة الدلالية ───────────────────────────────
       if (codeHint) {
         const codeMemory = codeHint
           .replace('[code structure]', '')
           .replace('analyze: practical usage and risks — not philosophy', '')
           .trim()
         if (codeMemory) storeSemanticEntry(sid, tValue + 0.5, codeMemory)
-
-        // Redis: يبقى 24 ساعة — يكفي لمواصلة المحادثات
-        await redisSave(`codehint:${sid}`, {
-          hint:      codeHint,
-          summary:   codeMemory,
-          storedAt:  Date.now()
-        })
       }
-    }
 
     // ── Route Context ─────────────────────────────────────────
     const rawRoute      = engine.routeContext(cleanedText, 5)
@@ -729,11 +779,19 @@ router.post('/process-text', async (req, res) => {
     if (built.blocked) return res.status(422).json({ blocked: true, reason: 'semantic_constraint' })
     if (!built.passToLLM && !hasImage) return res.json({ reply: null, skippedLLM: true, reason: 'weak_semantic_field' })
 
-    // ── #6 System/User Separation ────────────────────────────
-    // system: behavioral + structural hints فقط (لا كود خام)
-    // codeHint = structural summary ✅ (ليس كوداً خاماً)
-    // built.systemHint = context/memory/style ✅
-    const systemHint = [codeHint, built.systemHint]
+    // ── Hybrid: buildCodeHint + Relevant Capsule ─────────────────
+    // إذا لا يوجد كود جديد → ابحث عن كبسولة ذات صلة
+    let capsuleContext = null
+    if (!codeBlocks.length) {
+      const sessionCaps = codeCapsulesStore.get(sid)
+      if (sessionCaps?.size) {
+        const relevant = findRelevantCapsules(cleanedText, sessionCaps, engine)
+        if (relevant.length) capsuleContext = buildCodeContext(relevant)
+      }
+    }
+
+    // system = hint (50 token) + capsule (200 token إذا لزم)
+    const systemHint = [codeHint, capsuleContext, built.systemHint]
       .filter(Boolean)
       .join('\n') || null
     const continuity = built.context?.continuity ?? 0
