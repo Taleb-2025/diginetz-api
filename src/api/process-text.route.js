@@ -836,17 +836,38 @@ router.post('/process-text', async (req, res) => {
     let outputTokensTotal = 0
 
     try {
-      const claudeResponse = await fetchClaude(
-        buildClaudeBody(model, maxTokens, systemHint, messages)
-      )
+      const claudeBody     = buildClaudeBody(model, maxTokens, systemHint, messages)
+      const claudeResponse = await fetchClaude(claudeBody)
 
       claudeData = await claudeResponse.json()
 
       if (!claudeResponse.ok)
         throw new Error(`Claude error: ${claudeData?.error?.message ?? claudeResponse.status}`)
 
-      // ── استخرج النص من الجواب — يدعم web_search tool ──────────
-      // عند البحث: content = [tool_use, tool_result, text]
+      // ── معالجة web_search tool_use (multi-turn) ──────────────────
+      let toolLoopCount = 0
+      while (claudeData?.stop_reason === 'tool_use' && toolLoopCount < 3) {
+        toolLoopCount++
+        const toolUseBlocks = claudeData.content?.filter(c => c.type === 'tool_use') ?? []
+        if (!toolUseBlocks.length) break
+
+        const toolResults = toolUseBlocks.map(tu => ({
+          type:        'tool_result',
+          tool_use_id: tu.id,
+          content:     []
+        }))
+
+        const loopMessages = [
+          ...claudeBody.messages,
+          { role: 'assistant', content: claudeData.content },
+          { role: 'user',      content: toolResults }
+        ]
+
+        const loopResp = await fetchClaude({ ...claudeBody, messages: loopMessages })
+        claudeData     = await loopResp.json()
+      }
+
+      // ── استخرج النص النهائي ────────────────────────────────────
       reply = claudeData?.content
         ?.filter(c => c.type === 'text')
         .map(c => c.text)
