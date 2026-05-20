@@ -384,7 +384,8 @@ function classifyQuestion(text, hasCapsules) {
 }
 
 // ══════════════════════════════════════════════════════════════
-//  Smart Capsule Retrieval — يختار ما يحتاجه Claude
+//  Smart Context Retrieval — الكود كاملاً دائماً عند الحاجة
+//  المبدأ: Claude يحتاج التفاصيل الكاملة لا مقاطع
 // ══════════════════════════════════════════════════════════════
 
 function retrieveContext(sid, question, engine) {
@@ -392,48 +393,18 @@ function retrieveContext(sid, question, engine) {
   const fullCode     = fullCodeStore.get(sid)
   const answers      = answerCapsules.get(sid) ?? []
   const lastAnswer   = answers[answers.length - 1] ?? null
-  const codeCaps     = codeCapsulesStore.get(sid)
 
   const parts = []
 
-  switch (questionType) {
+  // ── الكود كاملاً في كل حالة تتعلق بالكود ─────────────────────
+  if (fullCode?.raw) {
+    const label = fullCode.name ? `[code: ${fullCode.name}]` : '[code]'
+    parts.push(label + '\n' + fullCode.raw)
+  }
 
-    case 'code_review':
-    case 'code_modify':
-      // الكود كاملاً + آخر جواب إذا وجد
-      if (fullCode?.raw)
-        parts.push('[full code: ' + (fullCode.name ?? 'code') + ']\n' + fullCode.raw)
-      if (lastAnswer?.answer)
-        parts.push('[previous analysis]\n' + lastAnswer.answer.slice(0, 400))
-      break
-
-    case 'code_explain':
-      // دالة محددة + الكود الكامل اختياري
-      if (codeCaps?.size) {
-        const relevant = findRelevantCapsules(question, codeCaps, engine, 2)
-        if (relevant.length) parts.push(buildCodeContext(relevant))
-      }
-      if (!parts.length && fullCode?.raw)
-        parts.push('[code]\n' + fullCode.raw)
-      break
-
-    case 'follow_up':
-      // آخر جواب + هيكل الكود
-      if (lastAnswer?.answer)
-        parts.push('[previous answer]\n' + lastAnswer.answer.slice(0, 600))
-      if (fullCode?.hint)
-        parts.push('[code structure]\n' + fullCode.hint)
-      // إذا لا يوجد شيء → أرسل الكود كاملاً
-      if (!parts.length && fullCode?.raw)
-        parts.push('[full code]\n' + fullCode.raw)
-      break
-
-    default: // general
-      // حتى للأسئلة العامة — أضف buildCodeHint إذا يوجد كود
-      // 50 token فقط → Claude يعرف السياق دائماً
-      if (fullCode?.hint) parts.push(fullCode.hint)
-      else if (fullCode?.raw) parts.push('[code] ' + fullCode.raw.slice(0, 500))
-      break
+  // ── آخر جواب مهم — للمتابعة والتحليل التراكمي ────────────────
+  if (lastAnswer?.answer && questionType !== 'general') {
+    parts.push('[previous analysis]\n' + lastAnswer.answer.slice(0, 600))
   }
 
   return {
