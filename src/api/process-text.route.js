@@ -755,6 +755,7 @@ router.post('/process-text', async (req, res) => {
           .trim()
         if (codeMemory) storeSemanticEntry(sid, tValue + 0.5, codeMemory)
       }
+    }  // ← إغلاق if (codeBlocks.length > 0 && structIndex)
 
     // ── Route Context ─────────────────────────────────────────
     const rawRoute      = engine.routeContext(cleanedText, 5)
