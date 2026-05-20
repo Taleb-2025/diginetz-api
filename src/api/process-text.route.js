@@ -354,15 +354,19 @@ function extractCodeCapsules(sourceCode, structIndex) {
 
   for (const node of nodes) {
     if (node.type !== 'function' && node.type !== 'method') continue
+    if (!node.symbol) continue
     const name    = node.symbol
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
     // أنماط مختلفة لتعريف الدالة
-    const patterns = [
-      new RegExp(`(?:async\\s+)?${escaped}\\s*\\([^)]*\\)\\s*\\{`, 's'),
-      new RegExp(`(?:async\\s+)?function\\s+${escaped}\\s*\\(`, 's'),
-      new RegExp(`${escaped}\\s*=\\s*(?:async\\s+)?(?:function\\s*)?\\(`, 's'),
-    ]
+    let patterns
+    try {
+      patterns = [
+        new RegExp('(?:async\\s+)?' + escaped + '\\s*\\([^)]*\\)\\s*\\{', 's'),
+        new RegExp('(?:async\\s+)?function\\s+' + escaped + '\\s*\\(', 's'),
+        new RegExp(escaped + '\\s*=\\s*(?:async\\s+)?(?:function\\s*)?\\(', 's'),
+      ]
+    } catch { continue }
 
     for (const pat of patterns) {
       const start = sourceCode.search(pat)
@@ -421,10 +425,11 @@ function findRelevantCapsules(query, capsules, engine, max = 2) {
 // ── بناء code context للـ LLM ────────────────────────────────────
 function buildCodeContext(capsules) {
   if (!capsules?.length) return null
-  const blocks = capsules.map(c =>
-    `// ${c.symbol}(${c.calls?.length ? 'calls: ' + c.calls.slice(0,3).join(', ') : ''})\n${c.code}`
-  )
-  return `[relevant code]\n\`\`\`js\n${blocks.join('\n\n')}\n\`\`\``
+  const blocks = capsules.map(c => {
+    const callsStr = c.calls?.length ? 'calls: ' + c.calls.slice(0,3).join(', ') : ''
+    return '// ' + c.symbol + '(' + callsStr + ')\n' + c.code
+  })
+  return '[relevant code]\n' + blocks.join('\n\n')
 }
 
 // ── حفظ كبسولة منظمة من نتيجة Observer ──────────────────────────
