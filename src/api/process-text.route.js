@@ -9,6 +9,34 @@ import { parse }             from '../utils/lightweight-parser.js'
 import { build, cleanInput, filterStyleInstructions, detectStyleInstruction } from '../utils/context-builder.js'
 import { observe }           from '../utils/celf-observer.js'
 import { indexStore }        from './index-code.route.js'
+import { createClient }      from 'redis'
+
+// ── Redis — تخزين دائم لملخصات الكود ────────────────────────────
+// يعمل إذا REDIS_URL موجود — وإلا يتجاهل بهدوء
+let redis = null
+async function initRedis() {
+  if (!process.env.REDIS_URL) return
+  try {
+    redis = createClient({ url: process.env.REDIS_URL })
+    redis.on('error', () => { redis = null })
+    await redis.connect()
+    console.log('CELF Redis: connected ✅')
+  } catch { redis = null }
+}
+initRedis()
+
+async function redisSave(key, value, ttlSeconds = 86400) {
+  if (!redis) return
+  try { await redis.set(key, JSON.stringify(value), { EX: ttlSeconds }) } catch {}
+}
+
+async function redisGet(key) {
+  if (!redis) return null
+  try {
+    const v = await redis.get(key)
+    return v ? JSON.parse(v) : null
+  } catch { return null }
+}
 
 const router = express.Router()
 
@@ -626,10 +654,19 @@ router.post('/process-text', async (req, res) => {
       ?? prevUserMsg?.content?.split(/\s+/).slice(0, 8).join(' ')
       ?? null
 
-    // ── Inline Code ───────────────────────────────────────────
+    // ── Inline Code + Redis Retrieval ───────────────────────────
     const structIndex = indexStore?.get(sid) ?? null
     const codeBlocks  = detectCodeBlocks(cleanedText)
     let   codeHint    = null
+
+    // استرجع hint محفوظ من Redis إذا لم يوجد كود في الطلب الحالي
+    if (!codeBlocks.length) {
+      const cached = await redisGet(`codehint:${sid}`)
+      if (cached?.hint) {
+        codeHint = cached.hint
+        console.log('CELF Redis: code hint retrieved ✅')
+      }
+    }
 
     if (codeBlocks.length > 0 && structIndex) {
       const tempPath = `session_inline/${sid}/msg_${tValue}.js`
@@ -652,14 +689,20 @@ router.post('/process-text', async (req, res) => {
       // ── هيكل الكود للـ LLM ───────────────────────────────────
       codeHint = buildCodeHint(structIndex)
 
-      // ── حدّث الذاكرة بالمعنى لا بالكود ──────────────────────
-      // codeHint = وصف وظيفي → أفضل بكثير من الكود الخام
+      // ── احفظ في Redis للاسترجاع المستقبلي ────────────────────
       if (codeHint) {
         const codeMemory = codeHint
           .replace('[code structure]', '')
           .replace('analyze: practical usage and risks — not philosophy', '')
           .trim()
         if (codeMemory) storeSemanticEntry(sid, tValue + 0.5, codeMemory)
+
+        // Redis: يبقى 24 ساعة — يكفي لمواصلة المحادثات
+        await redisSave(`codehint:${sid}`, {
+          hint:      codeHint,
+          summary:   codeMemory,
+          storedAt:  Date.now()
+        })
       }
     }
 
