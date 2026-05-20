@@ -359,8 +359,8 @@ const Q_PATTERNS = {
     /ما.*الخطأ|ما.*المشكل|كيف.*يعمل|نقاط|مقارنة/i
   ],
   code_modify: [
-    /عدّل|عدل|modify|fix|إصلاح|اصلح|حسّن|حسن|improve|refactor|تعديل|غيّر/i,
-    /يجب.*تعديل|هل.*تعديل|كيف.*نعدل|أضف|add|remove|احذف/i
+    /عدّل|عدل|modify|fix|إصلاح|اصلح|حسّن|حسن|improve|refactor|تعديل|تعديلات|غيّر/i,
+    /يجب.*تعديل|هل.*تعديل|كيف.*نعدل|أضف|add|remove|احذف|ضرور/i
   ],
   code_explain: [
     /اشرح|شرح|explain|وضّح|describe|ما.*دور|ما.*وظيفة|كيف.*تعمل|معنى/i,
@@ -809,6 +809,13 @@ router.post('/process-text', async (req, res) => {
       .trim()
     storeSemanticEntry(sid, tValue, textForMemory || inputText)
 
+    // ── كشف وحفظ الكود الخام (بدون backticks) ────────────────────
+    // إذا المستخدم أرسل كوداً مباشرة بدون ``` يتجاهله detectCodeBlocks
+    const CODE_PATTERN = /export\s+class|^class\s+\w+|^function\s+\w+|^const\s+\w+\s*=\s*(async\s+)?\(|^async\s+function/m
+    if (CODE_PATTERN.test(cleanedText) && !fullCodeStore.has(sid)) {
+      storeFullCode(sid, cleanedText, null, null)
+    }
+
     const engine      = getEngine(sid)
     const fieldPrompt = engine.buildFieldPrompt?.() ?? null
 
@@ -873,6 +880,7 @@ router.post('/process-text', async (req, res) => {
       const codeName = structIndex
         ? [...structIndex.nodes.values()].find(n => n.type === 'class')?.symbol
         : null
+      // دائماً حدّث fullCodeStore عند وجود كود جديد (يستبدل القديم)
       storeFullCode(sid, rawCode, codeHint, codeName)
 
       // ── حدّث الذاكرة الدلالية ───────────────────────────────
