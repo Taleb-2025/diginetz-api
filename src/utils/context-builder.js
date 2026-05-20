@@ -4,8 +4,7 @@
 //  systemHint يُبنى من ثلاث طبقات:
 //  1. context injection  (similarity + short query)
 //  2. vault hit          (memory)
-//  3. style hint         (TTL-based)
-//
+//  3. style hint         (TTL-based)//
 //  إصلاح v7.3:
 //  السؤال القصير (≤3 كلمات) + سياق سابق
 //  → يُحقن السياق دائماً بغض النظر عن similarity
