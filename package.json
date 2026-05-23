@@ -12,9 +12,6 @@
     "express": "^4.19.2",
     "cors": "^2.8.5",
     "jsonwebtoken": "^9.0.2",
-    "redis": "^4.6.13",
-    "bullmq": "^5.7.8",
-    "@huggingface/transformers": "^3.0.0",
     "acorn": "^8.14.1",
     "acorn-walk": "^8.3.4"
   },
