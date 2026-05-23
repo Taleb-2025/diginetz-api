@@ -339,9 +339,8 @@ function compressUserMessage(content) {
 // ── مخزن الكبسولات والـ anchors per session ──────────────────────
 const capsuleMemory    = new Map()  // sid → [{ topic, covered, missing, t }]
 const anchorMemory     = new Map()  // sid → [{ concept, weight, t }]
-const codeCapsulesStore = new Map() // sid → Map(symbol → { code, calls, vector })
-const fullCodeStore     = new Map() // sid → { raw, hint, name, t }
-const answerCapsules    = new Map() // sid → [{ type, question, answer, t }]
+// ─── Code storage moved to frontend IndexedDB ───────────────────
+// fullCodeStore, codeCapsulesStore, answerCapsules → indexeddb.js
 
 // ══════════════════════════════════════════════════════════════
 //  Question Classifier — يُحدد نوع السؤال بدقة
@@ -353,178 +352,11 @@ const answerCapsules    = new Map() // sid → [{ type, question, answer, t }]
 //  general         ← سؤال عام لا علاقة له بكود
 // ══════════════════════════════════════════════════════════════
 
-const Q_PATTERNS = {
-  code_review: [
-    /أخطاء|خطأ|error|bug|مشكل|ضعف|قوة|strengths|weakness|review|analyze|حلل|تحليل/i,
-    /ما.*الخطأ|ما.*المشكل|كيف.*يعمل|نقاط|مقارنة/i
-  ],
-  code_modify: [
-    /عدّل|عدل|modify|fix|إصلاح|اصلح|حسّن|حسن|improve|refactor|تعديل|تعديلات|غيّر/i,
-    /يجب.*تعديل|هل.*تعديل|كيف.*نعدل|أضف|add|remove|احذف|ضرور/i
-  ],
-  code_explain: [
-    /اشرح|شرح|explain|وضّح|describe|ما.*دور|ما.*وظيفة|كيف.*تعمل|معنى/i,
-    /ما هو|what is|ما.*collapse|ما.*ingest|كيف.*collapse/i
-  ],
-  follow_up: [
-    /أكمل|كمّل|continue|أكثر|mehr|بالتفصيل|تفصيل|استمر|أضف.*شرح/i,
-    /^(نعم|yes|ja|okay|ok|صح|طيب|ممتاز|جيد)\.?$/i
-  ]
-}
+// ─── Q_PATTERNS, classifyQuestion, retrieveContext, storeFullCode,
+// ─── storeAnswerCapsule, extractCodeCapsules, findRelevantCapsules,
+// ─── buildCodeContext → moved to frontend/indexeddb.js
+// ─── Backend receives capsuleContext string from frontend directly
 
-function classifyQuestion(text, hasCapsules) {
-  if (!hasCapsules) return 'general'
-  const t = text.trim()
-  for (const [type, patterns] of Object.entries(Q_PATTERNS)) {
-    if (patterns.some(p => p.test(t))) return type
-  }
-  // إذا قصير جداً → follow_up
-  if (t.split(/\s+/).length <= 4) return 'follow_up'
-  return 'general'
-}
-
-// ══════════════════════════════════════════════════════════════
-//  Smart Context Retrieval — الكود كاملاً دائماً عند الحاجة
-//  المبدأ: Claude يحتاج التفاصيل الكاملة لا مقاطع
-// ══════════════════════════════════════════════════════════════
-
-function retrieveContext(sid, question, engine) {
-  const questionType = classifyQuestion(question, fullCodeStore.has(sid))
-  const fullCode     = fullCodeStore.get(sid)
-  const answers      = answerCapsules.get(sid) ?? []
-  const lastAnswer   = answers[answers.length - 1] ?? null
-
-  const parts = []
-
-  // ── الكود كاملاً في كل حالة تتعلق بالكود ─────────────────────
-  if (fullCode?.raw) {
-    const label = fullCode.name ? `[code: ${fullCode.name}]` : '[code]'
-    parts.push(label + '\n' + fullCode.raw)
-  }
-
-  // ── آخر جواب مهم — للمتابعة والتحليل التراكمي ────────────────
-  if (lastAnswer?.answer && questionType !== 'general') {
-    parts.push('[previous analysis]\n' + lastAnswer.answer.slice(0, 600))
-  }
-
-  return {
-    context:      parts.length ? parts.join('\n\n') : null,
-    questionType
-  }
-}
-
-// ── حفظ الكود الكامل عند إرساله ──────────────────────────────────
-function storeFullCode(sid, rawCode, hint, name) {
-  fullCodeStore.set(sid, { raw: rawCode, hint, name: name ?? 'code', t: Date.now() })
-}
-
-// ── حفظ جواب مهم كـ capsule ──────────────────────────────────────
-function storeAnswerCapsule(sid, question, answer, questionType) {
-  // لا نحفظ الأجوبة العامة أو القصيرة
-  if (questionType === 'general') return
-  if (!answer || answer.length < 50) return
-
-  const store = answerCapsules.get(sid) ?? []
-  store.push({
-    type:     questionType,
-    question: question.slice(0, 100),
-    answer:   answer.slice(0, 800),  // آخر 800 حرف من الجواب
-    t:        Date.now()
-  })
-  if (store.length > 5) store.shift()  // max 5 أجوبة
-  answerCapsules.set(sid, store)
-}
-
-// ══════════════════════════════════════════════════════════════
-//  Hybrid Code Capsules — تقسيم الكود لكبسولات ذكية
-//  buildCodeHint: دائماً (50 token) — البنية العامة
-//  Capsule محدد: عند الحاجة (200 token) — الكود الفعلي
-// ══════════════════════════════════════════════════════════════
-
-// ── استخراج كود كل دالة من المصدر ───────────────────────────────
-function extractCodeCapsules(sourceCode, structIndex) {
-  const capsules = new Map()
-  const nodes    = [...structIndex.nodes.values()]
-
-  for (const node of nodes) {
-    if (node.type !== 'function' && node.type !== 'method') continue
-    if (!node.symbol) continue
-    const name    = node.symbol
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-
-    // أنماط مختلفة لتعريف الدالة
-    let patterns
-    try {
-      patterns = [
-        new RegExp('(?:async\\s+)?' + escaped + '\\s*\\([^)]*\\)\\s*\\{', 's'),
-        new RegExp('(?:async\\s+)?function\\s+' + escaped + '\\s*\\(', 's'),
-        new RegExp(escaped + '\\s*=\\s*(?:async\\s+)?(?:function\\s*)?\\(', 's'),
-      ]
-    } catch { continue }
-
-    for (const pat of patterns) {
-      const start = sourceCode.search(pat)
-      if (start < 0) continue
-
-      // استخرج body بعد أول {
-      let depth = 0, i = start, found = false
-      while (i < sourceCode.length) {
-        if (sourceCode[i] === '{') { depth++; found = true }
-        if (sourceCode[i] === '}') { depth-- }
-        if (found && depth === 0) {
-          capsules.set(name, {
-            symbol: name,
-            type:   node.type,
-            code:   sourceCode.slice(start, i + 1).trim(),
-            calls:  node.calls ?? [],
-            vector: node.semanticVector ?? null
-          })
-          break
-        }
-        i++
-      }
-      if (capsules.has(name)) break
-    }
-  }
-  return capsules
-}
-
-// ── ابحث عن الكبسولات الأقرب للسؤال ─────────────────────────────
-function findRelevantCapsules(query, capsules, engine, max = 2) {
-  if (!capsules?.size) return []
-  const q      = query.toLowerCase()
-  const qVec   = engine.semanticVector?.(query) ?? null
-  const scored = []
-
-  for (const [symbol, cap] of capsules.entries()) {
-    let score = 0
-
-    // اسم الدالة مذكور في السؤال
-    if (q.includes(symbol.toLowerCase()))            score += 0.9
-
-    // دوال تستدعيها مذكورة
-    for (const call of (cap.calls ?? []))
-      if (q.includes(call.toLowerCase()))            score += 0.3
-
-    // تشابه دلالي
-    if (qVec && cap.vector)
-      score += engine.cosineSimilarity(qVec, cap.vector) * 0.5
-
-    if (score > 0.2) scored.push({ ...cap, score })
-  }
-
-  return scored.sort((a, b) => b.score - a.score).slice(0, max)
-}
-
-// ── بناء code context للـ LLM ────────────────────────────────────
-function buildCodeContext(capsules) {
-  if (!capsules?.length) return null
-  const blocks = capsules.map(c => {
-    const callsStr = c.calls?.length ? 'calls: ' + c.calls.slice(0,3).join(', ') : ''
-    return '// ' + c.symbol + '(' + callsStr + ')\n' + c.code
-  })
-  return '[relevant code]\n' + blocks.join('\n\n')
-}
 
 // ── حفظ كبسولة منظمة من نتيجة Observer ──────────────────────────
 // #5: Structured Capsules — objects لا prose
@@ -742,7 +574,8 @@ router.post('/process-text', async (req, res) => {
   const {
     text = '', sessionId, history = [],
     image = null, imageMimeType = 'image/jpeg',
-    savedCode = null
+    savedCode     = null,
+    capsuleContext = null   // من IndexedDB في الـ frontend
   } = req.body
 
   const hasText  = typeof text  === 'string' && text.trim().length > 0
@@ -787,19 +620,8 @@ router.post('/process-text', async (req, res) => {
       .trim()
     storeSemanticEntry(sid, tValue, textForMemory || inputText)
 
-    // ── كشف وحفظ الكود الخام (بدون backticks) ────────────────────
-    const CODE_PATTERN = /export\s+class|^class\s+\w+|^function\s+\w+|^const\s+\w+\s*=\s*(async\s+)?\(|^async\s+function/m
-    if (CODE_PATTERN.test(cleanedText) && !fullCodeStore.has(sid)) {
-      storeFullCode(sid, cleanedText, null, null)
-    }
-
-    // ── savedCode من localStorage الـ frontend ───────────────────
-    // يُستخدم إذا لم يُرسل كود في الطلب الحالي
-    if (savedCode && !fullCodeStore.has(sid)) {
-      const isValidCode = CODE_PATTERN.test(savedCode) ||
-        /```[\s\S]*?```/.test(savedCode)
-      if (isValidCode) storeFullCode(sid, savedCode, null, null)
-    }
+    // ─── Code storage: handled by frontend IndexedDB ──────────────
+    // capsuleContext يأتي جاهزاً من الـ frontend
 
     const engine      = getEngine(sid)
     const fieldPrompt = engine.buildFieldPrompt?.() ?? null
@@ -856,18 +678,7 @@ router.post('/process-text', async (req, res) => {
       // ── هيكل الكود (buildCodeHint: 50 token دائماً) ──────────────
       codeHint = buildCodeHint(structIndex)
 
-      // ── قسّم الكود لكبسولات + احفظ الكود كاملاً ────────────
-      const rawCode  = codeBlocks.join('\n\n')
-      const caps     = extractCodeCapsules(rawCode, structIndex)
-      if (caps.size > 0) codeCapsulesStore.set(sid, caps)
-
-      // احفظ الكود الكامل للاسترجاع بالـ code_review / code_modify
-      const codeName = structIndex
-        ? [...structIndex.nodes.values()].find(n => n.type === 'class')?.symbol
-        : null
-      // دائماً حدّث fullCodeStore عند وجود كود جديد (يستبدل القديم)
-      storeFullCode(sid, rawCode, codeHint, codeName)
-
+      // ─── Code capsules → handled by frontend IndexedDB ─────────
       // ── حدّث الذاكرة الدلالية ───────────────────────────────
       if (codeHint) {
         const codeMemory = codeHint
@@ -901,13 +712,14 @@ router.post('/process-text', async (req, res) => {
     if (built.blocked) return res.status(422).json({ blocked: true, reason: 'semantic_constraint' })
     if (!built.passToLLM && !hasImage) return res.json({ reply: null, skippedLLM: true, reason: 'weak_semantic_field' })
 
-    // ── Smart Capsule Retrieval ────────────────────────────────
-    // CELF يُحدد نوع السؤال → يختار الكبسولة الصحيحة
-    const { context: capsuleContext, questionType } =
-      retrieveContext(sid, cleanedText, engine)
+    // ── Context من Frontend IndexedDB ────────────────────────────
+    // capsuleContext جاهز من indexeddb.js — لا حاجة لمعالجته
+    const frontendContext = typeof capsuleContext === 'string' && capsuleContext.length > 0
+      ? capsuleContext
+      : null
 
-    // system = hint + capsule_ذات_صلة فقط + built hint
-    const systemHint = [codeHint, capsuleContext, built.systemHint]
+    // system = codeHint (AST) + frontendContext (code+answer) + built hint
+    const systemHint = [codeHint, frontendContext, built.systemHint]
       .filter(Boolean)
       .join('\n') || null
     const continuity = built.context?.continuity ?? 0
@@ -1042,8 +854,7 @@ router.post('/process-text', async (req, res) => {
         updateAnchors(sid, lastTopicText, questionSimilarity ?? 0.5)
       }
 
-      // ── احفظ الجواب كـ Answer Capsule ────────────────────────
-      storeAnswerCapsule(sid, cleanedText, reply, questionType)
+      // ─── Answer capsule → frontend sends next request ────────────
     }
 
     // ── Metrics ───────────────────────────────────────────────
@@ -1071,7 +882,6 @@ router.post('/process-text', async (req, res) => {
       observer: observerBox,
 
       debug: {
-        systemHint,
         messageCount:       messages.length,
         historyCount:       historyMessages.length,
         continuityTier:     continuity >= 0.70 ? 'T1-full'
@@ -1085,7 +895,8 @@ router.post('/process-text', async (req, res) => {
           : null,
         activeStyle,
         lastTopicText,
-        vaultHitUsed:       !!vaultHit?.compressed
+        vaultHitUsed:       !!vaultHit?.compressed,
+        hasCapsuleCtx:      !!frontendContext
       },
 
       metrics: {
