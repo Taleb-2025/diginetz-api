@@ -32,21 +32,29 @@ app.use(express.raw({
 }))
 app.use(express.static('public'))
 
+// ── Routes ────────────────────────────────────────────────────────
+
 app.use('/api/cycleguard',  cycleguardRoute)
 app.use('/api/cg-session',  cycleguardSessionRoute)
 app.use('/api/identity',    identityRoute)
-app.use('/celf',            celfRoute)
-app.use('/celf',            processTextRoute)
 app.use('/api/index-code',  indexCodeRoute)
+
+// ── CPSE — CyclicProcessorEngine (مشروع منفصل) ────────────────────
+app.use('/api/field',       celfRoute)
+
+// ── CELF AI — CELF_Engine_AI_V5 فقط ──────────────────────────────
+app.use('/celf',            processTextRoute)
 
 app.get('/celf/monitor', (_req, res) => {
   return res.json(getMonitorData())
 })
 
+// ── System ────────────────────────────────────────────────────────
+
 app.get('/', (_req, res) => {
   return res.json({
     service: 'DigiNetz TSL Core',
-    engine:  'CyclicProcessorEngine + CELF_Engine_AI_V5',
+    engine:  'CELF_Engine_AI_V5',
     status:  'RUNNING'
   })
 })
