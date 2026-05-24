@@ -1,1282 +1,1002 @@
-export class CELF_Engine_AI_V5 {
+/**
+ * CELF Engine V6 — Predictive Cyclic Field Engine
+ * تعلم حقيقي عبر Prediction Error
+ *
+ * المسار:
+ * إدخال → تحويل → تفاعل → قيود → ديناميكيات → انتشار → ذاكرة → تغذية راجعة → استقرار → حالة
+ *
+ * ES Module — يعمل في Node.js والمتصفح
+ */
+
+export class CELF_Engine_V6 {
+
+  // ═══════════════════════════════════════════════════════
+  //  البناء والتهيئة
+  // ═══════════════════════════════════════════════════════
+
   constructor(options = {}) {
-    this.cycle                = options.cycle                ?? 360
-    this.resolution           = options.resolution           ?? 360
-    this.ringCount            = options.ringCount            ?? 5
-    this.epsilon              = options.epsilon              ?? 1e-6
-    this.activationThreshold  = options.activationThreshold  ?? this.epsilon * 100
-    this.diffusionRate        = options.diffusionRate        ?? 0.08
-    this.constraintRate       = options.constraintRate       ?? 0.12
-    this.recoveryRate         = options.recoveryRate         ?? 0.035
-    this.attractorRate        = options.attractorRate        ?? 0.06
-    this.attractorLimit       = options.attractorLimit       ?? 12
-    this.historyLimit         = options.historyLimit         ?? 512
-    this.archiveLimit         = options.archiveLimit         ?? 512
-    this.semanticMemoryLimit  = options.semanticMemoryLimit  ?? 256
-    this.semanticDimensions   = options.semanticDimensions   ?? 64
-    this.routingLimit         = options.routingLimit         ?? 8
-    this.massTarget           = options.massTarget           ?? null
-    this.localizationThreshold   = options.localizationThreshold   ?? 0.012
-    this.decayRate               = options.decayRate               ?? 0.25
-    this.contradictionThreshold  = options.contradictionThreshold  ?? 0.22
-    this.credibilityLearningRate = options.credibilityLearningRate ?? 0.08
-    this.manifoldDimensions      = options.manifoldDimensions      ?? 32
-    this.metaAttractorThreshold  = options.metaAttractorThreshold  ?? 0.65
 
-    // ─── Vault Topology ───────────────────────────────────────────
-    this.hexVault          = new Map()
-    this.vaultMin          = options.vaultMin          ?? 64
-    this.vaultMax          = options.vaultMax          ?? 2048
-    this.vaultLimit        = options.vaultLimit        ?? 512
-    this.vaultGrowthRate   = options.vaultGrowthRate   ?? 1.5
-    this.vaultShrinkRate   = options.vaultShrinkRate   ?? 0.75
-    this.vaultStoreThresh  = options.vaultStoreThresh  ?? 0.42
-    this.vaultActivThresh  = options.vaultActivThresh  ?? 0.62
-    this.vaultRetrThresh   = options.vaultRetrThresh   ?? 0.35
-    this.reinforceLimit    = options.reinforceLimit    ?? 50
+    // ── شبكة الحقل ────────────────────────────────────────
+    this.cycle       = options.cycle       ?? 360
+    this.resolution  = options.resolution  ?? 360
+    this.ringCount   = options.ringCount   ?? 5
+    this.epsilon     = options.epsilon     ?? 1e-6
 
-    this.field = {
-      signature: 0, continuity: 0, coherence: 0,
-      drift: 0, momentum: 0, resonance: 0,
-      phaseHistory: [], attractorTrace: [],
-      topicPressure: 0, lastStablePhase: 'warmup',
-      persistence: 0, emergence: 0,
-      semanticGrounding: 0, semanticCoherence: 0,
-      intentPressure: 0, executionReadiness: 0,
-      recallPotential: 0, routingPressure: 0,
-      compressionPressure: 0, noveltyPressure: 0,
-      semanticMemory: [], archivedContinuity: [],
-      localization: 0, coherenceRadius: 0,
-      signalType: 'noise', lastSourceWeight: 1.0,
-      manifold:    new Float32Array(this.manifoldDimensions * this.manifoldDimensions),
-      manifoldAge: new Float32Array(this.manifoldDimensions * this.manifoldDimensions),
-      metaAttractors: [],
-      avgFieldCredibility: 1.0
-    }
+    // ── معاملات الديناميكيات ──────────────────────────────
+    this.diffusionRate   = options.diffusionRate   ?? 0.08
+    this.constraintRate  = options.constraintRate  ?? 0.12
+    this.recoveryRate    = options.recoveryRate    ?? 0.035
+    this.attractorRate   = options.attractorRate   ?? 0.06
+    this.attractorLimit  = options.attractorLimit  ?? 12
 
+    // ── المعالجة الدلالية ─────────────────────────────────
+    this.semanticDimensions  = options.semanticDimensions  ?? 64
+    this.activationThreshold = options.activationThreshold ?? 1e-4
+
+    // ── الكبسولات ─────────────────────────────────────────
+    this.vaultLimit      = options.vaultLimit      ?? 256
+    this.historyLimit    = options.historyLimit    ?? 128
+
+    // ══════════════════════════════════════════════════════
+    //  التغذية الراجعة — قلب V6
+    //
+    //  W: مصفوفة التنبؤ  ℝ⁶⁴ˣᴬ
+    //     تتعلم ربط حالة الجاذبات بالمتجه الدلالي القادم
+    //
+    //  η: معدل التعلم
+    //  θ_vault: عتبة التخزين — تتكيف مع متوسط الخطأ
+    //  θ_attractor: عتبة الجاذب — تتكيف مع كثافة الإشارة
+    // ══════════════════════════════════════════════════════
+    this.eta             = options.eta             ?? 0.01   // معدل تعلم W
+    this.etaThreshold    = options.etaThreshold    ?? 0.05   // معدل تكيف العتبات
+    this.maxAttractors   = this.attractorLimit
+
+    // W ∈ ℝ^(D × A) — تُهيَّأ بقيم صغيرة عشوائية
+    const D = this.semanticDimensions
+    const A = this.attractorLimit
+    this.W = new Float32Array(D * A)
+    for (let i = 0; i < this.W.length; i++)
+      this.W[i] = (Math.random() - 0.5) * 0.01
+
+    // عتبات متكيفة
+    this.theta_vault     = options.theta_vault     ?? 0.35
+    this.theta_attractor = options.theta_attractor ?? 1e-4
+
+    // آخر تنبؤ — للحساب عند الإدخال القادم
+    this._lastPrediction = new Float32Array(D)
+    this._lastAttractorState = new Float32Array(A)
+    this._lastVector     = new Float32Array(D)
+    this._hasPrediction  = false
+
+    // ── الحقل الدائري ─────────────────────────────────────
     this.rings = Array.from({ length: this.ringCount }, (_, r) =>
       Array.from({ length: this.resolution }, (_, i) => ({
         r, i,
-        theta: (i / this.resolution) * this.cycle,
-        p: 1 / this.resolution,
-        residual: this.epsilon,
-        pressure: 0, memory: 0,
-        hysteresis: 0, elasticStrain: 0,
-        constraintDensity: 0, semanticTrace: 0,
-        intentTrace: 0, active: true, credibility: 1.0
+        theta    : (i / this.resolution) * this.cycle,
+        p        : 1 / this.resolution,   // توزيع موحد ابتداءً
+        residual : this.epsilon,
+        pressure : 0,
+        memory   : 0,
+        hysteresis      : 0,
+        constraintDensity: 0,
+        semanticTrace   : 0,
+        intentTrace     : 0,
+        credibility     : 1.0
       }))
     )
 
+    // ── كتلة الحقل ────────────────────────────────────────
+    this.massTarget = this._totalMass()
+
+    // ── الكبسولات ─────────────────────────────────────────
+    this.vault = new Map()   // id → capsule
+
+    // ── حالة النظام ───────────────────────────────────────
     this.state = {
-      t: 0, phase: 'warmup', signature: 0,
-      cycleCount: 0, lastTheta: 0, lastIndex: 0,
-      lastDeltaTheta: 0, totalMass: this.totalMass(),
-      attractors: [], history: [], archive: [],
-      lastSourceWeight: 1.0,
-      lastPerturbationVector: new Float32Array(this.semanticDimensions),
-      attractorCredibilityLog: []
+      t            : 0,
+      phase        : 'warmup',
+      signature    : 0,
+      cycleCount   : 0,
+      lastTheta    : 0,
+      lastIndex    : 0,
+      lastDeltaTheta: 0,
+      attractors   : [],
+      history      : [],
+      // إحصاءات التعلم
+      totalError   : 0,
+      errorHistory : [],   // آخر 32 خطأ
+      learnCount   : 0
     }
 
-    this.massTarget = this.massTarget ?? this.state.totalMass
+    // ── الحقل الدلالي ─────────────────────────────────────
+    this.field = {
+      signature         : 0,
+      coherence         : 0,
+      continuity        : 0,
+      drift             : 0,
+      momentum          : 0,
+      resonance         : 0,
+      persistence       : 0,
+      emergence         : 0,
+      topicPressure     : 0,
+      semanticGrounding : 0,
+      semanticCoherence : 0,
+      intentPressure    : 0,
+      executionReadiness: 0,
+      recallPotential   : 0,
+      noveltyPressure   : 0,
+      localization      : 0,
+      signalType        : 'noise',
+      semanticMemory    : [],   // آخر 64 إدخال
+      avgCredibility    : 1.0,
+      predictionError   : 0,   // الخطأ الحالي — مرئي في الخارج
+    }
+
+    // cache للـ metrics
+    this._metricsCache     = null
+    this._metricsCacheTime = -1
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  //  VAULT TOPOLOGY — قانون التغليف والاسترجاع
-  // ═══════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════
+  //  PROCESS — المسار الكامل
+  // ═══════════════════════════════════════════════════════
 
-  generatePhiOrbit() {
-    const phi = 1.618033988749895
-    return this.containTheta(
-      this.field.signature * phi +
-      this.state.lastTheta * 0.5
-    )
+  process(input) {
+
+    // إعادة تعيين cache في بداية كل خطوة
+    this._metricsCache     = null
+    this._metricsCacheTime = -1
+
+    // ── 1. تحويل: نص → إشارة ──────────────────────────────
+    const perturb = this._perturb(input)
+
+    // ── 2. تغذية راجعة أولاً (قبل تحديث الحقل) ───────────
+    //    نقيس الخطأ بين ما تنبأنا به والإدخال الحالي
+    const feedback = this._computeFeedback(perturb.vector)
+
+    // ── 3. تعلم: تعديل W والعتبات ─────────────────────────
+    if (feedback.active) this._learn(feedback)
+
+    // ── 4. تفاعل: تطبيق الإشارة على خلايا الحقل ──────────
+    const delta = this._buildDelta(perturb)
+    this._applyDelta(delta, perturb)
+
+    // ── 5. قيود: ثبات الكتلة ──────────────────────────────
+    this._conserveMass()
+
+    // ── 6. ديناميكيات الحقل ───────────────────────────────
+    this._updateCellDynamics()
+
+    // ── 7. انتشار ∇²p ─────────────────────────────────────
+    this._diffuse()
+
+    // ── 8. كشف الجاذبات ───────────────────────────────────
+    this._updateAttractors(perturb)
+
+    // ── 9. تأثير الذاكرة والسياق ──────────────────────────
+    this._applyAttractors()
+    this._updateSemanticField(perturb, feedback)
+
+    // ── 10. تنبؤ بالإدخال القادم ──────────────────────────
+    this._predict()
+
+    // ── 11. تخزين كبسولة إذا كان الخطأ كبيراً ────────────
+    if (feedback.active && feedback.magnitude > this.theta_vault)
+      this._storeCapsule(input, perturb, feedback)
+
+    // ── 12. استقرار: كشف الطور ────────────────────────────
+    this._updatePhase()
+    this._updateFieldIdentity()
+    this._updateLocalization()
+
+    // ── 13. الحالة النهائية ───────────────────────────────
+    const snap = this._snapshot(perturb, feedback)
+    this._commit(snap)
+
+    return snap
   }
 
-  #compressSource(text) {
-    const words = String(text).split(/\s+/).filter(Boolean)
-    const stopwords = new Set(['the','a','an','is','are','was','were','be','been','being',
-      'have','has','had','do','does','did','will','would','could','should','may',
-      'might','shall','of','in','on','at','to','for','by','from','with','and','or'])
-    const meaningful = words.filter((w, i) => i < 3 || !stopwords.has(w.toLowerCase()))
-    return meaningful.slice(0, 40).join(' ')
-  }
+  // ═══════════════════════════════════════════════════════
+  //  1. التحويل — نص إلى إشارة رياضية
+  // ═══════════════════════════════════════════════════════
 
-  #checksum(text) {
-    let h = 2166136261
+  _perturb(input) {
+    const text = typeof input === 'string' ? input : JSON.stringify(input ?? '')
+
+    // hash ثلاثي — توزيع متجه دلالي على ℝ⁶⁴
+    let h1 = 2166136261, h2 = 16777619, h3 = 374761393
     for (let i = 0; i < text.length; i++) {
-      h ^= text.charCodeAt(i)
-      h  = Math.imul(h, 16777619)
+      const c = text.charCodeAt(i)
+      h1 ^= c; h1 = Math.imul(h1, 16777619)
+      h2  = Math.imul(h2 ^ c, 2246822519)
+      h3  = Math.imul(h3 + c, 3266489917)
     }
-    return Math.abs(h >>> 0).toString(16)
-  }
+    h1 = Math.abs(h1 >>> 0)
+    h2 = Math.abs(h2 >>> 0)
+    h3 = Math.abs(h3 >>> 0)
 
-  shouldStoreCapsule(text, perturbation) {
-    if (!text || text.length < 20) return false
+    // تصنيف نوع الإدخال
+    const code      = /```|function|class|const|let|var|=>|import|export/.test(text) ? 1 : 0
+    const question  = /[?؟]|كيف|ماذا|لماذا|هل|what|why|how|where/i.test(text) ? 1 : 0
+    const error     = /error|fail|exception|خطأ|فشل/i.test(text) ? 1 : 0
+    const command   = /اكتب|أنشئ|build|create|fix|write|generate/i.test(text) ? 1 : 0
+    const data      = /json|api|server|database|vector|metric/i.test(text) ? 1 : 0
 
-    const s = perturbation.semantic
-    const fieldWeight = this.clamp01(
-      s.code      * 0.25 +
-      s.data      * 0.20 +
-      s.reasoning * 0.20 +
-      s.command   * 0.15 +
-      s.question  * 0.10 +
-      s.error     * 0.10
+    const words   = text.split(/\s+/).filter(Boolean)
+    const unique  = new Set(words.map(w => w.toLowerCase()))
+    const lexical = this._clamp01(unique.size / Math.max(words.length, 1))
+    const length  = this._clamp01(text.length / 2000)
+
+    const vector = this._semanticVector(text, h1, h2, h3)
+
+    // شدة الإشارة الكلية
+    const intensity = this._clamp01(
+      length  * 0.20 +
+      lexical * 0.20 +
+      code    * 0.15 +
+      command * 0.15 +
+      error   * 0.15 +
+      data    * 0.10 +
+      question* 0.05
     )
 
-    const semanticWeight = this.clamp01(
-      s.lexicalDensity * 0.35 +
-      s.lengthScore    * 0.15 +
-      (this.field.semanticGrounding ?? 0) * 0.30 +
-      (this.field.coherence         ?? 0) * 0.20
-    )
+    // موقع الإشارة في الحقل الدائري
+    const theta = ((h1 % this.resolution) / this.resolution) * this.cycle
+    const index = this._thetaToIndex(theta)
 
-    const importance = semanticWeight * 0.55 + fieldWeight * 0.45
-    return importance > this.vaultStoreThresh
+    return {
+      text, h1, h2, h3,
+      vector, intensity, theta, index,
+      semantic: { code, question, error, command, data, lexical, length },
+      words: words.length
+    }
   }
 
-  storeOrUpdateCapsule(text, perturbation) {
-    const checksum = this.#checksum(text)
+  // متجه دلالي ℝ⁶⁴ — مُطبَّع
+  _semanticVector(text, h1, h2, h3) {
+    const D      = this.semanticDimensions
+    const vec    = new Float32Array(D)
+    const tokens = text.toLowerCase().split(/\s+/).filter(Boolean)
 
-    for (const [id, cap] of this.hexVault) {
-      if (cap.source.checksum === checksum) {
-        cap.reinforcement   = Math.min((cap.reinforcement ?? 0) + 0.08, 10.0)
-        cap.version         = (cap.version ?? 1) + 1
-        cap.lastResonance   = this.field.resonance
-        cap.previousHash    = cap.currentHash
-        cap.currentHash     = checksum
-        return id
+    for (let ti = 0; ti < tokens.length; ti++) {
+      const token = tokens[ti]
+      let tw = 2166136261
+      for (let ci = 0; ci < token.length; ci++) {
+        tw ^= token.charCodeAt(ci)
+        tw  = Math.imul(tw, 16777619)
+      }
+      tw = Math.abs(tw >>> 0)
+
+      const w = 1.0 / Math.sqrt(ti + 1)
+      vec[(Math.abs(Math.imul(tw ^ h1, 16777619))  >>> 0) % D] += w
+      vec[(Math.abs(Math.imul(tw ^ h2, 2246822519)) >>> 0) % D] += w * 0.6
+      vec[(Math.abs(Math.imul(tw ^ h3, 3266489917)) >>> 0) % D] += w * 0.4
+    }
+
+    // تطبيع L2
+    let norm = 0
+    for (let i = 0; i < D; i++) norm += vec[i] * vec[i]
+    norm = Math.sqrt(norm) || 1
+    for (let i = 0; i < D; i++) vec[i] = Math.fround(vec[i] / norm)
+    return vec
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  2. التغذية الراجعة — قلب V6
+  //
+  //  e(t) = v(t) - v̂(t)
+  //  magnitude = ||e(t)||₂
+  // ═══════════════════════════════════════════════════════
+
+  _computeFeedback(currentVector) {
+    if (!this._hasPrediction) {
+      this._lastVector.set(currentVector)
+      return { active: false, error: new Float32Array(this.semanticDimensions), magnitude: 0, quality: 1 }
+    }
+
+    const D = this.semanticDimensions
+
+    // مقياس الخطأ: 1 - cosine similarity
+    // يقيس الاتجاه لا الطول — الصحيح للمتجهات المُطبَّعة
+    const similarity = this._cosine(currentVector, this._lastPrediction)
+    const magnitude  = this._clamp01(1 - similarity)
+
+    // متجه الخطأ الاتجاهي للتعلم ΔW
+    const error = new Float32Array(D)
+    for (let i = 0; i < D; i++)
+      error[i] = currentVector[i] - this._lastPrediction[i]
+
+    this._lastVector.set(currentVector)
+
+    return {
+      active   : true,
+      error,
+      magnitude: this._round4(magnitude),
+      quality  : this._round4(similarity)
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  3. التعلم — تعديل W والعتبات
+  //
+  //  ΔW = η · e(t) · a(t)ᵀ
+  //  Δθ_vault     = δ · (||e|| - θ_vault)
+  //  Δθ_attractor = δ · (||e|| * 0.1 - θ_attractor)
+  // ═══════════════════════════════════════════════════════
+
+  _learn(feedback) {
+    const D   = this.semanticDimensions
+    const A   = this.maxAttractors
+    const eta = this.eta
+    const e   = feedback.error
+    const a   = this._lastAttractorState  // حالة الجاذبات عند التنبؤ السابق
+
+    // ΔW[d][j] = η · e[d] · a[j]
+    for (let d = 0; d < D; d++) {
+      for (let j = 0; j < A; j++) {
+        this.W[d * A + j] += eta * e[d] * a[j]
       }
     }
 
-    const id = `cap_${this.state.t}_${Math.abs(Math.imul(perturbation.h1, 1234567)) % 99999}`
-    const phiOrbit = this.generatePhiOrbit()
+    // تقليص الأوزان لمنع الانفجار (weight decay خفيف)
+    const decay = 1 - eta * 0.001
+    for (let i = 0; i < this.W.length; i++) this.W[i] *= decay
 
-    const capsule = {
-      id,
-      source: {
-        compressed: this.#compressSource(text),
-        checksum,
-        sealed:     true,
-        persistent: true
-      },
-      suspended:   true,
-      attached:    false,
-      fieldLocked: true,
-      phiOrbit,
-      createdAt:   this.state.t,
-      version:     1,
-      reinforcement: 0,
-      lastResonance: this.field.resonance,
-      currentHash:   checksum,
-      previousHash:  null,
-      semanticVector: perturbation.semantic.vector.slice(),
-      phase:          this.state.phase,
-      coherence:      this.field.coherence,
-      grounding:      this.field.semanticGrounding,
-      needScore:      this.field.intentPressure
+    // تكيف عتبة التخزين — في الاتجاهين
+    // الهدف: θ_vault = percentile 40 من الأخطاء الأخيرة
+    // يعني: نخزن الـ 60% الأعلى خطأ — لا نخزن كل شيء ولا لا شيء
+    if (this.state.errorHistory.length >= 8) {
+      const sorted = [...this.state.errorHistory].sort((a, b) => a - b)
+      const p40    = sorted[Math.floor(sorted.length * 0.4)]
+      this.theta_vault = this._clamp01(
+        this.theta_vault * 0.95 + p40 * 0.05
+      )
+    } else {
+      // قبل أن يتراكم تاريخ كافٍ — عتبة محافظة
+      this.theta_vault = this._clamp01(
+        this.theta_vault + this.etaThreshold * (feedback.magnitude - this.theta_vault)
+      )
+    }
+    // تكيف عتبة الجاذب (خفيف)
+    this.theta_attractor = Math.max(this.epsilon,
+      this.theta_attractor + this.etaThreshold * 0.1 * (feedback.magnitude * 0.1 - this.theta_attractor)
+    )
+
+    // تسجيل إحصاءات التعلم
+    this.state.errorHistory.push(feedback.magnitude)
+    if (this.state.errorHistory.length > 32) this.state.errorHistory.shift()
+    this.state.totalError += feedback.magnitude
+    this.state.learnCount++
+    this.field.predictionError = this._round4(feedback.magnitude)
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  4. بناء دلتا الإشارة وتطبيقها على الخلايا
+  // ═══════════════════════════════════════════════════════
+
+  _buildDelta(perturb) {
+    const phi       = 1.618033988749895
+    const nextSig   = this._containTheta(
+      this.state.signature * phi + perturb.theta + perturb.intensity * this.cycle * 0.22
+    )
+
+    const wrapped = Math.abs(this._signedIndexDist(this.state.lastIndex, perturb.index)) > this.resolution / 2
+    if (wrapped) this.state.cycleCount++
+
+    this.state.signature    = nextSig
+    this.state.lastTheta    = perturb.theta
+    this.state.lastIndex    = perturb.index
+    this.state.lastDeltaTheta = this._indexToTheta(
+      this._signedIndexDist(this.state.lastIndex, perturb.index)
+    )
+
+    return {
+      index    : perturb.index,
+      intensity: perturb.intensity,
+      signature: nextSig,
+      // شدة لكل ring — تتناقص للخارج
+      ringVector: Array.from({ length: this.ringCount }, (_, r) =>
+        this._clamp01(perturb.intensity * ((r + 1) / this.ringCount))
+      )
+    }
+  }
+
+  _applyDelta(delta, perturb) {
+    const radius   = Math.max(2, Math.floor(3 + delta.intensity * 32))
+    const semW     = this._clamp01(
+      perturb.semantic.code    * 0.20 +
+      perturb.semantic.command * 0.20 +
+      perturb.semantic.error   * 0.18 +
+      perturb.semantic.data    * 0.15 +
+      perturb.semantic.lexical * 0.15 +
+      perturb.semantic.length  * 0.12
+    )
+
+    for (let r = 0; r < this.ringCount; r++) {
+      const rd = delta.ringVector[r]
+      for (let i = 0; i < this.resolution; i++) {
+        const cell = this.rings[r][i]
+        const d    = this._circularIndexDist(i, delta.index)
+        const prox = this._clamp01(1 - d / radius)
+
+        const pressure  = this._clamp01(rd * 0.45 + semW * 0.30 + (1 - prox) * 0.25)
+        const density   = cell.constraintDensity
+        const expansion = prox * rd * this.recoveryRate * (1 - pressure) * (1 - density) * (1 + semW * 0.20)
+        const narrowing = pressure * this.constraintRate * (1 - prox * 0.5) * (1 + density)
+
+        cell.pressure      = pressure
+        cell.p             = this._clampP(cell.p + expansion - narrowing)
+        cell.memory        = this._clamp01(cell.memory * 0.985 + prox * rd * 0.013)
+        cell.hysteresis    = this._clamp01(cell.hysteresis * 0.995 + prox * rd * 0.005)
+        cell.semanticTrace = this._clamp01(cell.semanticTrace * 0.992 + prox * semW * 0.008)
+      }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  5. قيود — ثبات الكتلة
+  //  Σ p[r][i] = M  ∀t
+  // ═══════════════════════════════════════════════════════
+
+  _conserveMass() {
+    const cells = []
+    for (const ring of this.rings) for (const c of ring) cells.push(c)
+
+    const floor   = this.epsilon * cells.length
+    const target  = Math.max(this.massTarget, floor + this.epsilon)
+    const current = cells.reduce((s, c) => s + Math.max(0, c.p - this.epsilon), 0)
+
+    if (current < this.epsilon) {
+      // إعادة توزيع بناءً على الذاكرة
+      const memSum = cells.reduce((s, c) => s + Math.max(this.epsilon, c.memory + c.semanticTrace), 0)
+      for (const c of cells)
+        c.p = this.epsilon + ((target - floor) * Math.max(this.epsilon, c.memory + c.semanticTrace) / memSum)
+      return
     }
 
-    this.hexVault.set(id, capsule)
-    this.cleanupCapsules()
-    return id
+    const factor = Math.max(0, target - floor) / current
+    for (const c of cells)
+      c.p = this.epsilon + Math.max(0, c.p - this.epsilon) * factor
   }
 
-  shouldActivateCapsule(capsule) {
-    const phi   = 1.618033988749895
-    const orbit = this.#activeOrbit(capsule)   // projectedOrbit ?? phiOrbit
+  // ═══════════════════════════════════════════════════════
+  //  6. ديناميكيات الخلايا
+  // ═══════════════════════════════════════════════════════
 
-    const orbitDist  = Math.abs(((orbit - this.field.signature + this.cycle) % this.cycle))
-    const orbitAlign = this.clamp01(1 - Math.min(orbitDist, this.cycle - orbitDist) / (this.cycle * 0.5))
-
-    const phiAlignment = this.clamp01(
-      Math.abs(Math.sin((capsule.phiOrbit * phi) % Math.PI))  // phiOrbit الأصلي للـ DNA
-    )
-
-    const need = this.clamp01(this.field.intentPressure * 0.5 + this.field.recallPotential * 0.5)
-    const coherence = capsule.coherence ?? 0
-    const reinforcement = this.clamp01((capsule.reinforcement ?? 0) / 10)
-
-    const lastMem = this.field.semanticMemory.at(-1)
-    const semantic = lastMem
-      ? this.cosineSimilarity(capsule.semanticVector, lastMem.vector ?? new Float32Array(0))
-      : 0
-
-    const R = this.clamp01(
-      semantic       * 0.38 +
-      orbitAlign     * 0.18 +
-      phiAlignment   * 0.18 +
-      reinforcement  * 0.10 +
-      need           * 0.10 +
-      coherence      * 0.06
-    )
-
-    return R > this.vaultActivThresh
+  _updateCellDynamics() {
+    for (const ring of this.rings) {
+      for (const cell of ring) {
+        const baseline = 1 / this.resolution
+        cell.elasticStrain = this._clamp01(
+          Math.abs(cell.p - baseline) * cell.hysteresis * 0.3
+        )
+        cell.p = this._clampP(
+          cell.p - cell.elasticStrain * this.recoveryRate * 0.5
+        )
+        cell.constraintDensity = this._clamp01(
+          cell.constraintDensity * 0.995 +
+          cell.pressure * 0.0026 +
+          cell.memory   * 0.0017 +
+          cell.semanticTrace * 0.0007
+        )
+        // credibility تتأثر بالتغذية الراجعة الحقيقية
+        cell.credibility = this._clamp01(
+          cell.credibility * 0.99 + (1 - this.field.predictionError) * 0.01
+        )
+      }
+    }
   }
 
-  retrieveCapsule(query, queryVector) {
+  // ═══════════════════════════════════════════════════════
+  //  7. الانتشار — معادلة الحرارة على شبكة دائرية
+  //  p(t+1) = p(t) + α · R · ∇²p
+  //  ∇²p = 0.70·lateral + 0.30·radial
+  // ═══════════════════════════════════════════════════════
+
+  _diffuse() {
+    const next = this.rings.map(ring => ring.map(c => c.p))
+
+    for (let r = 0; r < this.ringCount; r++) {
+      for (let i = 0; i < this.resolution; i++) {
+        const cell  = this.rings[r][i]
+        const left  = this.rings[r][this._wrapI(i - 1)].p
+        const right = this.rings[r][this._wrapI(i + 1)].p
+        const up    = this.rings[this._wrapR(r - 1)][i].p
+        const down  = this.rings[this._wrapR(r + 1)][i].p
+
+        const lap = (left + right - 2 * cell.p) * 0.70 +
+                    (up   + down  - 2 * cell.p) * 0.30
+
+        // مقاومة الانتشار — المناطق ذات الذاكرة تنتشر أبطأ
+        const R = (1 - cell.constraintDensity) *
+                  (1 - cell.semanticTrace * 0.25) *
+                  (1 - cell.hysteresis    * 0.30)
+
+        next[r][i] = this._clampP(cell.p + this.diffusionRate * R * lap)
+      }
+    }
+
+    for (let r = 0; r < this.ringCount; r++)
+      for (let i = 0; i < this.resolution; i++)
+        this.rings[r][i].p = next[r][i]
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  8. الجاذبات — اكتشاف + تفاعل
+  // ═══════════════════════════════════════════════════════
+
+  _updateAttractors(perturb) {
+    const candidates = []
+
+    for (let r = 0; r < this.ringCount; r++) {
+      for (let i = 0; i < this.resolution; i++) {
+        const c     = this.rings[r][i]
+        const score = this._clamp01(
+          c.p                  * 0.40 +
+          c.memory             * 0.20 +
+          c.semanticTrace      * 0.15 +
+          c.constraintDensity  * 0.10 +
+          c.credibility        * 0.15
+        )
+
+        if (score > this.theta_attractor) {
+          candidates.push({
+            r, i,
+            theta    : c.theta,
+            strength : score,
+            memory   : c.memory,
+            semantic : c.semanticTrace,
+            credibility: c.credibility,
+            // emergentCredibility يتأثر بجودة التنبؤ
+            emergentCredibility: this._clamp01(
+              c.credibility * (1 - this.field.predictionError * 0.3)
+            ),
+            vector   : perturb.vector.slice()
+          })
+        }
+      }
+    }
+
+    // فرز + تباعد مكاني
+    candidates.sort((a, b) => b.strength - a.strength)
+    const selected = []
+    for (const c of candidates) {
+      const tooClose = selected.some(
+        a => a.r === c.r && this._circularIndexDist(a.i, c.i) < 6
+      )
+      if (!tooClose) selected.push(c)
+      if (selected.length >= this.attractorLimit) break
+    }
+
+    // تفاعل الجاذبات — قانون عكسي تربيعي
+    for (let x = 0; x < selected.length; x++) {
+      for (let y = x + 1; y < selected.length; y++) {
+        const a = selected[x], b = selected[y]
+        const d     = Math.max(1, this._circularIndexDist(a.i, b.i))
+        const force = (a.strength * b.strength) / (d * d) / (1 + Math.abs(a.r - b.r))
+        if (a.r === b.r && d < 12) {
+          a.strength = this._clamp01(a.strength + force * 0.1)
+          b.strength = this._clamp01(b.strength + force * 0.1)
+        } else {
+          a.strength = this._clamp01(a.strength - force * 0.05)
+          b.strength = this._clamp01(b.strength - force * 0.05)
+        }
+      }
+    }
+
+    this.state.attractors = selected.map(a => ({
+      ...a,
+      stability  : this._clamp01(a.strength),
+      orbitTheta : this._containTheta(
+        a.theta + this.state.lastDeltaTheta * this.attractorRate
+      )
+    }))
+  }
+
+  _applyAttractors() {
+    for (const a of this.state.attractors) {
+      const center = this._thetaToIndex(a.orbitTheta ?? a.theta)
+      const radius = Math.max(2, Math.floor(4 + a.stability * 18))
+
+      for (let di = -radius; di <= radius; di++) {
+        const idx  = this._wrapI(center + di)
+        const prox = this._clamp01(1 - Math.abs(di) / (radius + 1))
+        const cell = this.rings[a.r][idx]
+        const pull = this.attractorRate * a.stability * prox * (1 - cell.pressure)
+
+        cell.p             = this._clampP(cell.p + pull)
+        cell.memory        = this._clamp01(cell.memory + pull * 0.1)
+        cell.semanticTrace = this._clamp01(cell.semanticTrace + pull * 0.04)
+      }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  9. الحقل الدلالي
+  // ═══════════════════════════════════════════════════════
+
+  _updateSemanticField(perturb, feedback) {
+    const last  = this.field.semanticMemory.at(-1)
+    const simil = last ? this._cosine(perturb.vector, last.vector) : 0
+    const novel = this._clamp01(1 - simil)
+
+    const grounding = this._clamp01(
+      perturb.semantic.lexical * 0.30 +
+      perturb.semantic.length  * 0.15 +
+      perturb.semantic.code    * 0.20 +
+      perturb.semantic.data    * 0.20 +
+      perturb.semantic.command * 0.15
+    )
+
+    const intent = this._clamp01(
+      perturb.semantic.command  * 0.30 +
+      perturb.semantic.error    * 0.25 +
+      perturb.semantic.question * 0.20 +
+      perturb.semantic.code     * 0.25
+    )
+
+    this.field.semanticGrounding  = this._round4(this.field.semanticGrounding  * 0.86 + grounding * 0.14)
+    this.field.semanticCoherence  = this._round4(this.field.semanticCoherence  * 0.82 + simil     * 0.18)
+    this.field.intentPressure     = this._round4(this.field.intentPressure     * 0.78 + intent    * 0.22)
+    this.field.noveltyPressure    = this._round4(this.field.noveltyPressure    * 0.80 + novel     * 0.20)
+    this.field.executionReadiness = this._round4(this._clamp01(
+      perturb.semantic.command * 0.40 + perturb.semantic.code * 0.30 + this.field.coherence * 0.30
+    ))
+    this.field.recallPotential    = this._round4(this._clamp01(
+      simil * 0.40 + this.field.persistence * 0.30 + this.field.continuity * 0.30
+    ))
+
+    // credibility متوسط الجاذبات
+    const creds = this.state.attractors.map(a => a.emergentCredibility ?? 1)
+    this.field.avgCredibility = creds.length
+      ? this._round4(creds.reduce((s, v) => s + v, 0) / creds.length)
+      : 1.0
+
+    // حفظ في الذاكرة
+    this.field.semanticMemory.push({
+      t       : this.state.t,
+      theta   : this._round4(this.state.lastTheta),
+      vector  : perturb.vector.slice(),
+      grounding,
+      coherence: this.field.semanticCoherence,
+      novelty  : this.field.noveltyPressure,
+      phase    : this.state.phase,
+      // الخطأ وقت التخزين
+      predictionError: feedback.magnitude
+    })
+
+    if (this.field.semanticMemory.length > 64)
+      this.field.semanticMemory.shift()
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  10. التنبؤ بالإدخال القادم
+  //
+  //  v̂(t+1) = normalize( W·a(t) + α_cap · v_cap )
+  //
+  //  a(t)  = حالة الجاذبات ∈ ℝᴬ
+  //  v_cap = متجه أقرب كبسولة مرتبطة بالسياق الحالي
+  //  α_cap = وزن الكبسولة = تشابه × تعزيز
+  //
+  //  الكبسولة تُغذّي التنبؤ مباشرة:
+  //  سياق مشابه لما خُزِّن → التنبؤ يستفيد من الذاكرة
+  // ═══════════════════════════════════════════════════════
+
+  _predict() {
+    const D = this.semanticDimensions
+    const A = this.maxAttractors
+
+    // ── 1. بناء a(t) من الجاذبات ──────────────────────────
+    const a = new Float32Array(A)
+    for (let j = 0; j < Math.min(this.state.attractors.length, A); j++)
+      a[j] = this.state.attractors[j].strength ?? 0
+
+    let aNorm = 0
+    for (let j = 0; j < A; j++) aNorm += a[j] * a[j]
+    aNorm = Math.sqrt(aNorm) || 1
+    for (let j = 0; j < A; j++) a[j] /= aNorm
+
+    // ── 2. v̂_field = W · a ────────────────────────────────
+    const predField = new Float32Array(D)
+    for (let d = 0; d < D; d++) {
+      let sum = 0
+      for (let j = 0; j < A; j++) sum += this.W[d * A + j] * a[j]
+      predField[d] = sum
+    }
+
+    // ── 3. مساهمة الكبسولة ────────────────────────────────
+    // أقرب كبسولة للسياق الحالي تُضاف كذاكرة للتنبؤ
+    let capsuleContrib = null
+    let alpha_cap      = 0
+
+    if (this.vault.size > 0 && this._lastVector.some(v => v !== 0)) {
+      const hit = this.retrieveCapsule(this._lastVector, true)
+      if (hit) {
+        const reinforcementBoost = this._clamp01((hit.capsule.reinforcement ?? 0) / 5)
+        alpha_cap      = this._clamp01(hit.score * (1 + reinforcementBoost) * 0.6)
+        capsuleContrib = hit.capsule.vector
+      }
+    }
+
+    // ── 4. دمج: v̂ = (1-α)·v̂_field + α·v_cap ──────────────
+    const pred = new Float32Array(D)
+    for (let d = 0; d < D; d++) {
+      pred[d] = capsuleContrib
+        ? (1 - alpha_cap) * predField[d] + alpha_cap * capsuleContrib[d]
+        : predField[d]
+    }
+
+    // ── 5. تطبيع ──────────────────────────────────────────
+    let pNorm = 0
+    for (let i = 0; i < D; i++) pNorm += pred[i] * pred[i]
+    pNorm = Math.sqrt(pNorm) || 1
+    for (let i = 0; i < D; i++) pred[i] = Math.fround(pred[i] / pNorm)
+
+    this._lastPrediction.set(pred)
+    this._lastAttractorState.set(a)
+    this._hasPrediction   = true
+    this._lastCapsuleAlpha = alpha_cap
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  11. الكبسولات — التخزين بناءً على المفاجأة
+  //  store iff ||e(t)|| > θ_vault (متكيف)
+  // ═══════════════════════════════════════════════════════
+
+  _storeCapsule(input, perturb, feedback) {
+    const text = String(input ?? '')
+    if (text.length < 10) return
+
+    // checksum بسيط
+    let cs = 2166136261
+    for (let i = 0; i < text.length; i++) {
+      cs ^= text.charCodeAt(i)
+      cs  = Math.imul(cs, 16777619)
+    }
+    const checksum = Math.abs(cs >>> 0).toString(16)
+
+    // تحديث إذا موجود
+    for (const [, cap] of this.vault) {
+      if (cap.checksum === checksum) {
+        cap.reinforcement = (cap.reinforcement ?? 0) + 0.1
+        cap.lastError     = feedback.magnitude
+        cap.version       = (cap.version ?? 1) + 1
+        return
+      }
+    }
+
+    // تخزين جديد
+    const id = `cap_${this.state.t}_${checksum.slice(0, 6)}`
+    this.vault.set(id, {
+      id,
+      text     : text.slice(0, 200),       // نبقي أول 200 حرف
+      checksum,
+      vector   : perturb.vector.slice(),
+      phase    : this.state.phase,
+      t        : this.state.t,
+      error    : feedback.magnitude,        // الخطأ الذي سبب التخزين
+      theta    : this._round4(this.field.signature * 1.618033988749895 % this.cycle),
+      reinforcement: 0,
+      version  : 1
+    })
+
+    // تنظيف: احذف الأقل تعزيزاً
+    if (this.vault.size > this.vaultLimit) {
+      const sorted = [...this.vault.entries()].sort(([, a], [, b]) => a.reinforcement - b.reinforcement)
+      for (const [id] of sorted.slice(0, this.vault.size - this.vaultLimit))
+        this.vault.delete(id)
+    }
+  }
+
+  // استرجاع أقرب كبسولة بالتشابه الدلالي
+  retrieveCapsule(queryVector, reinforce = false) {
     let best = null, bestScore = -1
 
-    for (const [id, cap] of this.hexVault) {
-      if (!cap.source?.sealed) continue
+    for (const [, cap] of this.vault) {
+      const sim   = this._cosine(queryVector, cap.vector)
+      const reinf = this._clamp01((cap.reinforcement ?? 0) / 10)
+      const score = sim * 0.70 + reinf * 0.30
 
-      const orbit          = this.#activeOrbit(cap)   // projectedOrbit ?? phiOrbit
-      const similarity     = this.cosineSimilarity(queryVector, cap.semanticVector)
-      const reinforcement  = this.clamp01((cap.reinforcement ?? 0) / 10)
-      const phiAlignment   = this.clamp01(
-        Math.abs(Math.sin((cap.phiOrbit * 1.618033988749895) % Math.PI))  // DNA الأصلي
-      )
-      const orbitDist      = Math.abs(((orbit - this.field.signature + this.cycle) % this.cycle))
-      const orbitScore     = this.clamp01(1 - Math.min(orbitDist, this.cycle - orbitDist) / (this.cycle * 0.5))
-      const integrity      = (cap.source.sealed && cap.source.persistent) ? 1.0 : 0.0
-
-      const score = this.clamp01(
-        similarity    * 0.40 +
-        orbitScore    * 0.20 +
-        phiAlignment  * 0.15 +
-        reinforcement * 0.15 +
-        integrity     * 0.10
-      )
-
-      if (score > bestScore && score >= this.vaultRetrThresh) {
+      if (score > bestScore && score > 0.25) {
         bestScore = score
-        best = { capsule: cap, score }
+        best      = { capsule: cap, score: this._round4(score) }
       }
+    }
+
+    // إذا طُلب التعزيز — الكبسولة المسترجعة تقوى
+    // هذا يعني: ما يُستخدم فعلاً في التنبؤ يُعزَّز
+    if (best && reinforce) {
+      best.capsule.reinforcement = (best.capsule.reinforcement ?? 0) + 0.05
+      best.capsule.lastUsed      = this.state.t
     }
 
     return best
   }
 
-  getActiveCapsules() {
-    const active = []
-    for (const [id, cap] of this.hexVault) {
-      if (this.shouldActivateCapsule(cap)) {
-        cap.attached = true
-        active.push({ ...cap, _activationScore: true })
-        cap.attached = false
-
-        // ── Local Field Perturbation ────────────────────────────
-        // الكبسولة تترك أثراً دلالياً عند تفعيلها
-        // semanticTrace فقط — لا p، لا pressure، لا conserveMass
-        const idx = this.thetaToIndex(this.#activeOrbit(cap))
-        const w   = this.clamp01((cap.reinforcement ?? 0) * 0.004)
-        for (let r = 0; r < this.ringCount; r++) {
-          this.rings[r][idx].semanticTrace = this.clamp01(
-            (this.rings[r][idx].semanticTrace ?? 0) + w
-          )
-        }
-      }
-    }
-    return active
-  }
-
-  cleanupCapsules() {
-    if (this.hexVault.size <= this.vaultLimit) return
-
-    const sorted = [...this.hexVault.entries()]
-      .sort(([, a], [, b]) => (a.reinforcement ?? 0) - (b.reinforcement ?? 0))
-
-    const toDelete = sorted.slice(0, this.hexVault.size - this.vaultLimit)
-    for (const [id] of toDelete) this.hexVault.delete(id)
-  }
-
-  #adaptVaultSize() {
-    const caps      = [...this.hexVault.values()]
-    const avgR      = caps.reduce((a, c) => a + (c.reinforcement ?? 0), 0) / Math.max(caps.length, 1)
-    const fillRatio = this.hexVault.size / this.vaultLimit
-
-    if (fillRatio > 0.90 && avgR > 0.5) {
-      this.vaultLimit = Math.min(Math.floor(this.vaultLimit * this.vaultGrowthRate), this.vaultMax)
-      return
-    }
-    if (fillRatio < 0.40 && avgR < 0.2) {
-      this.vaultLimit = Math.max(Math.floor(this.vaultLimit * this.vaultShrinkRate), this.vaultMin)
-    }
-  }
-
-  retrieveRaw(query, queryVector) {
-    const result = this.retrieveCapsule(query, queryVector)
-    if (!result) return null
-
-    const cap        = result.capsule
-    const breakdown  = this.#scoreBreakdown(cap, queryVector)
-
-    return {
-      compressed:     cap.source.compressed,
-      score:          this.round4(result.score),
-      capsuleId:      cap.id,
-      phiOrbit:       this.round4(cap.phiOrbit),
-      projectedOrbit: this.round4(cap.projectedOrbit ?? cap.phiOrbit),
-      reinforcement:  this.round4(cap.reinforcement ?? 0),
-      phase:          cap.phase,
-      version:        cap.version ?? 1,
-      enriched:       cap.enriched ?? false,
-      scoreBreakdown: breakdown
-    }
-  }
-
-  #scoreBreakdown(cap, queryVector) {
-    const orbit         = this.#activeOrbit(cap)
-    const similarity    = queryVector?.length ? this.cosineSimilarity(queryVector, cap.semanticVector) : 0
-    const reinforcement = this.clamp01((cap.reinforcement ?? 0) / 10)
-    const phiAlignment  = this.clamp01(Math.abs(Math.sin((cap.phiOrbit * 1.618033988749895) % Math.PI)))
-    const orbitDist     = Math.abs(((orbit - this.field.signature + this.cycle) % this.cycle))
-    const orbitScore    = this.clamp01(1 - Math.min(orbitDist, this.cycle - orbitDist) / (this.cycle * 0.5))
-    const integrity     = (cap.source.sealed && cap.source.persistent) ? 1.0 : 0.0
-
-    return {
-      similarity:    this.round4(similarity),
-      orbitScore:    this.round4(orbitScore),
-      phiAlignment:  this.round4(phiAlignment),
-      reinforcement: this.round4(reinforcement),
-      integrity:     this.round4(integrity),
-      weights: { similarity: 0.40, orbitScore: 0.20, phiAlignment: 0.15, reinforcement: 0.15, integrity: 0.10 }
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════════════
-  //  CAPSULE REPROJECTION LAYER
-  //  phiOrbit        ← DNA ثابت للأبد — لا يُمس
-  //  projectedOrbit  ← موقع حي يتطور مع الحقل
-  // ═══════════════════════════════════════════════════════════════
-
-  reprojectVault() {
-    const threshold = this.cycle * 0.25  // 90 درجة — حد الانجراف
-
-    for (const [, cap] of this.hexVault) {
-
-      // الموقع الحالي المستخدم للمقارنة
-      const currentOrbit = cap.projectedOrbit ?? cap.phiOrbit
-
-      // المسافة الدائرية بين الموقع الحالي والـ signature الجديد
-      const drift    = Math.abs(((currentOrbit - this.field.signature + this.cycle) % this.cycle))
-      const cirDrift = Math.min(drift, this.cycle - drift)
-
-      // فقط إذا الانجراف تجاوز العتبة
-      if (cirDrift < threshold) continue
-
-      // إسقاط تدريجي — لا قفزة مفاجئة
-      // phiOrbit الأصلي لا يُمس أبداً
-      cap.projectedOrbit = this.containTheta(
-        currentOrbit             * 0.85 +   // الموقع السابق يحتفظ بـ 85%
-        this.field.signature     * 0.15      // الحقل الجديد يؤثر 15%
-      )
-
-      // الكبسولة تترك أثراً في موقعها الجديد على الـ manifold
-      const D   = this.manifoldDimensions
-      const v   = cap.semanticVector
-      if (v?.length) {
-        const { cx, cy } = this.#vectorToManifoldCoords(v, D)
-        const idx = cx * D + cy
-        this.field.manifold[idx] = this.clamp01(
-          (this.field.manifold[idx] ?? 0) + 0.012 * Math.min(1, cap.reinforcement ?? 0)
-        )
-      }
-    }
-
-    this.#adaptVaultSize()
-  }
-
-  #activeOrbit(cap) {
-    return cap.projectedOrbit ?? cap.phiOrbit
-  }
-
-
-
-  process(input, options = {}) {
-    this._metricsCache     = null
-    this._metricsCacheTime = -1
-
-    if (typeof options === 'number') options = { sourceWeight: options }
-    const sourceWeight = this.clamp01(options.sourceWeight ?? 1.0)
-    this.state.lastSourceWeight = sourceWeight
-    this.field.lastSourceWeight = sourceWeight
-
-    const perturbation = this.perturb(input)
-    perturbation.sourceWeight = sourceWeight
-
-    const delta     = this.deltaP(perturbation)
-    const contained = this.containDelta(delta)
-
-    this.applyDelta(contained, perturbation)
-    this.diffuse()
-    this.applyAttractors()
-    this.conserveMass()
-    this.updateAttractors(perturbation)
-    this.updateResiduals()
-    this.updateConstraintDensity()
-    this.updateActivity()
-    this.updatePhase()
-    this.updateFieldIdentity()
-    this.updateSemanticField(perturbation)
-    this.updateSignalMetrics()
-    this.updateManifold(perturbation)
-    this.updateEmergentCredibility(perturbation)
-    this.updateRecursiveCognition()
-
-    const signal = typeof input === 'string' ? input : JSON.stringify(input ?? '')
-    if (this.shouldStoreCapsule(signal, perturbation)) {
-      this.storeOrUpdateCapsule(signal, perturbation)
-    }
-
-    this.state.lastPerturbationVector = perturbation.semantic.vector.slice()
-
-    const snapshot = this.snapshot(perturbation, delta, contained)
-    this.commit(snapshot)
-
-    return snapshot
-  }
-
-  perturb(input) {
-    const signal =
-      typeof input === 'string'
-        ? input
-        : JSON.stringify(input ?? '')
-
-    let h1 = 2166136261
-    let h2 = 16777619
-    let h3 = 374761393
-
-    for (let i = 0; i < signal.length; i++) {
-      const c = signal.charCodeAt(i)
-      h1 ^= c
-      h1  = Math.imul(h1, 16777619)
-      h2  = Math.imul(h2 ^ c, 2246822519)
-      h3  = Math.imul(h3 + c, 3266489917)
-    }
-
-    const length   = signal.length
-    const numeric  = (signal.match(/-?\d+(\.\d+)?/g) ?? []).length
-    const rupture  = (signal.match(/[!?@#]{2,}|ERROR|timeout|retry|fail|panic|فشل|خطأ/gi) ?? []).length
-    const spread   = new Set(signal.split(/\s+/).filter(Boolean)).size
-    const semantic = this.extractSemantic(input, signal, h1, h2, h3)
-
-    return {
-      signal, length, numeric, rupture, spread, semantic,
-      h1: Math.abs(h1 >>> 0),
-      h2: Math.abs(h2 >>> 0),
-      h3: Math.abs(h3 >>> 0),
-      timestamp: Date.now(),
-      sourceWeight: 1.0
-    }
-  }
-
-  extractSemantic(input, signal, h1 = 0, h2 = 0, h3 = 0) {
-    const text   = String(signal ?? '')
-    const words  = text.toLowerCase().split(/\s+/).filter(Boolean)
-    const unique = new Set(words)
-    const code      = /```|function|class|const|let|var|=>|import|export|return|{|}/i.test(text) ? 1 : 0
-    const question  = /[?؟]|كيف|ماذا|لماذا|هل|where|what|why|how/i.test(text) ? 1 : 0
-    const error     = /error|fail|timeout|panic|exception|خطأ|فشل/i.test(text) ? 1 : 0
-    const command   = /اكتب|عدل|انزل|اصنع|احذف|أضف|build|create|fix|write|generate/i.test(text) ? 1 : 0
-    const reasoning = /نظرية|فلسفة|معنى|concept|theory|reason|logic|architecture/i.test(text) ? 1 : 0
-    const emotional = /ألم|خوف|قلق|ممتاز|جميل|سيء|good|bad|worry|fear/i.test(text) ? 1 : 0
-    const data      = /json|api|server|tokens|logs|database|vector|embedding|metric|cpu|latency/i.test(text) ? 1 : 0
-    const lengthScore    = this.clamp01(text.length / 2000)
-    const lexicalDensity = this.clamp01(unique.size / Math.max(words.length, 1))
-    const vector         = this.semanticVector(text, h1, h2, h3)
-
-    return {
-      vector,
-      words: words.length,
-      unique: unique.size,
-      lexicalDensity: this.round4(lexicalDensity),
-      lengthScore:    this.round4(lengthScore),
-      code, question, error, command, reasoning, emotional, data,
-      intent: { ask: question, execute: command, diagnose: error, reason: reasoning, code, data }
-    }
-  }
-
-  semanticVector(text, h1 = 0, h2 = 0, h3 = 0) {
-    const D      = this.semanticDimensions
-    const vector = new Float32Array(D)
-    const s      = String(text ?? '').toLowerCase()
-    const tokens = s.split(/\s+/).filter(Boolean)
-
-    if (tokens.length === 0) {
-      for (let i = 0; i < Math.min(s.length, 64); i++) {
-        const c = s.charCodeAt(i)
-        const a = (Math.abs(Math.imul(c ^ h1 ^ i, 16777619)) >>> 0) % D
-        vector[a] += 1 / (i + 1)
-      }
-    } else {
-      for (let ti = 0; ti < tokens.length; ti++) {
-        const token = tokens[ti]
-        let tw = 2166136261
-        for (let ci = 0; ci < token.length; ci++) {
-          tw ^= token.charCodeAt(ci)
-          tw  = Math.imul(tw, 16777619)
-        }
-        tw = Math.abs(tw >>> 0)
-
-        const posHash = (Math.imul(ti + 1, 2654435761) >>> 0)
-        const a = (Math.abs(Math.imul(tw ^ h1 ^ posHash, 16777619))  >>> 0) % D
-        const b = (Math.abs(Math.imul(tw ^ h2,           2246822519)) >>> 0) % D
-        const c = (Math.abs(Math.imul(tw ^ h3,           3266489917)) >>> 0) % D
-        const weight = 1.0 / Math.sqrt(ti + 1)
-        vector[a] += weight
-        vector[b] += weight * 0.6
-        vector[c] += weight * 0.4
-
-        if (ti + 1 < tokens.length) {
-          let bw = 2166136261
-          const bigram = token + ' ' + tokens[ti + 1]
-          for (let ci2 = 0; ci2 < bigram.length; ci2++) {
-            bw ^= bigram.charCodeAt(ci2)
-            bw  = Math.imul(bw, 16777619)
-          }
-          bw = Math.abs(bw >>> 0)
-          const ba = (Math.abs(Math.imul(bw ^ h1, 16777619)) >>> 0) % D
-          vector[ba] += weight * 0.3
-        }
-      }
-    }
-
-    let norm = 0
-    for (let i = 0; i < D; i++) norm += vector[i] * vector[i]
-    norm = Math.sqrt(norm) || 1
-    for (let i = 0; i < D; i++) vector[i] = Math.fround(vector[i] / norm)
-    return vector
-  }
-
-  deltaP(p) {
-    const volume   = this.clamp01(p.length / 800)
-    const rupture  = this.clamp01(p.rupture / 12)
-    const numeric  = this.clamp01(p.numeric / 12)
-    const variety  = this.clamp01(p.spread / 64)
-    const semanticWeight = this.clamp01(
-      p.semantic.code      * 0.18 +
-      p.semantic.question  * 0.10 +
-      p.semantic.error     * 0.18 +
-      p.semantic.command   * 0.14 +
-      p.semantic.reasoning * 0.15 +
-      p.semantic.data      * 0.12 +
-      p.semantic.lexicalDensity * 0.13
-    )
-
-    const theta         = ((p.h1 % this.resolution) / this.resolution) * this.cycle
-    const phaseShift    = (((p.h2 % 2000) / 1000) - 1) * this.cycle * 0.25
-    const semanticShift = (((p.h3 % 2000) / 1000) - 1) * this.cycle * 0.12
-
-    const intensity = this.clamp01(
-      volume * 0.20 + rupture * 0.30 + numeric * 0.12 +
-      variety * 0.20 + semanticWeight * 0.18
-    )
-
-    const vector = Array.from({ length: this.ringCount }, (_, r) => {
-      const k = (r + 1) / this.ringCount
-      return this.clamp01(intensity * (
-        0.32 + volume * 0.13 * k + rupture * 0.22 * (1 - k) +
-        numeric * 0.08 + variety * 0.12 + semanticWeight * 0.18
-      ))
-    })
-
-    const targetTheta      = this.containTheta(
-      theta + phaseShift + semanticShift +
-      this.state.signature * 0.15 + this.field.signature * 0.05
-    )
-    const targetIndex      = this.thetaToIndex(targetTheta)
-    const signedIndexDelta = this.signedIndexDistance(this.state.lastIndex, targetIndex)
-    const deltaTheta       = this.indexToTheta(signedIndexDelta)
-
-    return {
-      theta: targetTheta, index: targetIndex,
-      deltaTheta, signedIndexDelta, intensity, vector,
-      volume, rupture, numeric, variety, semanticWeight
-    }
-  }
-
-  containDelta(delta) {
-    const phi = 1.618033988749895
-    const nextSignature = this.containTheta(
-      this.state.signature * phi + delta.theta +
-      delta.deltaTheta * 0.5 + delta.intensity * this.cycle * 0.22 +
-      delta.semanticWeight * this.cycle * 0.08
-    )
-
-    const wrapped = Math.abs(delta.signedIndexDelta) > this.resolution / 2
-    if (wrapped) this.state.cycleCount++
-
-    this.state.signature      = nextSignature
-    this.state.lastTheta      = delta.theta
-    this.state.lastIndex      = delta.index
-    this.state.lastDeltaTheta = delta.deltaTheta
-
-    return { ...delta, signature: nextSignature, cycleCount: this.state.cycleCount }
-  }
-
-  applyDelta(delta, perturbation = null) {
-    const radius         = Math.max(2, Math.floor(3 + delta.intensity * 32))
-    const semanticWeight = delta.semanticWeight ?? 0
-    const sourceWeight   = perturbation?.sourceWeight ?? 1.0
-
-    const intentWeight = perturbation?.semantic
-      ? this.clamp01(
-          perturbation.semantic.intent.execute  * 0.35 +
-          perturbation.semantic.intent.diagnose * 0.25 +
-          perturbation.semantic.intent.reason   * 0.20 +
-          perturbation.semantic.intent.code     * 0.20
-        )
-      : 0
-
-    for (let r = 0; r < this.ringCount; r++) {
-      const ringDelta = delta.vector[r] ?? 0
-      for (let i = 0; i < this.resolution; i++) {
-        const cell      = this.rings[r][i]
-        const d         = this.circularIndexDistance(i, delta.index)
-        const proximity = this.clamp01(1 - d / radius)
-        const density   = cell.constraintDensity ?? 0
-
-        const pressure = this.clamp01(
-          ringDelta * 0.40 + delta.rupture * 0.22 + delta.variety * 0.12 +
-          semanticWeight * 0.14 + intentWeight * 0.07 + (1 - proximity) * 0.05
-        )
-
-        const expansion =
-          proximity * ringDelta * this.recoveryRate *
-          (1 - pressure) * (1 - density) *
-          (1 + semanticWeight * 0.20) * sourceWeight
-
-        const narrowing =
-          pressure * this.constraintRate * (1 - proximity * 0.5) * (1 + density)
-
-        cell.pressure = pressure
-        cell.p = this.clampP(cell.p + expansion - narrowing)
-
-        cell.memory = this.clamp01(
-          cell.memory * 0.985 +
-          proximity * ringDelta * 0.013 * sourceWeight +
-          proximity * semanticWeight * 0.004
-        )
-
-        cell.hysteresis = this.clamp01(
-          (cell.hysteresis ?? 0) * 0.995 +
-          proximity * ringDelta * sourceWeight * 0.005
-        )
-
-        const baseline     = 1 / this.resolution
-        cell.elasticStrain = this.clamp01(
-          Math.abs(cell.p - baseline) * (cell.hysteresis ?? 0) * 0.3
-        )
-
-        const pathBias = (cell.hysteresis ?? 0) * 0.15 * sourceWeight
-        cell.p = this.clampP(
-          cell.p + expansion * pathBias -
-          cell.elasticStrain * this.recoveryRate * 0.5
-        )
-
-        cell.semanticTrace = this.clamp01(
-          (cell.semanticTrace ?? 0) * 0.992 +
-          proximity * semanticWeight * 0.008 * sourceWeight
-        )
-
-        cell.intentTrace = this.clamp01(
-          (cell.intentTrace ?? 0) * 0.990 +
-          proximity * intentWeight * 0.010 * sourceWeight
-        )
-
-        cell.credibility = this.clamp01(
-          (cell.credibility ?? 1.0) * 0.99 + proximity * sourceWeight * 0.01
-        )
-      }
-    }
-  }
-
-  diffuse() {
-    const next         = this.rings.map(ring => ring.map(c => c.p))
-    const semanticNext = this.rings.map(ring => ring.map(c => c.semanticTrace ?? 0))
-
-    for (let r = 0; r < this.ringCount; r++) {
-      for (let i = 0; i < this.resolution; i++) {
-        const left    = this.rings[r][this.wrapIndex(i - 1)].p
-        const mid     = this.rings[r][i].p
-        const right   = this.rings[r][this.wrapIndex(i + 1)].p
-        const ringUp  = this.rings[this.wrapRing(r - 1)][i].p
-        const ringDown= this.rings[this.wrapRing(r + 1)][i].p
-
-        const localDiff =
-          (left + right - 2 * mid)      * 0.70 +
-          (ringUp + ringDown - 2 * mid) * 0.30
-
-        const resistance           = 1 - (this.rings[r][i].constraintDensity ?? 0)
-        const semanticResistance   = 1 - (this.rings[r][i].semanticTrace     ?? 0) * 0.25
-        const hysteresisResistance = 1 - (this.rings[r][i].hysteresis        ?? 0) * 0.30
-
-        next[r][i] = this.clampP(
-          mid + this.diffusionRate * resistance * semanticResistance * hysteresisResistance * localDiff
-        )
-
-        const sLeft  = this.rings[r][this.wrapIndex(i - 1)].semanticTrace ?? 0
-        const sMid   = this.rings[r][i].semanticTrace ?? 0
-        const sRight = this.rings[r][this.wrapIndex(i + 1)].semanticTrace ?? 0
-        const sUp    = this.rings[this.wrapRing(r - 1)][i].semanticTrace ?? 0
-        const sDown  = this.rings[this.wrapRing(r + 1)][i].semanticTrace ?? 0
-
-        const semanticDiff =
-          (sLeft + sRight - 2 * sMid) * 0.65 +
-          (sUp   + sDown  - 2 * sMid) * 0.35
-
-        semanticNext[r][i] = this.clamp01(
-          sMid + this.diffusionRate * 0.5 * resistance * semanticDiff
-        )
-      }
-    }
-
-    for (let r = 0; r < this.ringCount; r++)
-      for (let i = 0; i < this.resolution; i++) {
-        this.rings[r][i].p             = next[r][i]
-        this.rings[r][i].semanticTrace = semanticNext[r][i]
-      }
-  }
-
-  conserveMass() {
-    const cells = []
-    for (let r = 0; r < this.ringCount; r++)
-      for (let i = 0; i < this.resolution; i++)
-        cells.push(this.rings[r][i])
-
-    const floorMass     = this.epsilon * cells.length
-    const target        = Math.max(this.massTarget, floorMass + this.epsilon)
-    const currentExcess = cells.reduce((s, c) => s + Math.max(0, c.p - this.epsilon), 0)
-    const targetExcess  = Math.max(0, target - floorMass)
-
-    if (currentExcess < this.epsilon) {
-      const memorySum = cells.reduce(
-        (s, c) => s + Math.max(this.epsilon, (c.memory ?? 0) + (c.semanticTrace ?? 0)), 0
-      )
-      for (const c of cells) {
-        const weight = Math.max(this.epsilon, (c.memory ?? 0) + (c.semanticTrace ?? 0))
-        c.p = this.epsilon + (targetExcess * weight / memorySum)
-      }
-      return
-    }
-
-    const factor = targetExcess / currentExcess
-    for (const c of cells)
-      c.p = this.epsilon + Math.max(0, c.p - this.epsilon) * factor
-  }
-
-  updateAttractors(perturbation = null) {
-    const candidates = []
-
-    for (let r = 0; r < this.ringCount; r++) {
-      for (let i = 0; i < this.resolution; i++) {
-        const cell  = this.rings[r][i]
-        const score = this.clamp01(
-          cell.p                     * 0.40 +
-          cell.memory                * 0.18 +
-          cell.residual              * 0.15 +
-          cell.constraintDensity     * 0.09 +
-          (cell.semanticTrace ?? 0)  * 0.09 +
-          (cell.hysteresis    ?? 0)  * 0.04 +
-          (cell.intentTrace   ?? 0)  * 0.05
-        )
-
-        if (score > this.activationThreshold) {
-          candidates.push({
-            r, i,
-            theta: cell.theta, mass: cell.p, memory: cell.memory,
-            residual: cell.residual, pressure: cell.pressure,
-            constraintDensity: cell.constraintDensity,
-            semanticWeight:      cell.semanticTrace ?? 0,
-            intentWeight:        cell.intentTrace   ?? 0,
-            credibility:         cell.credibility   ?? 1.0,
-            emergentCredibility: cell.credibility   ?? 1.0,
-            strength: score,
-            semanticVector: perturbation?.semantic?.vector?.slice() ?? new Float32Array(0),
-            predictionScore: 0, predictionCount: 0
-          })
-        }
-      }
-    }
-
-    candidates.sort((a, b) => b.strength - a.strength)
-
-    const L            = this.field.localization
-    const signalFactor = this.field.signalType === 'signal' ? 1.0 : 0.4 + L * 0.6
-    const selected     = []
-
-    for (const c of candidates) {
-      const tooClose = selected.some(a =>
-        a.r === c.r && this.circularIndexDistance(a.i, c.i) < 6
-      )
-      if (!tooClose) {
-        c.strength *= signalFactor
-        c.strength *= (c.emergentCredibility ?? 1.0)
-        selected.push(c)
-      }
-      if (selected.length >= this.attractorLimit) break
-    }
-
-    if (perturbation?.semantic?.vector?.length) {
-      const newVec = perturbation.semantic.vector
-      for (const a of selected) {
-        if (!a.semanticVector?.length) continue
-        const similarity      = this.cosineSimilarity(newVec, a.semanticVector)
-        const isContradiction =
-          similarity < this.contradictionThreshold &&
-          this.field.noveltyPressure > 0.60
-
-        if (isContradiction) {
-          a.strength  *= (1 - this.decayRate)
-          a.stability  = a.stability ? a.stability * (1 - this.decayRate * 0.8) : 0
-          a.emergentCredibility = this.clamp01(
-            (a.emergentCredibility ?? 1.0) - this.credibilityLearningRate * 1.5
-          )
-        }
-      }
-    }
-
-    this.state.attractors = this.interactAttractors(selected)
-  }
-
-  interactAttractors(attractors) {
-    const result = attractors.map(a => ({ ...a, force: 0 }))
-
-    for (let x = 0; x < result.length; x++) {
-      for (let y = x + 1; y < result.length; y++) {
-        const a = result[x]
-        const b = result[y]
-        const d               = Math.max(1, this.circularIndexDistance(a.i, b.i))
-        const ringDistance    = Math.abs(a.r - b.r)
-        const coupling        = 1 / (1 + ringDistance)
-        const semanticCoupling = 1 + ((a.semanticWeight ?? 0) + (b.semanticWeight ?? 0)) * 0.35
-        const force           = coupling * semanticCoupling * (a.strength * b.strength) / (d * d)
-
-        if (a.r === b.r && d < 12) {
-          a.force += force; b.force += force
-        } else {
-          a.force -= force * 0.35; b.force -= force * 0.35
-        }
-      }
-    }
-
-    return result.map(a => ({
-      ...a,
-      stability:  this.clamp01(a.strength + a.force),
-      orbitTheta: this.containTheta(
-        a.theta + this.state.lastDeltaTheta * this.attractorRate *
-        (1 + (a.semanticWeight ?? 0) * 0.25)
-      )
-    }))
-  }
-
-  applyAttractors() {
-    if (!this.state.attractors.length) return
-
-    for (const a of this.state.attractors) {
-      const center = this.thetaToIndex(a.orbitTheta ?? a.theta)
-      const radius = Math.max(2, Math.floor(4 + a.stability * 18 + (a.semanticWeight ?? 0) * 4))
-
-      for (let i = -radius; i <= radius; i++) {
-        const idx       = this.wrapIndex(center + i)
-        const d         = Math.abs(i)
-        const proximity = this.clamp01(1 - d / (radius + 1))
-        const cell      = this.rings[a.r][idx]
-
-        const pull =
-          this.attractorRate * a.stability * proximity *
-          (1 - cell.pressure) *
-          (1 + (cell.constraintDensity ?? 0)) *
-          (1 + (a.semanticWeight ?? 0) * 0.25)
-
-        cell.p             = this.clampP(cell.p + pull)
-        cell.memory        = this.clamp01(cell.memory + pull * 0.1)
-        cell.semanticTrace = this.clamp01((cell.semanticTrace ?? 0) + pull * 0.04)
-      }
-    }
-  }
-
-  updateResiduals() {
-    for (let r = 0; r < this.ringCount; r++)
-      for (let i = 0; i < this.resolution; i++) {
-        const cell = this.rings[r][i]
-        cell.residual = this.clampP(
-          cell.residual * 0.992 + cell.p * 0.007 + (cell.semanticTrace ?? 0) * 0.001
-        )
-      }
-  }
-
-  updateConstraintDensity() {
-    for (let r = 0; r < this.ringCount; r++)
-      for (let i = 0; i < this.resolution; i++) {
-        const cell = this.rings[r][i]
-        cell.constraintDensity = this.clamp01(
-          (cell.constraintDensity ?? 0) * 0.995 +
-          cell.pressure * 0.0026 + cell.memory * 0.0017 +
-          (cell.semanticTrace ?? 0) * 0.0007
-        )
-      }
-  }
-
-  updateActivity() {
-    for (let r = 0; r < this.ringCount; r++)
-      for (let i = 0; i < this.resolution; i++) {
-        const cell = this.rings[r][i]
-        cell.active =
-          cell.p > this.activationThreshold ||
-          (cell.semanticTrace ?? 0) > this.activationThreshold
-      }
-  }
-
-  updatePhase() {
-    const m = this.metrics()
+  // ═══════════════════════════════════════════════════════
+  //  12. الاستقرار — كشف الطور
+  // ═══════════════════════════════════════════════════════
+
+  _updatePhase() {
+    const m   = this._metrics()
     let phase = 'stable'
 
-    if (this.state.t < 8)                                                                         phase = 'warmup'
-    else if (this.field.signalType === 'noise' && m.entropy > 0.70)                               phase = 'noise'
-    else if (m.pressure > 0.70 && m.entropy > 0.65)                                               phase = 'turbulent'
-    else if (m.aliveRatio < 0.25)                                                                  phase = 'compressed'
-    else if (m.attractorStrength > 0.72 && m.drift < 0.20 && this.field.semanticCoherence > 0.45) phase = 'locked'
-    else if (m.drift > 0.55 || this.field.noveltyPressure > 0.72)                                 phase = 'drift'
-    else if (m.residualMass > 0.55 && m.attractorStrength > 0.50)                                 phase = 'emergent'
-    else if (m.pressure > 0.45 || m.fieldCurvature > 0.45 || this.field.intentPressure > 0.60)   phase = 'metastable'
+    if (this.state.t < 8)                                          phase = 'warmup'
+    else if (m.entropy > 0.72 && m.aliveRatio < 0.30)             phase = 'noise'
+    else if (m.pressure > 0.70 && m.entropy > 0.65)               phase = 'turbulent'
+    else if (m.aliveRatio < 0.25)                                  phase = 'compressed'
+    else if (m.attractorStr > 0.72 && m.drift < 0.20 &&
+             this.field.semanticCoherence > 0.45)                  phase = 'locked'
+    else if (m.drift > 0.55 || this.field.noveltyPressure > 0.72) phase = 'drift'
+    else if (m.residual > 0.55 && m.attractorStr > 0.50)          phase = 'emergent'
+    else if (m.pressure > 0.45 || this.field.intentPressure > 0.60) phase = 'metastable'
 
     this.state.phase = phase
-
-    // ── Capsule Reprojection — عند الاستقرار فقط ─────────────────
-    if (
-      (phase === 'locked' || phase === 'stable') &&
-      this.hexVault.size > 0 &&
-      this.state.cycleCount % 5 === 0
-    ) {
-      this.reprojectVault()
-    }
   }
 
-  updateFieldIdentity() {
-    const m   = this.metrics()
+  _updateFieldIdentity() {
+    const m   = this._metrics()
     const phi = 1.618033988749895
 
-    this.field.signature = this.containTheta(
+    this.field.signature = this._containTheta(
       this.field.signature * phi + this.state.signature +
-      m.entropy * this.cycle * 0.20 + m.attractorStrength * this.cycle * 0.14 +
-      m.fieldCurvature * this.cycle * 0.10 + this.field.semanticGrounding * this.cycle * 0.08
+      m.entropy * this.cycle * 0.20 + m.attractorStr * this.cycle * 0.14
     )
 
-    this.field.drift = this.round4(m.drift)
-
-    this.field.coherence = this.round4(this.clamp01(
-      (1 - m.drift) * 0.32 + m.attractorStrength * 0.25 +
-      (1 - m.pressure) * 0.17 + m.fieldCurvature * 0.08 +
-      this.field.semanticCoherence * 0.18
+    this.field.coherence  = this._round4(this._clamp01(
+      (1 - m.drift) * 0.35 + m.attractorStr * 0.30 + (1 - m.pressure) * 0.20 + this.field.semanticCoherence * 0.15
     ))
-
-    this.field.continuity = this.round4(this.clamp01(
-      m.residualMass * 0.34 + m.attractorStrength * 0.25 +
-      (1 - m.drift) * 0.17 + m.fieldCurvature * 0.08 +
-      this.field.semanticGrounding * 0.16
+    this.field.continuity = this._round4(this._clamp01(
+      m.residual * 0.35 + m.attractorStr * 0.25 + (1 - m.drift) * 0.20 + this.field.semanticGrounding * 0.20
     ))
-
-    this.field.momentum = this.round4(this.clamp01(
-      Math.abs(this.state.lastDeltaTheta) / (this.cycle * 0.5)
+    this.field.drift      = this._round4(m.drift)
+    this.field.momentum   = this._round4(this._clamp01(Math.abs(this.state.lastDeltaTheta) / (this.cycle * 0.5)))
+    this.field.resonance  = this._round4(this._clamp01(
+      m.entropy * 0.25 + m.attractorStr * 0.30 + m.residual * 0.20 + this.field.semanticCoherence * 0.25
     ))
-
-    this.field.resonance = this.round4(this.clamp01(
-      m.entropy * 0.22 + m.attractorStrength * 0.27 + m.residualMass * 0.18 +
-      m.fieldCurvature * 0.13 + this.field.semanticCoherence * 0.20
+    this.field.topicPressure = this._round4(m.pressure)
+    this.field.persistence   = this._round4(this._clamp01(this.field.persistence * 0.92 + this.field.continuity * 0.08))
+    this.field.emergence     = this._round4(this._clamp01(
+      m.residual * 0.25 + m.entropy * 0.20 + m.attractorStr * 0.30 + this.field.noveltyPressure * 0.25
     ))
+  }
 
-    this.field.topicPressure = this.round4(m.pressure)
+  _updateLocalization() {
+    let maxP = 0, sumP = 0
+    for (const ring of this.rings)
+      for (const c of ring) { sumP += c.p; if (c.p > maxP) maxP = c.p }
 
-    if (this.state.phase !== 'drift' && this.state.phase !== 'turbulent')
-      this.field.lastStablePhase = this.state.phase
+    this.field.localization = this._round4(sumP > 0 ? maxP / sumP : 0)
+    this.field.signalType   = this.field.localization > 0.012 ? 'signal' : 'noise'
+  }
 
-    this.field.persistence = this.round4(this.clamp01(
-      this.field.persistence * 0.92 + this.field.continuity * 0.08
-    ))
+  // ═══════════════════════════════════════════════════════
+  //  13. الحالة النهائية — Snapshot نظيف
+  // ═══════════════════════════════════════════════════════
 
-    this.field.emergence = this.round4(this.clamp01(
-      m.residualMass * 0.22 + m.entropy * 0.20 + m.attractorStrength * 0.28 +
-      m.fieldCurvature * 0.12 + this.field.noveltyPressure * 0.18
-    ))
+  _snapshot(perturb, feedback) {
+    const m = this._metrics()
 
-    this.field.phaseHistory.push({ t: this.state.t, phase: this.state.phase })
-    if (this.field.phaseHistory.length > 64) this.field.phaseHistory.shift()
+    return {
+      version : 'CELF-V6',
+      t       : this.state.t,
+      phase   : this.state.phase,
 
-    this.field.attractorTrace.push({
-      t: this.state.t,
-      attractors: this.state.attractors.map(a => ({
-        r: a.r, i: a.i,
-        strength:            this.round4(a.strength),
-        semanticWeight:      this.round4(a.semanticWeight      ?? 0),
-        credibility:         this.round4(a.credibility         ?? 1.0),
-        emergentCredibility: this.round4(a.emergentCredibility ?? 1.0)
-      }))
+      // الحقل
+      field: {
+        signature        : this._round4(this.field.signature),
+        coherence        : this.field.coherence,
+        continuity       : this.field.continuity,
+        drift            : this.field.drift,
+        momentum         : this.field.momentum,
+        resonance        : this.field.resonance,
+        persistence      : this.field.persistence,
+        emergence        : this.field.emergence,
+        topicPressure    : this.field.topicPressure,
+        semanticGrounding: this.field.semanticGrounding,
+        semanticCoherence: this.field.semanticCoherence,
+        intentPressure   : this.field.intentPressure,
+        executionReadiness: this.field.executionReadiness,
+        recallPotential  : this.field.recallPotential,
+        noveltyPressure  : this.field.noveltyPressure,
+        localization     : this.field.localization,
+        signalType       : this.field.signalType,
+        avgCredibility   : this.field.avgCredibility,
+        predictionError  : this.field.predictionError
+      },
+
+      // التعلم — مرئي للخارج
+      learning: {
+        predictionError  : feedback.magnitude,
+        predictionQuality: feedback.quality ?? 1,
+        theta_vault      : this._round4(this.theta_vault),
+        theta_attractor  : this._round4(this.theta_attractor),
+        learnCount       : this.state.learnCount,
+        avgError         : this.state.errorHistory.length
+          ? this._round4(this.state.errorHistory.reduce((s, v) => s + v, 0) / this.state.errorHistory.length)
+          : 0,
+        improving        : this._isImproving(),
+        // مساهمة الكبسولة في التنبؤ — 0 تعني لا كبسولة، 1 تعني كبسولة كاملة
+        capsuleAlpha     : this._round4(this._lastCapsuleAlpha ?? 0)
+      },
+
+      // الإشارة
+      input: {
+        intensity: this._round4(perturb.intensity),
+        semantic : perturb.semantic,
+        words    : perturb.words
+      },
+
+      // الجاذبات
+      attractors: this.state.attractors.slice(0, 6).map(a => ({
+        r        : a.r,
+        i        : a.i,
+        strength : this._round4(a.strength),
+        stability: this._round4(a.stability),
+        credibility: this._round4(a.emergentCredibility ?? 1)
+      })),
+
+      // الذاكرة
+      vault: {
+        size  : this.vault.size,
+        theta_vault: this._round4(this.theta_vault)
+      },
+
+      // المقاييس
+      metrics: m,
+
+      // التوجيه
+      control: this._control()
+    }
+  }
+
+  _commit(snap) {
+    this.state.history.push({
+      t        : snap.t,
+      phase    : snap.phase,
+      drift    : snap.field.drift,
+      coherence: snap.field.coherence,
+      error    : snap.learning.predictionError
     })
-
-    if (this.field.attractorTrace.length > 64) this.field.attractorTrace.shift()
+    if (this.state.history.length > this.historyLimit)
+      this.state.history.shift()
+    this.state.t++
   }
 
-  updateSemanticField(perturbation) {
-    const current    = perturbation.semantic
-    const last       = this.field.semanticMemory.at(-1)
-    const similarity = last ? this.cosineSimilarity(current.vector, last.vector) : 0
-    const novelty    = this.clamp01(1 - similarity)
+  // ═══════════════════════════════════════════════════════
+  //  المقاييس — تُحسب مرة واحدة فقط per step
+  // ═══════════════════════════════════════════════════════
 
-    const intentPressure = this.clamp01(
-      current.intent.ask * 0.15 + current.intent.execute * 0.22 +
-      current.intent.diagnose * 0.22 + current.intent.reason * 0.18 +
-      current.intent.code * 0.15 + current.intent.data * 0.08
-    )
-
-    const grounding = this.clamp01(
-      current.lexicalDensity * 0.25 + current.lengthScore * 0.12 +
-      current.intent.code * 0.15 + current.intent.data * 0.15 +
-      current.intent.reason * 0.15 + current.intent.execute * 0.10 +
-      current.intent.diagnose * 0.08
-    )
-
-    this.field.semanticGrounding    = this.round4(this.clamp01(this.field.semanticGrounding * 0.86 + grounding * 0.14))
-    this.field.semanticCoherence    = this.round4(this.clamp01(this.field.semanticCoherence * 0.82 + similarity * 0.18))
-    this.field.intentPressure       = this.round4(this.clamp01(this.field.intentPressure * 0.78 + intentPressure * 0.22))
-    this.field.executionReadiness   = this.round4(this.clamp01(
-      current.intent.execute * 0.35 + current.intent.code * 0.25 +
-      current.intent.data * 0.15 + this.field.coherence * 0.15 + (1 - this.field.drift) * 0.10
-    ))
-    this.field.noveltyPressure      = this.round4(this.clamp01(this.field.noveltyPressure * 0.80 + novelty * 0.20))
-    this.field.recallPotential      = this.round4(this.clamp01(
-      similarity * 0.35 + this.field.resonance * 0.25 +
-      this.field.persistence * 0.20 + this.field.continuity * 0.20
-    ))
-    this.field.routingPressure      = this.round4(this.clamp01(
-      this.field.intentPressure * 0.30 + this.field.noveltyPressure * 0.20 +
-      this.field.recallPotential * 0.30 + this.field.topicPressure * 0.20
-    ))
-    this.field.compressionPressure  = this.round4(this.clamp01(
-      (1 - this.field.noveltyPressure) * 0.30 + this.field.coherence * 0.25 +
-      this.field.continuity * 0.25 + this.field.persistence * 0.20
-    ))
-
-    this.field.semanticMemory.push({
-      t:           this.state.t,
-      theta:       this.round4(this.state.lastTheta),
-      signature:   this.round4(this.state.signature),
-      vector:      current.vector.slice(),
-      intent:      { ...current.intent },
-      grounding:   this.field.semanticGrounding,
-      coherence:   this.field.semanticCoherence,
-      novelty:     this.field.noveltyPressure,
-      phase:       this.state.phase,
-      signalType:  this.field.signalType,
-      sourceWeight: perturbation.sourceWeight ?? 1.0
-    })
-
-    while (this.field.semanticMemory.length > this.semanticMemoryLimit) {
-      const old = this.field.semanticMemory.shift()
-      this.field.archivedContinuity.push({
-        t: old.t, signature: old.signature, grounding: old.grounding,
-        coherence: old.coherence, phase: old.phase, signalType: old.signalType
-      })
-    }
-
-    while (this.field.archivedContinuity.length > this.archiveLimit)
-      this.field.archivedContinuity.shift()
-  }
-
-  updateSignalMetrics() {
-    const ps = []
-    for (const ring of this.rings) for (const c of ring) ps.push(c.p)
-    const maxP = Math.max(...ps)
-    const sumP = ps.reduce((a, b) => a + b, 0)
-    const L    = sumP > 0 ? maxP / sumP : 0
-    this.field.localization    = this.round4(L)
-    this.field.coherenceRadius = this.computeCoherenceRadius()
-    this.field.signalType      = L > this.localizationThreshold ? 'signal' : 'noise'
-  }
-
-  computeCoherenceRadius() {
-    const top = this.state.attractors[0]
-    if (!top) return 0
-    let radius = 0
-    for (let i = 1; i < Math.floor(this.resolution / 2); i++) {
-      const l = this.rings[top.r][this.wrapIndex(top.i - i)].p
-      const r = this.rings[top.r][this.wrapIndex(top.i + i)].p
-      if (l < this.activationThreshold && r < this.activationThreshold) break
-      radius = i
-    }
-    return radius
-  }
-
-  #vectorToManifoldCoords(vector, D) {
-    const cx = Math.abs(
-      Math.floor(vector.reduce((a, b, i) => a + b * (i + 1), 0) * (D - 1))
-    ) % D
-    const cy = Math.abs(
-      Math.floor(vector.reduce((a, b, i) => a + b * (D - i), 0) * (D - 1))
-    ) % D
-    return { cx, cy }
-  }
-
-  updateManifold(perturbation) {
-    const vec    = perturbation.semantic.vector
-    const D      = this.manifoldDimensions
-    const sw     = perturbation.sourceWeight ?? 1.0
-    const { cx, cy } = this.#vectorToManifoldCoords(vec, D)
-    const radius = Math.max(1, Math.floor(2 + this.field.semanticCoherence * 4))
-
-    for (let dx = -radius; dx <= radius; dx++) {
-      for (let dy = -radius; dy <= radius; dy++) {
-        const nx   = ((cx + dx) % D + D) % D
-        const ny   = ((cy + dy) % D + D) % D
-        const dist = Math.sqrt(dx * dx + dy * dy)
-        const prox = Math.max(0, 1 - dist / (radius + 1))
-        const idx  = nx * D + ny
-
-        this.field.manifold[idx]    = this.clamp01(this.field.manifold[idx] * 0.97 + prox * sw * 0.03)
-        this.field.manifoldAge[idx] = this.clamp01((this.field.manifoldAge[idx] ?? 0) * 0.995 + prox * 0.005)
-      }
-    }
-
-    const lastMem = this.field.semanticMemory.at(-2)
-    if (lastMem?.vector) {
-      const { cx: bx, cy: by } = this.#vectorToManifoldCoords(lastMem.vector, D)
-      for (let s = 1; s <= 4; s++) {
-        const lx   = Math.round(bx + (cx - bx) * s / 4)
-        const ly   = Math.round(by + (cy - by) * s / 4)
-        const lidx = ((lx % D + D) % D) * D + ((ly % D + D) % D)
-        this.field.manifold[lidx] = this.clamp01((this.field.manifold[lidx] ?? 0) + 0.008 * sw)
-      }
-    }
-  }
-
-  updateEmergentCredibility(perturbation) {
-    const currentVec = perturbation.semantic.vector
-    const prevVec    = this.state.lastPerturbationVector
-    const sw         = perturbation.sourceWeight ?? 1.0
-
-    if (!prevVec.length || !this.state.attractors.length) return
-
-    for (const a of this.state.attractors) {
-      if (!a.semanticVector?.length) continue
-
-      const alignedWithCurrent = this.cosineSimilarity(currentVec, a.semanticVector)
-      const alignedWithPrev    = this.cosineSimilarity(prevVec,    a.semanticVector)
-      const predictionAccuracy = this.clamp01(1 - Math.abs(alignedWithCurrent - alignedWithPrev))
-
-      const wasCorrect = predictionAccuracy > 0.65
-      const reward = wasCorrect
-        ? this.credibilityLearningRate * sw
-        : -this.credibilityLearningRate * 1.2 * (1 - sw + 0.1)
-
-      a.emergentCredibility = this.clamp01((a.emergentCredibility ?? 1.0) + reward)
-      a.predictionScore     = this.round4(predictionAccuracy)
-      a.predictionCount     = (a.predictionCount ?? 0) + 1
-
-      const cell = this.rings[a.r]?.[a.i]
-      if (cell) {
-        cell.credibility = this.clamp01(
-          cell.credibility * 0.92 + (a.emergentCredibility ?? 1.0) * 0.08
-        )
-      }
-    }
-
-    const credibilities = this.state.attractors.map(a => a.emergentCredibility ?? 1.0)
-    this.field.avgFieldCredibility = credibilities.length
-      ? this.round4(this.average(credibilities))
-      : 1.0
-
-    this.state.attractorCredibilityLog.push({ t: this.state.t, avg: this.field.avgFieldCredibility })
-    if (this.state.attractorCredibilityLog.length > 64)
-      this.state.attractorCredibilityLog.shift()
-  }
-
-  updateRecursiveCognition() {
-    const attractors = this.state.attractors
-    if (attractors.length < 2) return
-
-    for (let x = 0; x < attractors.length; x++) {
-      for (let y = x + 1; y < attractors.length; y++) {
-        const a = attractors[x]
-        const b = attractors[y]
-        if (!a.semanticVector?.length || !b.semanticVector?.length) continue
-
-        const semantic = this.cosineSimilarity(a.semanticVector, b.semanticVector)
-
-        if (semantic < this.contradictionThreshold) {
-          const stronger = (a.emergentCredibility ?? 1) >= (b.emergentCredibility ?? 1) ? a : b
-          const weaker   = stronger === a ? b : a
-          weaker.strength  = this.clamp01(weaker.strength  * (1 - 0.12 * (stronger.emergentCredibility ?? 1)))
-          weaker.stability = this.clamp01((weaker.stability ?? 0) * (1 - 0.10 * (stronger.emergentCredibility ?? 1)))
-        }
-
-        if (semantic > 0.75) {
-          const boost = 0.06 * Math.min(a.emergentCredibility ?? 1, b.emergentCredibility ?? 1)
-          a.strength = this.clamp01(a.strength + boost)
-          b.strength = this.clamp01(b.strength + boost)
-        }
-      }
-    }
-
-    const metaCandidates = []
-    for (let x = 0; x < attractors.length; x++) {
-      for (let y = x + 1; y < attractors.length; y++) {
-        const a = attractors[x]
-        const b = attractors[y]
-        if (!a.semanticVector?.length || !b.semanticVector?.length) continue
-
-        const sim       = this.cosineSimilarity(a.semanticVector, b.semanticVector)
-        const jointStr  = (a.strength + b.strength) / 2
-        const jointCred = ((a.emergentCredibility ?? 1) + (b.emergentCredibility ?? 1)) / 2
-
-        if (sim > 0.70 && jointStr > this.metaAttractorThreshold && jointCred > 0.55) {
-          metaCandidates.push({
-            sourceA: x, sourceB: y,
-            strength:            this.round4(jointStr),
-            emergentCredibility: this.round4(jointCred),
-            semanticVector:      a.semanticVector.map((v, i) => (v + (b.semanticVector[i] ?? 0)) / 2),
-            theta:               (a.theta + b.theta) / 2,
-            similarity:          this.round4(sim)
-          })
-        }
-      }
-    }
-
-    this.field.metaAttractors = metaCandidates.slice(0, 4)
-  }
-
-  metrics() {
+  _metrics() {
     if (this._metricsCache !== null && this._metricsCacheTime === this.state.t)
       return this._metricsCache
 
-    const ps = [], pressures = [], residuals = [], densities = [], semanticTraces = [], intentTraces = []
-
+    const ps = [], prs = [], res = [], sem = []
     for (const ring of this.rings)
       for (const c of ring) {
-        ps.push(c.p); pressures.push(c.pressure); residuals.push(c.residual)
-        densities.push(c.constraintDensity ?? 0)
-        semanticTraces.push(c.semanticTrace ?? 0)
-        intentTraces.push(c.intentTrace     ?? 0)
+        ps.push(c.p); prs.push(c.pressure)
+        res.push(c.residual ?? c.memory); sem.push(c.semanticTrace)
       }
 
-    const mean              = this.average(ps)
-    const entropy           = this.normalizedEntropy(ps)
-    const pressure          = this.average(pressures)
-    const residualMass      = this.average(residuals)
-    const aliveRatio        = ps.filter(v => v > this.activationThreshold).length / ps.length
-    const fieldCurvature    = this.average(densities)
-    const semanticMass      = this.average(semanticTraces)
-    const intentMass        = this.average(intentTraces)
-    const attractorStrength = this.state.attractors.length
-      ? this.average(this.state.attractors.map(a => a.stability))
-      : 0
-
-    const prev  = this.state.history.at(-1)
-    const drift = prev
-      ? this.clamp01(
-          Math.abs((prev.metrics?.mean         ?? prev.mean         ?? mean)    - mean) +
-          Math.abs((prev.metrics?.entropy      ?? prev.entropy      ?? entropy) - entropy) +
-          Math.abs((prev.metrics?.semanticMass ?? prev.semanticMass ?? 0)       - semanticMass)
-        )
+    const mean    = ps.reduce((s, v) => s + v, 0) / ps.length
+    const entropy = this._entropy(ps)
+    const prev    = this.state.history.at(-1)
+    const drift   = prev
+      ? this._clamp01(Math.abs((prev.coherence ?? 0) - this.field.coherence) + Math.abs(prev.drift ?? 0))
       : 0
 
     const result = {
-      mean: this.round4(mean), entropy: this.round4(entropy),
-      pressure: this.round4(pressure), residualMass: this.round4(residualMass),
-      aliveRatio: this.round4(aliveRatio), attractorStrength: this.round4(attractorStrength),
-      drift: this.round4(drift), fieldCurvature: this.round4(fieldCurvature),
-      semanticMass: this.round4(semanticMass), intentMass: this.round4(intentMass),
-      totalMass: this.round4(this.totalMass()),
-      massError: this.round4(Math.abs(this.totalMass() - this.massTarget))
+      mean       : this._round4(mean),
+      entropy    : this._round4(entropy),
+      pressure   : this._round4(ps.map((_, i) => prs[i]).reduce((s, v) => s + v, 0) / prs.length),
+      residual   : this._round4(res.reduce((s, v) => s + v, 0) / res.length),
+      aliveRatio : this._round4(ps.filter(v => v > this.activationThreshold).length / ps.length),
+      attractorStr: this._round4(this.state.attractors.length
+        ? this.state.attractors.reduce((s, a) => s + (a.stability ?? 0), 0) / this.state.attractors.length
+        : 0),
+      drift      : this._round4(drift),
+      semanticMass: this._round4(sem.reduce((s, v) => s + v, 0) / sem.length),
+      totalMass  : this._round4(this._totalMass())
     }
 
     this._metricsCache     = result
@@ -1284,713 +1004,124 @@ export class CELF_Engine_AI_V5 {
     return result
   }
 
-  snapshot(perturbation, delta, contained) {
-    return {
-      version: 'CELF-V5',
-      mode:    'semantic cyclic possibility curvature',
-      t:       this.state.t,
-      phase:   this.state.phase,
-      perturbation: {
-        length: perturbation.length, numeric: perturbation.numeric,
-        rupture: perturbation.rupture, spread: perturbation.spread,
-        sourceWeight: perturbation.sourceWeight ?? 1.0,
-        semantic: {
-          words: perturbation.semantic.words, unique: perturbation.semantic.unique,
-          lexicalDensity: perturbation.semantic.lexicalDensity,
-          code: perturbation.semantic.code, question: perturbation.semantic.question,
-          error: perturbation.semantic.error, command: perturbation.semantic.command,
-          reasoning: perturbation.semantic.reasoning, emotional: perturbation.semantic.emotional,
-          data: perturbation.semantic.data, intent: perturbation.semantic.intent
-        }
-      },
-      delta: {
-        theta: this.round4(delta.theta), index: delta.index,
-        deltaTheta: this.round4(delta.deltaTheta), intensity: this.round4(delta.intensity),
-        semanticWeight: this.round4(delta.semanticWeight),
-        vector: delta.vector.map(v => this.round4(v))
-      },
-      contained: {
-        signature: this.round4(contained.signature), cycleCount: contained.cycleCount
-      },
-      field:    this.getFieldIdentity(),
-      semantic: this.getSemanticState(),
-      control:  this.getControlGuidance(),
-      metrics:  this.metrics(),
-      signal: {
-        localization:    this.field.localization,
-        coherenceRadius: this.field.coherenceRadius,
-        signalType:      this.field.signalType,
-        sourceWeight:    this.field.lastSourceWeight
-      },
-      cognition: {
-        avgFieldCredibility: this.field.avgFieldCredibility,
-        metaAttractors:      this.field.metaAttractors,
-        credibilityLog:      this.state.attractorCredibilityLog.slice(-8)
-      },
-      vault: {
-        capsuleCount:   this.hexVault.size,
-        activeCapsules: this.getActiveCapsules().length
-      },
-      attractors: this.state.attractors.map(a => ({
-        r: a.r, i: a.i,
-        theta: this.round4(a.theta), orbitTheta: this.round4(a.orbitTheta),
-        strength: this.round4(a.strength), stability: this.round4(a.stability),
-        constraintDensity:   this.round4(a.constraintDensity   ?? 0),
-        semanticWeight:      this.round4(a.semanticWeight      ?? 0),
-        intentWeight:        this.round4(a.intentWeight        ?? 0),
-        credibility:         this.round4(a.credibility         ?? 1.0),
-        emergentCredibility: this.round4(a.emergentCredibility ?? 1.0),
-        predictionScore:     this.round4(a.predictionScore     ?? 0),
-        predictionCount:     a.predictionCount ?? 0
-      }))
-    }
-  }
-
-  commit(snapshot) {
-    const compressed = {
-      t:              snapshot.t,
-      phase:          snapshot.phase,
-      signature:      snapshot.contained?.signature     ?? 0,
-      drift:          snapshot.field?.drift             ?? 0,
-      coherence:      snapshot.field?.coherence         ?? 0,
-      continuity:     snapshot.field?.continuity        ?? 0,
-      novelty:        snapshot.field?.noveltyPressure   ?? 0,
-      semanticMass:   snapshot.metrics?.semanticMass    ?? 0,
-      grounding:      snapshot.field?.semanticGrounding ?? 0,
-      attractorCount: snapshot.attractors?.length       ?? 0,
-      signalType:     snapshot.signal?.signalType       ?? 'noise',
-      credibility:    snapshot.cognition?.avgFieldCredibility ?? 1.0
-    }
-
-    this.state.history.push(compressed)
-
-    while (this.state.history.length > this.historyLimit) {
-      const old = this.state.history.shift()
-      this.state.archive.push({
-        archived: true, t: old.t, phase: old.phase,
-        signature: old.signature, drift: old.drift, coherence: old.coherence,
-        semanticMass: old.semanticMass, grounding: old.grounding,
-        signalType: old.signalType, credibility: old.credibility
-      })
-    }
-
-    while (this.state.archive.length > this.archiveLimit)
-      this.state.archive.shift()
-
-    this.state.t++
-  }
-
-  routeContext(query = null, limit = this.routingLimit) {
-    const signal =
-      query === null || query === undefined ? '' :
-      typeof query === 'string' ? query : JSON.stringify(query)
-
-    const semantic = signal
-      ? this.extractSemantic(query, signal)
-      : this.field.semanticMemory.at(-1)
-
-    if (!semantic) return []
-
-    const vector            = semantic.vector ?? new Float32Array(0)
-    const currentTheta      = this.state.lastTheta  ?? 0
-    const currentPhase      = this.state.phase       ?? 'warmup'
-    const currentAttractors = this.state.attractors  ?? []
-
-    const vaultResult = signal ? this.retrieveCapsule(signal, vector) : null
-
-    const items = this.field.semanticMemory
-      .map(item => {
-        const semanticSim        = this.cosineSimilarity(vector, item.vector ?? new Float32Array(0))
-        const thetaDist          = Math.abs(((item.theta - currentTheta + this.cycle) % this.cycle))
-        const circularDist       = Math.min(thetaDist, this.cycle - thetaDist)
-        const attractorProx      = this.clamp01(1 - circularDist / (this.cycle * 0.5))
-        const topAttractor       = currentAttractors[0]
-        const hysteresisAffinity = topAttractor
-          ? this.clamp01(
-              1 - Math.abs(
-                ((item.theta - (topAttractor.theta ?? 0) + this.cycle) % this.cycle)
-              ) / (this.cycle * 0.3)
-            )
-          : 0
-        const continuity = this.clamp01(
-          item.coherence * 0.5 + item.grounding * 0.3 + (1 - (item.novelty ?? 0)) * 0.2
-        )
-        const phaseMatch = item.phase === currentPhase ? 0.15 : 0
-        const score = this.round4(
-          semanticSim        * 0.35 + attractorProx      * 0.25 +
-          hysteresisAffinity * 0.20 + continuity         * 0.10 +
-          phaseMatch + item.coherence * 0.05 + item.grounding * 0.05
-        )
-
-        return {
-          t: item.t, phase: item.phase, theta: item.theta,
-          signature: item.signature, signalType: item.signalType ?? 'noise',
-          score,
-          _semanticSim:   this.round4(semanticSim),
-          _attractorProx: this.round4(attractorProx),
-          _hysteresisAff: this.round4(hysteresisAffinity),
-          _continuity:    this.round4(continuity)
-        }
-      })
-      .sort((a, b) => b.score - a.score)
-      .slice(0, Math.max(1, limit))
-
-    if (vaultResult) {
-      return {
-        items,
-        vaultHit: {
-          compressed:     vaultResult.capsule.source.compressed,
-          score:          this.round4(vaultResult.score),
-          phiOrbit:       this.round4(vaultResult.capsule.phiOrbit),
-          projectedOrbit: this.round4(vaultResult.capsule.projectedOrbit ?? vaultResult.capsule.phiOrbit),
-          reinforcement:  vaultResult.capsule.reinforcement ?? 0
-        }
-      }
-    }
-
-    return items
-  }
-
-  getControlGuidance() {
-    const mode =
-      this.state.phase === 'turbulent' ? 'ground'   :
-      this.state.phase === 'drift'     ? 'clarify'  :
-      this.state.phase === 'emergent'  ? 'explore'  :
-      this.state.phase === 'locked'    ? 'compress' :
-      this.state.phase === 'noise'     ? 'filter'   :
+  // توجيه الخارج
+  _control() {
+    const phase = this.state.phase
+    const mode  =
+      phase === 'turbulent'  ? 'ground'   :
+      phase === 'drift'      ? 'clarify'  :
+      phase === 'emergent'   ? 'explore'  :
+      phase === 'locked'     ? 'compress' :
+      phase === 'noise'      ? 'filter'   :
       'balance'
 
-    const depth =
-      this.field.routingPressure     > 0.72 ? 'deep'  :
-      this.field.compressionPressure > 0.72 ? 'quick' :
-      'balanced'
-
     return {
-      mode, depth,
-      contextUse:          this.round4(this.clamp01(this.field.routingPressure)),
-      compression:         this.round4(this.clamp01(this.field.compressionPressure)),
-      recall:              this.round4(this.clamp01(this.field.recallPotential)),
-      grounding:           this.round4(this.clamp01(this.field.semanticGrounding)),
-      executionReadiness:  this.round4(this.clamp01(this.field.executionReadiness)),
-      signalType:          this.field.signalType,
-      localization:        this.field.localization,
-      avgFieldCredibility: this.field.avgFieldCredibility
+      mode,
+      executionReadiness : this.field.executionReadiness,
+      recallPotential    : this.field.recallPotential,
+      semanticGrounding  : this.field.semanticGrounding,
+      signalType         : this.field.signalType,
+      predictionError    : this.field.predictionError,
+      avgCredibility     : this.field.avgCredibility
     }
   }
 
-  getSemanticState() {
-    return {
-      semanticGrounding:   this.field.semanticGrounding,
-      semanticCoherence:   this.field.semanticCoherence,
-      intentPressure:      this.field.intentPressure,
-      executionReadiness:  this.field.executionReadiness,
-      recallPotential:     this.field.recallPotential,
-      routingPressure:     this.field.routingPressure,
-      compressionPressure: this.field.compressionPressure,
-      noveltyPressure:     this.field.noveltyPressure,
-      memorySize:          this.field.semanticMemory.length,
-      vaultSize:           this.hexVault.size,
-      routedContext:       this.routeContext(null, Math.min(3, this.routingLimit))
-    }
+  // هل المحرك يتحسن؟ — يقارن نصف الأخطاء الأحدث بالأقدم
+  _isImproving() {
+    const h = this.state.errorHistory
+    if (h.length < 8) return null
+    const half   = Math.floor(h.length / 2)
+    const older  = h.slice(0, half).reduce((s, v) => s + v, 0) / half
+    const newer  = h.slice(half).reduce((s, v) => s + v, 0) / (h.length - half)
+    return newer < older
   }
 
-  getFieldIdentity() {
-    return {
-      signature:           this.round4(this.field.signature),
-      continuity:          this.field.continuity,
-      coherence:           this.field.coherence,
-      drift:               this.field.drift,
-      momentum:            this.field.momentum,
-      resonance:           this.field.resonance,
-      persistence:         this.field.persistence,
-      emergence:           this.field.emergence,
-      topicPressure:       this.field.topicPressure,
-      semanticGrounding:   this.field.semanticGrounding,
-      semanticCoherence:   this.field.semanticCoherence,
-      intentPressure:      this.field.intentPressure,
-      executionReadiness:  this.field.executionReadiness,
-      recallPotential:     this.field.recallPotential,
-      routingPressure:     this.field.routingPressure,
-      compressionPressure: this.field.compressionPressure,
-      noveltyPressure:     this.field.noveltyPressure,
-      lastStablePhase:     this.field.lastStablePhase,
-      phaseHistory:        [...this.field.phaseHistory],
-      attractorTrace:      [...this.field.attractorTrace],
-      localization:        this.field.localization,
-      coherenceRadius:     this.field.coherenceRadius,
-      signalType:          this.field.signalType,
-      lastSourceWeight:    this.field.lastSourceWeight,
-      avgFieldCredibility: this.field.avgFieldCredibility,
-      metaAttractorCount:  this.field.metaAttractors?.length ?? 0,
-      vaultCapsules:       this.hexVault.size
-    }
-  }
+  // ═══════════════════════════════════════════════════════
+  //  واجهة عامة
+  // ═══════════════════════════════════════════════════════
 
-  getRings() {
-    return this.rings.map(ring =>
-      ring.map(c => ({
-        p:                 this.round4(c.p),
-        residual:          this.round4(c.residual),
-        pressure:          this.round4(c.pressure),
-        memory:            this.round4(c.memory),
-        constraintDensity: this.round4(c.constraintDensity ?? 0),
-        semanticTrace:     this.round4(c.semanticTrace     ?? 0),
-        intentTrace:       this.round4(c.intentTrace       ?? 0),
-        credibility:       this.round4(c.credibility       ?? 1.0),
-        active:            c.active
-      }))
-    )
-  }
-
-  getSummary() {
-    return {
-      version:        'CELF-V5',
-      phase:          this.state.phase,
-      t:              this.state.t,
-      cycle:          this.cycle,
-      resolution:     this.resolution,
-      ringCount:      this.ringCount,
-      signature:      this.round4(this.state.signature),
-      cycleCount:     this.state.cycleCount,
-      field:          this.getFieldIdentity(),
-      semantic:       this.getSemanticState(),
-      control:        this.getControlGuidance(),
-      metrics:        this.metrics(),
-      attractorCount: this.state.attractors.length,
-      archiveSize:    this.state.archive.length,
-      vaultSize:      this.hexVault.size,
-      vaultLimit:     this.vaultLimit,
-      vaultFillRatio: this.round4(this.hexVault.size / this.vaultLimit),
-      signal: {
-        localization:     this.field.localization,
-        coherenceRadius:  this.field.coherenceRadius,
-        signalType:       this.field.signalType,
-        lastSourceWeight: this.field.lastSourceWeight
-      },
-      cognition: {
-        avgFieldCredibility: this.field.avgFieldCredibility,
-        metaAttractorCount:  this.field.metaAttractors?.length ?? 0
-      }
-    }
-  }
-
-  learnPattern(sequence = []) {
+  // تغذية تسلسل للتعلم
+  learn(sequence = []) {
     for (const item of sequence) this.process(item)
     return this
   }
 
-  benchmark(sequence = [], noisySequence = []) {
-    this.reset()
-    for (const x of sequence) this.process(x)
-    const clean = this.metrics(); const cleanSemantic = this.getSemanticState()
-
-    this.reset()
-    for (const x of noisySequence) this.process(x)
-    const noisy = this.metrics(); const noisySemantic = this.getSemanticState()
-
+  // ملخص الحالة
+  summary() {
+    const m = this._metrics()
     return {
-      clean, noisy, cleanSemantic, noisySemantic,
-      retainedSignal:    this.round4(1 - Math.abs(clean.entropy   - noisy.entropy)),
-      driftResistance:   this.round4(1 - noisy.drift),
-      pressureIncrease:  this.round4(noisy.pressure - clean.pressure),
-      residualRetention: noisy.residualMass,
-      curvatureShift:    this.round4(noisy.fieldCurvature - clean.fieldCurvature),
-      semanticShift:     this.round4(noisy.semanticMass   - clean.semanticMass),
-      localizationShift: this.round4(noisy.localization   - clean.localization),
-      signalType:        noisy.signalType,
-      credibilityShift:  this.round4((noisy.avgFieldCredibility ?? 1) - (clean.avgFieldCredibility ?? 1))
+      version       : 'CELF-V6',
+      t             : this.state.t,
+      phase         : this.state.phase,
+      attractors    : this.state.attractors.length,
+      vault         : this.vault.size,
+      metrics       : m,
+      field         : { coherence: this.field.coherence, drift: this.field.drift },
+      learning: {
+        learnCount  : this.state.learnCount,
+        avgError    : this.state.errorHistory.length
+          ? this._round4(this.state.errorHistory.reduce((s, v) => s + v, 0) / this.state.errorHistory.length)
+          : 0,
+        improving   : this._isImproving(),
+        theta_vault : this._round4(this.theta_vault)
+      }
     }
   }
 
-  totalMass() {
+  reset() {
+    for (const ring of this.rings)
+      for (const cell of ring) {
+        cell.p = 1 / this.resolution; cell.residual = this.epsilon
+        cell.pressure = 0; cell.memory = 0; cell.hysteresis = 0
+        cell.constraintDensity = 0; cell.semanticTrace = 0
+        cell.intentTrace = 0; cell.credibility = 1.0
+      }
+    this.vault.clear()
+    this.state.t = 0; this.state.phase = 'warmup'
+    this.state.attractors = []; this.state.history = []
+    this.state.errorHistory = []; this.state.learnCount = 0
+    this.field.semanticMemory = []
+    this._hasPrediction = false
+    this._metricsCache = null
+    return this
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  أدوات رياضية داخلية
+  // ═══════════════════════════════════════════════════════
+
+  _entropy(values) {
+    const sum = values.reduce((s, v) => s + v, 0)
+    if (sum <= 0) return 0
+    let h = 0
+    for (const v of values) { const p = v / sum; if (p > 0) h -= p * Math.log(p) }
+    return this._clamp01(h / Math.log(values.length))
+  }
+
+  _cosine(a, b) {
+    const n = Math.min(a.length, b.length)
+    if (!n) return 0
+    let dot = 0, na = 0, nb = 0
+    for (let i = 0; i < n; i++) {
+      dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]
+    }
+    return (na > 0 && nb > 0) ? this._clamp01(dot / (Math.sqrt(na) * Math.sqrt(nb))) : 0
+  }
+
+  _totalMass() {
     let s = 0
     for (const ring of this.rings) for (const c of ring) s += c.p
     return s
   }
 
-  normalizedEntropy(values) {
-    const sum = values.reduce((s, v) => s + v, 0)
-    if (sum <= 0) return 0
-    let h = 0
-    for (const v of values) { const p = v / sum; if (p > 0) h -= p * Math.log(p) }
-    return this.clamp01(h / Math.log(values.length))
-  }
-
-  average(values) {
-    if (!values.length) return 0
-    return values.reduce((s, v) => s + Number(v || 0), 0) / values.length
-  }
-
-  cosineSimilarity(a = [], b = []) {
-    const n = Math.min(a.length, b.length)
-    if (!n) return 0
-    let dot = 0, na = 0, nb = 0
-    for (let i = 0; i < n; i++) {
-      const x = Number(a[i] || 0); const y = Number(b[i] || 0)
-      dot += x * y; na += x * x; nb += y * y
-    }
-    if (na <= 0 || nb <= 0) return 0
-    return this.clamp01(dot / (Math.sqrt(na) * Math.sqrt(nb)))
-  }
-
-  containTheta(v)      { return ((Number(v) % this.cycle) + this.cycle) % this.cycle }
-  thetaToIndex(theta)  { return Math.floor((this.containTheta(theta) / this.cycle) * this.resolution) % this.resolution }
-  indexToTheta(d)      { return (d / this.resolution) * this.cycle }
-  wrapIndex(i)         { return ((i % this.resolution) + this.resolution) % this.resolution }
-  wrapRing(r)          { return ((r % this.ringCount)  + this.ringCount)  % this.ringCount  }
-  circularIndexDistance(a, b) { const d = Math.abs(a - b); return Math.min(d, this.resolution - d) }
-  signedIndexDistance(a, b)   { const f = (b - a + this.resolution) % this.resolution; return f > this.resolution / 2 ? f - this.resolution : f }
-  clamp01(v)  { const n = Number(v); if (!Number.isFinite(n)) return 0; return Math.max(0, Math.min(1, n)) }
-  clampP(v)   { const n = Number(v); if (!Number.isFinite(n)) return this.epsilon; return Math.max(this.epsilon, n) }
-  round4(v)   { return Math.round(Number(v || 0) * 10000) / 10000 }
-
-  buildFieldPrompt() {
-    const attractors    = this.state.attractors ?? []
-    const field         = this.field
-    const topAttractors = attractors.slice().sort((a, b) => b.strength - a.strength).slice(0, 3)
-
-    const zone     = this.#resolveSemanticZone(topAttractors, field)
-    const pressure = this.#resolvePressureState(field)
-
-    const continuity = this.round4(
-      field.continuity  * 0.35 +
-      field.coherence   * 0.35 +
-      field.persistence * 0.20 +
-      (1 - field.drift) * 0.10
-    )
-
-    return {
-      zone, pressure, continuity,
-      phase:          this.state.phase ?? 'warmup',
-      resonance:      this.round4(field.resonance  ?? 0),
-      coherence:      this.round4(field.coherence  ?? 0),
-      drift:          this.round4(field.drift      ?? 0),
-      attractorCount: attractors.length,
-      vaultSize:      this.hexVault.size
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════════════
-  //  COGNITIVE QUERY LAYER — داخل المحرك
-  // ═══════════════════════════════════════════════════════════════
-
-  buildCognitiveTarget(query, index = null) {
-    const userIntent = this.#extractUserIntent(query)
-
-    const fieldState = {
-      phase:              this.state.phase,
-      continuity:         this.field.continuity          ?? 0,
-      coherence:          this.field.coherence           ?? 0,
-      drift:              this.field.drift               ?? 0,
-      resonance:          this.field.resonance           ?? 0,
-      semanticGrounding:  this.field.semanticGrounding   ?? 0,
-      semanticCoherence:  this.field.semanticCoherence   ?? 0,
-      noveltyPressure:    this.field.noveltyPressure     ?? 0,
-      executionReadiness: this.field.executionReadiness  ?? 0,
-      recallPotential:    this.field.recallPotential     ?? 0,
-      routingPressure:    this.field.routingPressure     ?? 0,
-      intentPressure:     this.field.intentPressure      ?? 0,
-      avgCredibility:     this.field.avgFieldCredibility ?? 1.0,
-      vaultSize:          this.hexVault.size
-    }
-
-    const queryVec      = this.extractSemantic(query, query).vector
-    const vaultResult   = this.retrieveCapsule(query, queryVec)
-    const vaultCapsules = []
-
-    if (vaultResult) {
-      vaultCapsules.push({
-        compressed:     vaultResult.capsule.source.compressed,
-        score:          this.round4(vaultResult.score),
-        phiOrbit:       this.round4(vaultResult.capsule.phiOrbit),
-        projectedOrbit: this.round4(vaultResult.capsule.projectedOrbit ?? vaultResult.capsule.phiOrbit),
-        reinforcement:  vaultResult.capsule.reinforcement ?? 0,
-        phase:          vaultResult.capsule.phase,
-        version:        vaultResult.capsule.version ?? 1
-      })
-    }
-
-    for (const cap of (this.getActiveCapsules?.() ?? []).slice(0, 3)) {
-      if (!vaultCapsules.find(v => v.compressed === cap.source?.compressed)) {
-        vaultCapsules.push({
-          compressed:     cap.source?.compressed,
-          score:          0,
-          phiOrbit:       this.round4(cap.phiOrbit ?? 0),
-          projectedOrbit: this.round4(cap.projectedOrbit ?? cap.phiOrbit ?? 0),
-          reinforcement:  cap.reinforcement ?? 0,
-          phase:          cap.phase,
-          version:        cap.version ?? 1,
-          activeByResonance: true
-        })
-      }
-    }
-
-    let indexResult = null
-    if (index) {
-      if (typeof index.injectSemanticVectors === 'function')
-        index.injectSemanticVectors(this)
-      indexResult = index.hybridQuery(
-        queryVec,
-        userIntent.entities,
-        userIntent.depth === 'deep' ? 3 : 2,
-        8
-      )
-    }
-
-    const focus = this.#resolveCognitiveFocus(userIntent, fieldState, vaultCapsules, indexResult)
-
-    let structuralGraph = null
-    let deepContext     = null
-
-    if (index && focus.what.length > 0) {
-      const depth = focus.depth === 'deep' ? 3 : focus.depth === 'surface' ? 1 : 2
-      const g     = index.query({ names: focus.what, files: focus.files }, depth)
-      structuralGraph = {
-        nodeCount: g.totalNodes,
-        edgeCount: g.totalEdges,
-        nodes: (g.nodes ?? []).map(n => ({
-          name: n.name ?? n.symbol, type: n.type, file: n.file,
-          semanticLabel:  n.semanticLabel,
-          vaultCapsuleId: n.vaultCapsuleId
-        }))
-      }
-
-      if (typeof index.needsDeepAnalysis === 'function' &&
-          index.needsDeepAnalysis(userIntent) &&
-          focus.what.length > 0) {
-        deepContext = index.getDeepContext(focus.what, {
-          maxChars:  6000,
-          withGraph: focus.depth === 'deep'
-        })
-      }
-    }
-
-    const topAttractors = (this.state.attractors ?? [])
-      .slice()
-      .sort((a, b) => (b.stability ?? 0) - (a.stability ?? 0))
-      .slice(0, 3)
-      .map(a => ({
-        r:              a.r,
-        i:              a.i,
-        strength:       this.round4(a.strength       ?? 0),
-        stability:      this.round4(a.stability      ?? 0),
-        semanticWeight: this.round4(a.semanticWeight ?? 0),
-        credibility:    this.round4(a.emergentCredibility ?? a.credibility ?? 1)
-      }))
-
-    const cognitiveMode =
-      fieldState.executionReadiness > 0.65  ? 'technical'   :
-      fieldState.intentPressure     > 0.60  ? 'analytical'  :
-      fieldState.semanticCoherence  > 0.55  ? 'reasoning'   :
-      fieldState.noveltyPressure    > 0.65  ? 'exploratory' :
-      'general'
-
-    const dependencies = []
-    if (structuralGraph?.nodes?.length) {
-      for (const node of structuralGraph.nodes.slice(0, 6)) {
-        if (node.calls?.length) {
-          for (const callee of node.calls.slice(0, 3))
-            dependencies.push({ from: node.name, to: callee, type: 'calls', weight: 1 })
-        }
-      }
-    }
-
-    const hintParts = [
-      `mode: ${cognitiveMode}`,
-      `phase: ${fieldState.phase}`,
-      `target: ${focus.mode}`,
-      `depth: ${focus.depth}`,
-      `continuity: ${fieldState.continuity}`,
-      `coherence: ${fieldState.coherence}`
-    ]
-
-    if (focus.winner === 'user')  hintParts.push('focus: user_driven — new topic')
-    if (focus.winner === 'celf')  hintParts.push('focus: context_driven — use session memory')
-
-    if (vaultCapsules.length)
-      hintParts.push(`vault: ${vaultCapsules.map(v => v.compressed).filter(Boolean).join(' | ')}`)
-
-    if (dependencies.length)
-      hintParts.push(`dependencies: ${dependencies.slice(0, 5).map(d => `${d.from}→${d.to}`).join(', ')}`)
-
-    if (deepContext?.blocks?.length) {
-      const codeSection = deepContext.blocks.map(b => [
-        `// ${b.symbol} [${b.type}] — ${b.file}:${b.startLine}-${b.endLine}`,
-        `// complexity: ${b.complexity} | calls: ${(b.calls ?? []).join(', ')}`,
-        b.source
-      ].join('\n')).join('\n\n')
-      hintParts.push(`\n[source code]\n${codeSection}`)
-    }
-
-    return {
-      focus,
-      cognitiveMode,
-      userIntent,
-      fieldState,
-      vaultCapsules,
-      dependencies,
-      structuralGraph,
-      deepContext,
-      topAttractors,
-      systemHint: hintParts.filter(Boolean).join('\n'),
-      _meta: {
-        t:              this.state.t,
-        vaultSize:      this.hexVault.size,
-        indexUsed:      index !== null,
-        conflictWinner: focus.winner,
-        deepAnalysis:   deepContext !== null
-      }
-    }
-  }
-
-  #extractUserIntent(query) {
-    const text = String(query ?? '').toLowerCase()
-
-    const mode =
-      /اشرح|explain|كيف يعمل|how does|what is|ما هو|ما هي/i.test(text)  ? 'explain'    :
-      /اكتب|انزل|أنشئ|build|create|generate|implement|نفذ/i.test(text)   ? 'implement'  :
-      /اصلح|fix|debug|خطأ|error|مشكلة|لا يعمل/i.test(text)              ? 'debug'      :
-      /صمم|design|architecture|هندسة|كيف نبني/i.test(text)               ? 'design'     :
-      /تحقق|check|review|راجع|هل صحيح|is this/i.test(text)              ? 'review'     :
-      /قارن|compare|الفرق بين|difference/i.test(text)                    ? 'compare'    :
-      'general'
-
-    const depth =
-      /بالتفصيل|بعمق|كامل|complete|full|detailed|step by step/i.test(text) ? 'deep'    :
-      /باختصار|brief|quick|سريع|ملخص|summary/i.test(text)                  ? 'surface' :
-      'balanced'
-
-    const entityPattern = /\b([A-Z][a-zA-Z]{3,}|[a-z]{4,}(?:Context|Builder|Engine|Index|Layer|Vault|Capsule|Query|Route|Cache|Store|Map|Handler|Manager|Controller))\b/g
-    const entities = []
-    let m
-    while ((m = entityPattern.exec(query)) !== null)
-      if (!entities.includes(m[1])) entities.push(m[1])
-
-    const clarity = Math.min(1,
-      (text.length > 20 ? 0.3 : 0) +
-      (entities.length  > 0  ? 0.3 : 0) +
-      (mode !== 'general'    ? 0.4 : 0)
-    )
-
-    return { mode, depth, entities, clarity, rawQuery: query }
-  }
-
-  #resolveCognitiveFocus(userIntent, fieldState, vaultCapsules, indexResult) {
-    const {
-      continuity, coherence, drift,
-      semanticGrounding, noveltyPressure,
-      executionReadiness, recallPotential
-    } = fieldState
-
-    const capsuleLabels = vaultCapsules.map(c => c.compressed?.toLowerCase() ?? '')
-    const entityMatches = userIntent.entities.filter(e =>
-      capsuleLabels.some(l => l.includes(e.toLowerCase()))
-    ).length
-
-    const userNovelty = userIntent.entities.length > 0
-      ? Math.max(0, 1 - entityMatches / userIntent.entities.length)
-      : noveltyPressure
-
-    let winner = 'balanced'
-    if (userNovelty > 0.70 && continuity > 0.65)          winner = 'user'
-    else if (userIntent.clarity < 0.30 && semanticGrounding > 0.55) winner = 'celf'
-
-    const resolvedDepth =
-      userIntent.depth === 'deep'                                   ? 'deep'     :
-      userIntent.depth === 'surface'                                ? 'surface'  :
-      executionReadiness > 0.65 && userIntent.mode === 'implement'  ? 'deep'     :
-      coherence > 0.70 && userIntent.mode === 'explain'            ? 'balanced' :
-      drift > 0.55                                                   ? 'surface'  :
-      'balanced'
-
-    const scopeNames = [...userIntent.entities]
-
-    if (winner !== 'user' && recallPotential > 0.60) {
-      for (const cap of vaultCapsules.slice(0, 2)) {
-        if (cap.compressed) {
-          const words = cap.compressed.split(/\s+/)
-            .filter(w => w.length > 4 && /^[a-zA-Z]/.test(w))
-          scopeNames.push(...words.slice(0, 3))
-        }
-      }
-    }
-
-    if (indexResult?.topScored?.length) {
-      for (const s of indexResult.topScored.slice(0, 4))
-        if (s.symbol && !scopeNames.includes(s.symbol))
-          scopeNames.push(s.symbol)
-    }
-
-    const resolvedMode =
-      userIntent.mode === 'implement' && this.state.phase === 'locked' ? 'build'     :
-      userIntent.mode === 'explain'   && continuity > 0.65             ? 'trace'     :
-      userIntent.mode === 'debug'                                       ? 'diagnose'  :
-      userIntent.mode === 'design'                                      ? 'architect' :
-      userIntent.mode === 'review'                                      ? 'audit'     :
-      userIntent.mode === 'compare'                                     ? 'contrast'  :
-      'analyze'
-
-    return {
-      winner,
-      what:           scopeNames.filter((v, i, a) => a.indexOf(v) === i).slice(0, 8),
-      files:          [],
-      depth:          resolvedDepth,
-      mode:           resolvedMode,
-      userNovelty:    this.round4(userNovelty),
-      celfContinuity: this.round4(continuity)
-    }
-  }
-
-  #resolveSemanticZone(topAttractors, field) {
-    if ((field.executionReadiness ?? 0) > 0.6)  return 'execution'
-    if ((field.intentPressure     ?? 0) > 0.6)  return 'inquiry'
-    if ((field.semanticGrounding  ?? 0) > 0.5)  return 'conceptual'
-    if (topAttractors.length >= 3)               return 'multi_focus'
-    if (topAttractors.length === 1)              return 'focused'
-    return 'general'
-  }
-
-  #resolvePressureState(field) {
-    if ((field.topicPressure   ?? 0) > 0.7) return 'high_pressure'
-    if ((field.noveltyPressure ?? 0) > 0.6) return 'exploring'
-    if ((field.coherence       ?? 0) > 0.6) return 'stable'
-    if ((field.drift           ?? 0) > 0.5) return 'drifting'
-    return 'neutral'
-  }
-
-  reset() {
-    for (let r = 0; r < this.ringCount; r++)
-      for (let i = 0; i < this.resolution; i++) {
-        const c = this.rings[r][i]
-        c.p = 1 / this.resolution; c.residual = this.epsilon
-        c.pressure = 0; c.memory = 0; c.constraintDensity = 0
-        c.semanticTrace = 0; c.intentTrace = 0; c.credibility = 1.0
-        c.active = true; c.hysteresis = 0; c.elasticStrain = 0
-      }
-
-    this.field = {
-      signature: 0, continuity: 0, coherence: 0, drift: 0, momentum: 0, resonance: 0,
-      phaseHistory: [], attractorTrace: [], topicPressure: 0, lastStablePhase: 'warmup',
-      persistence: 0, emergence: 0, semanticGrounding: 0, semanticCoherence: 0,
-      intentPressure: 0, executionReadiness: 0, recallPotential: 0, routingPressure: 0,
-      compressionPressure: 0, noveltyPressure: 0, semanticMemory: [], archivedContinuity: [],
-      localization: 0, coherenceRadius: 0, signalType: 'noise', lastSourceWeight: 1.0,
-      manifold:    new Float32Array(this.manifoldDimensions * this.manifoldDimensions),
-      manifoldAge: new Float32Array(this.manifoldDimensions * this.manifoldDimensions),
-      metaAttractors: [], avgFieldCredibility: 1.0
-    }
-
-    this.state = {
-      t: 0, phase: 'warmup', signature: 0,
-      cycleCount: 0, lastTheta: 0, lastIndex: 0,
-      lastDeltaTheta: 0, totalMass: this.totalMass(),
-      attractors: [], history: [], archive: [],
-      lastSourceWeight: 1.0,
-      lastPerturbationVector: new Float32Array(this.semanticDimensions),
-      attractorCredibilityLog: []
-    }
-
-    // الـ Vault لا يُمسح عند reset — الكبسولات دائمة
-    this.massTarget = this.totalMass()
-  }
+  _containTheta(v)        { return ((Number(v) % this.cycle) + this.cycle) % this.cycle }
+  _thetaToIndex(theta)    { return Math.floor((this._containTheta(theta) / this.cycle) * this.resolution) % this.resolution }
+  _indexToTheta(d)        { return (d / this.resolution) * this.cycle }
+  _wrapI(i)               { return ((i % this.resolution) + this.resolution) % this.resolution }
+  _wrapR(r)               { return ((r % this.ringCount)  + this.ringCount)  % this.ringCount  }
+  _circularIndexDist(a, b){ const d = Math.abs(a - b); return Math.min(d, this.resolution - d) }
+  _signedIndexDist(a, b)  { const f = (b - a + this.resolution) % this.resolution; return f > this.resolution / 2 ? f - this.resolution : f }
+  _clamp01(v)             { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0 }
+  _clampP(v)              { const n = Number(v); return Number.isFinite(n) ? Math.max(this.epsilon, n) : this.epsilon }
+  _round4(v)              { return Math.round(Number(v || 0) * 10000) / 10000 }
 }
