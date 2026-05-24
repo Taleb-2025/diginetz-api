@@ -7,7 +7,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import express from 'express'
-import { CELF_Engine_AI_V5 } from '../engines/celf-engine-v5.js'
+import { CELF_Engine_V6 as CELF_Engine_AI_V5 } from '../engines/celf-engine-v5.js'
 import { parse }             from '../utils/lightweight-parser.js'
 import { build, cleanInput, filterStyleInstructions, detectStyleInstruction } from '../utils/context-builder.js'
 import { observe }           from '../utils/celf-observer.js'
