@@ -8,7 +8,7 @@
  * ES Module — يعمل في Node.js والمتصفح
  */
 
-export class CELF_Engine_V6 {
+export class CELF_Engine_AI_V5 {
 
   // ═══════════════════════════════════════════════════════
   //  البناء والتهيئة
