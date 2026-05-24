@@ -536,7 +536,7 @@ function checkPayload(systemHint, messages) {
   return size
 }
 
-async function fetchClaude(body, timeoutMs = 50000) {
+async function fetchClaude(body, timeoutMs = 90000) {
   const controller = new AbortController()
   const timer      = setTimeout(() => controller.abort(), timeoutMs)
   try {
