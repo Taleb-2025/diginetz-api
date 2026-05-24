@@ -559,7 +559,7 @@ function buildClaudeBody(model, maxTokens, systemHint, messages) {
   const body = { model, max_tokens: maxTokens, messages }
   if (systemHint && String(systemHint).trim())
     body.system = String(systemHint).trim()
-  body.tools = [{ type: 'web_search_20250305', name: 'web_search' }]
+ 
   return body
 }
 
