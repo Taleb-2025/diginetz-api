@@ -16,6 +16,10 @@ export class CELF_Engine_AI_V5 {
 
   constructor(options = {}) {
 
+    routeContext(text, limit = 5) {
+  return []
+}
+
     // ── شبكة الحقل ────────────────────────────────────────
     this.cycle       = options.cycle       ?? 360
     this.resolution  = options.resolution  ?? 360
