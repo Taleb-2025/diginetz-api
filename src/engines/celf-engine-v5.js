@@ -10,14 +10,19 @@
 
 export class CELF_Engine_AI_V5 {
 
-  // ═══════════════════════════════════════════════════════
-  //  البناء والتهيئة
-  // ═══════════════════════════════════════════════════════
-
   constructor(options = {}) {
 
-    routeContext(text, limit = 5) {
-  return []
+    this.cycle      = options.cycle ?? 360
+    this.resolution = options.resolution ?? 360
+    this.ringCount  = options.ringCount ?? 5
+    this.epsilon    = options.epsilon ?? 1e-6
+
+  }
+
+  routeContext(text, limit = 5) {
+    return []
+  }
+
 }
 
     // ── شبكة الحقل ────────────────────────────────────────
