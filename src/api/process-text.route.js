@@ -1,6 +1,9 @@
 // ═══════════════════════════════════════════════════════════════
-//  process-text.route.js — v7.2
-//  إصلاح: system لا يُرسل لـ Claude
+//  process-text.route.js — v8.0
+//  التغييرات عن v7.2:
+//  ① Feedback      — CELF يتعلم من رد LLM (sourceWeight: 0.25)
+//  ② Retrieval     — CELF يُقيّم capsuleContext قبل إرساله
+//  ③ Mini Context  — CELF يُشكّل systemHint بشكل منظم
 // ═══════════════════════════════════════════════════════════════
 
 import express from 'express'
@@ -9,7 +12,6 @@ import { parse }             from '../utils/lightweight-parser.js'
 import { build, cleanInput, filterStyleInstructions, detectStyleInstruction } from '../utils/context-builder.js'
 import { observe }           from '../utils/celf-observer.js'
 import { indexStore }        from './index-code.route.js'
-
 
 const router = express.Router()
 
@@ -195,38 +197,25 @@ function calcRouteConfidence(routedContext) {
   return valid.reduce((s, i) => s + i.score, 0) / valid.length
 }
 
-// ── نسيان الكبسولات المتغيرة ────────────────────────────────────
-// عندما تتغير دالة → كبسولتها القديمة تتلاشى بسرعة
 function decayChangedCapsules(engine, changedNodeIds, structIndex) {
   if (!engine || !changedNodeIds?.length || !structIndex) return
-
   for (const nodeId of changedNodeIds) {
     const node = structIndex.nodes.get(nodeId)
     if (!node?.vaultCapsuleId) continue
-
-    // أوجد الكبسولة في الـ vault وخفّض وزنها
     const capsule = engine.vault?.get?.(node.vaultCapsuleId)
       ?? engine.getActiveCapsules?.().find(c => c.id === node.vaultCapsuleId)
-
-    if (capsule && typeof capsule.weight === 'number') {
-      capsule.weight = Math.max(0, capsule.weight * 0.25)  // نسيان سريع
-    }
-
-    // أزل الرابط لإجبار إعادة البناء
+    if (capsule && typeof capsule.weight === 'number')
+      capsule.weight = Math.max(0, capsule.weight * 0.25)
     node.vaultCapsuleId = null
     structIndex.capsuleLinks.delete(nodeId)
   }
 }
 
-// ── اكتشاف الـ nodes المتغيرة عند تحديث الكود ──────────────────
 function getChangedNodeIds(structIndex, path) {
   const changedIds = []
   for (const [id, node] of structIndex.nodes.entries()) {
     if (!id.startsWith(path + '::')) continue
-    // node موجود في المسار لكن وزن الكبسولة عالٍ → كان موجوداً قبل
-    if (node.vaultCapsuleId) {
-      changedIds.push(id)
-    }
+    if (node.vaultCapsuleId) changedIds.push(id)
   }
   return changedIds
 }
@@ -236,33 +225,21 @@ function buildCodeHint(structIndex) {
   const nodes = [...structIndex.nodes.values()]
   if (!nodes.length) return null
 
-  const classes = nodes
-    .filter(n => n.type === 'class')
-    .map(n => n.symbol)
-
-  const methods = nodes
-    .filter(n => n.type === 'method' || n.type === 'function')
+  const classes  = nodes.filter(n => n.type === 'class').map(n => n.symbol)
+  const methods  = nodes.filter(n => n.type === 'method' || n.type === 'function')
     .sort((a, b) => (b.usedBy?.length ?? 0) - (a.usedBy?.length ?? 0))
-    .slice(0, 6)
-    .map(n => n.symbol)
-
-  const extDeps = [...new Set(
-    nodes.flatMap(n => n.imports ?? [])
-         .filter(i => !i.startsWith('.'))
-  )].slice(0, 4)
-
-  const callChain = nodes
-    .filter(n => n.calls?.length > 0)
+    .slice(0, 6).map(n => n.symbol)
+  const extDeps  = [...new Set(nodes.flatMap(n => n.imports ?? []).filter(i => !i.startsWith('.')))].slice(0, 4)
+  const callChain = nodes.filter(n => n.calls?.length > 0)
     .sort((a, b) => (b.usedBy?.length ?? 0) - (a.usedBy?.length ?? 0))
-    .slice(0, 3)
-    .map(n => `${n.symbol} → ${n.calls.slice(0,2).join(', ')}`)
+    .slice(0, 3).map(n => `${n.symbol} → ${n.calls.slice(0,2).join(', ')}`)
 
   return [
     '[code structure]',
-    classes.length   ? `class: ${classes.join(', ')}`         : null,
-    methods.length   ? `methods: ${methods.join(', ')}`        : null,
-    extDeps.length   ? `external: ${extDeps.join(', ')}`       : null,
-    callChain.length ? `flow: ${callChain.join(' | ')}`        : null,
+    classes.length    ? `class: ${classes.join(', ')}`    : null,
+    methods.length    ? `methods: ${methods.join(', ')}`   : null,
+    extDeps.length    ? `external: ${extDeps.join(', ')}`  : null,
+    callChain.length  ? `flow: ${callChain.join(' | ')}`   : null,
     'analyze: practical usage and risks — not philosophy'
   ].filter(Boolean).join('\n')
 }
@@ -305,83 +282,166 @@ function compressAssistantMessage(content) {
   return [textParts.join('\n').trim(), labelParts.join(', ')].filter(Boolean).join('\n') || '[response provided]'
 }
 
-// ── ضغط رسالة المستخدم في history ───────────────────────────────
-// يحذف الكود الخام ويستبدله بـ [code attached] لمنع الاقتطاع
 function compressUserMessage(content) {
   if (typeof content !== 'string') return content.slice(0, 400)
-
-  // إذا لا يوجد كود → اقطع عند 400 حرف
   const hasCode = /```[\s\S]*?```/.test(content) ||
                   /export\s+class\s+\w+/.test(content) ||
                   /function\s+\w+\s*\(/.test(content)
-
   if (!hasCode) return content.slice(0, 400)
-
-  // احذف الكود → أضف إشارة [code attached]
   const withoutCode = content
     .replace(/```[\s\S]*?```/g, '[code attached]')
     .replace(/export\s+(class|function|const|default)\s+[\s\S]{0,50}/g, '[code attached]')
-    .replace(/\s{2,}/g, ' ')
-    .trim()
-
+    .replace(/\s{2,}/g, ' ').trim()
   return withoutCode.slice(0, 300) || '[code message]'
 }
 
 // ══════════════════════════════════════════════════════════════
-//  Soft Continuity Weighting — نظام ذاكرة متدرج
-//
-//  Tier 1  continuity >= 0.70  → تاريخ كامل (6 رسائل)
-//  Tier 2  continuity 0.40-0.70 → مضغوط (3) + observer capsules
-//  Tier 3  continuity 0.20-0.40 → capsules + persistent anchors
-//  Tier 4  continuity < 0.20   → raw fragments + vault fallback
+//  ① Feedback — CELF يتعلم من رد LLM
 // ══════════════════════════════════════════════════════════════
 
-// ── مخزن الكبسولات والـ anchors per session ──────────────────────
-const capsuleMemory    = new Map()  // sid → [{ topic, covered, missing, t }]
-const anchorMemory     = new Map()  // sid → [{ concept, weight, t }]
-// ─── Code storage moved to frontend IndexedDB ───────────────────
-// fullCodeStore, codeCapsulesStore, answerCapsules → indexeddb.js
+function compressReplyForFeedback(reply) {
+  if (!reply || typeof reply !== 'string') return null
+  return reply
+    .replace(/```[\s\S]*?```/g, '[code]')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, 400)
+}
 
 // ══════════════════════════════════════════════════════════════
-//  Question Classifier — يُحدد نوع السؤال بدقة
-//  الأنواع:
-//  code_review     ← تحليل / أخطاء / نقاط قوة وضعف
-//  code_modify     ← تعديل / إصلاح / تحسين الكود
-//  code_explain    ← شرح دالة / مفهوم في الكود
-//  follow_up       ← "أكمل" / "اشرح أكثر" / "كيف؟"
-//  general         ← سؤال عام لا علاقة له بكود
+//  ② Retrieval — CELF يُقيّم capsuleContext
 // ══════════════════════════════════════════════════════════════
 
-// ─── Q_PATTERNS, classifyQuestion, retrieveContext, storeFullCode,
-// ─── storeAnswerCapsule, extractCodeCapsules, findRelevantCapsules,
-// ─── buildCodeContext → moved to frontend/indexeddb.js
-// ─── Backend receives capsuleContext string from frontend directly
+function evaluateCapsuleContext(engine, questionVector, capsuleContext, questionText) {
+  if (!capsuleContext || !questionVector?.length)
+    return { score: 0, used: false, reason: 'no_context' }
 
+  const capsuleVector = engine.semanticVector?.(capsuleContext)
+  if (!capsuleVector?.length)
+    return { score: 0, used: false, reason: 'no_vector' }
 
-// ── حفظ كبسولة منظمة من نتيجة Observer ──────────────────────────
-// #5: Structured Capsules — objects لا prose
+  const semanticScore = engine.cosineSimilarity(questionVector, capsuleVector)
+
+  const tokenize = t => t.toLowerCase()
+    .replace(/[،,.:;!?()[\]{}<>"']/g, ' ')
+    .split(/\s+/).filter(w => w.length > 3)
+
+  const qTokens      = new Set(tokenize(questionText))
+  const lexicalMatch = tokenize(capsuleContext).filter(w => qTokens.has(w)).length
+  const lexicalBonus = Math.min(0.20, lexicalMatch * 0.07)
+
+  const questionHasCode = /كود|error|function|class|fix|bug|خطأ|برمج|api|express|react|vue|angular|javascript|typescript/i
+    .test(questionText)
+  const capsuleHasCode = /function|class|error|const|let|var|=>|import|export|express|react|vue|angular|app\.|get\(|post\(/i
+    .test(capsuleContext)
+  const codeBonus = (questionHasCode && capsuleHasCode) ? 0.20 : 0
+
+  const hasAnySignal = lexicalMatch > 0 || codeBonus > 0 || semanticScore >= 0.45
+  if (!hasAnySignal)
+    return { score: semanticScore, used: false, reason: 'no_signal' }
+
+  const finalScore = Math.min(1, semanticScore + codeBonus + lexicalBonus)
+  const threshold  = questionHasCode ? 0.18 : 0.28
+  const used       = finalScore >= threshold
+
+  return {
+    score:         Math.round(finalScore * 1000) / 1000,
+    semanticScore: Math.round(semanticScore * 1000) / 1000,
+    codeBonus,
+    lexicalBonus:  Math.round(lexicalBonus * 1000) / 1000,
+    used,
+    threshold,
+    reason: used ? 'relevant' : `below_threshold_${threshold}`
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ③ Mini Context — CELF يُشكّل systemHint
+// ══════════════════════════════════════════════════════════════
+
+function buildStateHint(phase, continuity) {
+  if (!phase || phase === 'warmup') return null
+  if (phase === 'drift' || continuity < 0.20)
+    return '[mode: ground — answer directly, ignore prior context]'
+  if (phase === 'turbulent')
+    return '[mode: clarify — stay focused on current question]'
+  if (phase === 'locked' && continuity > 0.70)
+    return '[mode: continue — build on previous answers]'
+  if (phase === 'emergent')
+    return '[mode: explore — be comprehensive]'
+  return null
+}
+
+function buildMiniContext({
+  engine, frontendContext, capsuleEvalResult,
+  vaultHit, codeHint, builtSystemHint,
+  activeStyle, continuity, phase
+}) {
+  const parts = []
+
+  // 1. CELF State
+  const stateHint = buildStateHint(phase, continuity)
+  if (stateHint) parts.push(stateHint)
+
+  // 2. Code Structure (AST) — أولوية عالية
+  if (codeHint) parts.push(codeHint)
+
+  // 3. Memory Layer — فقط إذا score ≥ 0.35
+  if (frontendContext && capsuleEvalResult?.score >= 0.35)
+    parts.push(`[memory]\n${frontendContext.slice(0, 500)}`)
+
+  // 4. Vault Recall — فقط إذا score ≥ 0.45
+  if (vaultHit?.compressed && vaultHit?.score >= 0.45)
+    parts.push(`[recall] ${vaultHit.compressed}`)
+
+  // 5. Context Builder Hint
+  if (builtSystemHint) parts.push(builtSystemHint)
+
+  // 6. Style
+  const styleMap = {
+    concise:  'أجب بإيجاز.',
+    detailed: 'أجب بتفصيل كامل.',
+    arabic:   'أجب باللغة العربية.',
+    english:  'Reply in English.',
+    german:   'Antworte auf Deutsch.'
+  }
+  if (activeStyle && styleMap[activeStyle]) parts.push(styleMap[activeStyle])
+
+  const miniContext = parts.filter(Boolean).join('\n').trim() || null
+
+  return {
+    miniContext,
+    tokenEstimate: Math.ceil((miniContext?.length ?? 0) / 4),
+    layers: {
+      state:   !!stateHint,
+      code:    !!codeHint,
+      memory:  !!(frontendContext && capsuleEvalResult?.score >= 0.35),
+      vault:   !!(vaultHit?.score >= 0.45),
+      context: !!builtSystemHint,
+      style:   !!activeStyle
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Soft Continuity Weighting
+// ══════════════════════════════════════════════════════════════
+
+const capsuleMemory = new Map()
+const anchorMemory  = new Map()
+
 function storeCapsule(sid, observer, topicText, t) {
   if (!observer?.diagnostics) return
   const d = observer.diagnostics
   if (d.confidence === 'unknown') return
-
-  // استخرج المفاهيم المغطاة والناقصة من diagnostics
-  const coveredConcepts = d.concepts
-    ?.filter(c => c.covered)
-    .map(c => c.label) ?? []
-
-  const pendingConcepts = d.concepts
-    ?.filter(c => !c.covered)
-    .map(c => c.label) ?? []
-
   const store = capsuleMemory.get(sid) ?? []
   store.push({
     topic:      topicText ?? 'general',
-    covered:    coveredConcepts,    // ← مفاهيم فعلية لا prose
-    pending:    pendingConcepts,    // ← ما تبقى
-    confidence: d.confidence,       // ← high/partial/low
-    coverage:   d.coverage,         // ← full/partial/limited
-    source:     'observer',         // ← provenance بسيط
+    covered:    d.concepts?.filter(c => c.covered).map(c => c.label) ?? [],
+    pending:    d.concepts?.filter(c => !c.covered).map(c => c.label) ?? [],
+    confidence: d.confidence,
+    coverage:   d.coverage,
+    source:     'observer',
     lang:       d.lang ?? 'en',
     t
   })
@@ -389,7 +449,6 @@ function storeCapsule(sid, observer, topicText, t) {
   capsuleMemory.set(sid, store)
 }
 
-// ── تحديث الـ Anchors من ECF أو CELF ─────────────────────────────
 function updateAnchors(sid, topicText, weight) {
   if (!topicText || weight < 0.3) return
   const store = anchorMemory.get(sid) ?? []
@@ -404,24 +463,20 @@ function updateAnchors(sid, topicText, weight) {
   anchorMemory.set(sid, store)
 }
 
-// ── بناء context منظم من الكبسولات ─────────────────────────────
-// #5 + #6: Structured capsules → messages لا system
 function buildCapsuleContext(sid) {
   const caps = capsuleMemory.get(sid) ?? []
   if (!caps.length) return []
   const recent = caps.slice(-3)
   const lines = recent.map(c => {
     const parts = [`topic:${c.topic}`]
-    if (c.covered?.length)    parts.push(`covered:${c.covered.slice(0,3).join(',')}`)
-    if (c.pending?.length)    parts.push(`pending:${c.pending.slice(0,2).join(',')}`)
-    if (c.confidence)         parts.push(`conf:${c.confidence}`)
+    if (c.covered?.length)  parts.push(`covered:${c.covered.slice(0,3).join(',')}`)
+    if (c.pending?.length)  parts.push(`pending:${c.pending.slice(0,2).join(',')}`)
+    if (c.confidence)       parts.push(`conf:${c.confidence}`)
     return parts.join(' | ')
   })
-  // يذهب إلى messages لا system ✅
   return [{ role: 'user', content: `[memory]\n${lines.join('\n')}` }]
 }
 
-// ── بناء context من الـ Anchors ───────────────────────────────────
 function buildAnchorContext(sid) {
   const anchors = anchorMemory.get(sid) ?? []
   if (!anchors.length) return []
@@ -429,7 +484,6 @@ function buildAnchorContext(sid) {
   return [{ role: 'user', content: `[persistent topics: ${top}]` }]
 }
 
-// ── raw fragments من آخر جواب ─────────────────────────────────────
 function buildFragmentContext(sid, history) {
   const lastAssistant = [...history].reverse().find(h => h.role === 'assistant')
   if (!lastAssistant) return buildAnchorContext(sid)
@@ -440,7 +494,6 @@ function buildFragmentContext(sid, history) {
   ]
 }
 
-// ── buildHistoryLayer المتدرج ─────────────────────────────────────
 function buildHistoryLayer(history, continuity, sid) {
   const filtered = filterStyleInstructions(history)
   const clean    = filtered.filter(h =>
@@ -448,7 +501,6 @@ function buildHistoryLayer(history, continuity, sid) {
     typeof h.content === 'string' && h.content.length > 0
   )
 
-  // Tier 1: continuity عالٍ → تاريخ كامل مع ضغط ذكي
   if (continuity >= 0.70) {
     const msgs = clean.slice(-6)
     if (msgs.length < 2) return []
@@ -456,31 +508,25 @@ function buildHistoryLayer(history, continuity, sid) {
       role:    h.role,
       content: h.role === 'assistant'
         ? compressAssistantMessage(h.content)
-        : compressUserMessage(h.content)  // ← ذكي: يحذف كود خام
+        : compressUserMessage(h.content)
     }))
   }
 
-  // Tier 2: متوسط → مضغوط + capsules
   if (continuity >= 0.40) {
     const msgs = clean.slice(-3)
     const compressed = msgs.length >= 2 ? msgs.map(h => ({
       role:    h.role,
       content: h.role === 'assistant'
         ? compressAssistantMessage(h.content)
-        : compressUserMessage(h.content)  // ← ذكي: يحذف كود خام
+        : compressUserMessage(h.content)
     })) : []
     return [...compressed, ...buildCapsuleContext(sid)]
   }
 
-  // Tier 3: منخفض → capsules + anchors
   if (continuity >= 0.20) {
-    return [
-      ...buildCapsuleContext(sid),
-      ...buildAnchorContext(sid)
-    ]
+    return [...buildCapsuleContext(sid), ...buildAnchorContext(sid)]
   }
 
-  // Tier 4: منخفض جداً → fragments + vault fallback
   return buildFragmentContext(sid, history)
 }
 
@@ -490,7 +536,6 @@ function checkPayload(systemHint, messages) {
   return size
 }
 
-// ✅ إصلاح: system لا يُرسل إذا كان null أو فارغ
 async function fetchClaude(body, timeoutMs = 50000) {
   const controller = new AbortController()
   const timer      = setTimeout(() => controller.abort(), timeoutMs)
@@ -510,14 +555,10 @@ async function fetchClaude(body, timeoutMs = 50000) {
   }
 }
 
-// ✅ بناء Claude body بدون system إذا كان null
 function buildClaudeBody(model, maxTokens, systemHint, messages) {
   const body = { model, max_tokens: maxTokens, messages }
-  if (systemHint && String(systemHint).trim()) {
+  if (systemHint && String(systemHint).trim())
     body.system = String(systemHint).trim()
-  }
-  // ── Web Search — اتصال بالإنترنت ─────────────────────────────
-  // Claude يبحث تلقائياً عند الحاجة (طقس، أخبار، أسعار...)
   body.tools = [{ type: 'web_search_20250305', name: 'web_search' }]
   return body
 }
@@ -548,7 +589,6 @@ async function continuationCall(currentText, partialReply, systemHint, timeoutMs
     ? 'continue exactly from where you stopped — complete the open code block, do not repeat what was already written'
     : 'continue exactly from where you stopped — do not repeat what was already written'
 
-  // ✅ إصلاح: system لا يُرسل إذا كان null
   const body = buildClaudeBody(model, 4096, systemHint, [
     { role: 'user',      content: currentText },
     { role: 'assistant', content: partialReply },
@@ -566,7 +606,7 @@ router.get('/process-text', (_req, res) => {
     ok: true, status: 'online',
     engine: 'CELF_Engine_AI_V5',
     llm:    'Claude Haiku 4.5',
-    version: '7.2'
+    version: '8.0'
   })
 })
 
@@ -574,8 +614,8 @@ router.post('/process-text', async (req, res) => {
   const {
     text = '', sessionId, history = [],
     image = null, imageMimeType = 'image/jpeg',
-    savedCode     = null,
-    capsuleContext = null   // من IndexedDB في الـ frontend
+    savedCode      = null,
+    capsuleContext = null
   } = req.body
 
   const hasText  = typeof text  === 'string' && text.trim().length > 0
@@ -590,15 +630,13 @@ router.post('/process-text', async (req, res) => {
   processingLock.add(sid)
 
   try {
-    // ── تنظيف السؤال ─────────────────────────────────────────
-    const rawText      = hasText && text.length > MAX_INPUT_CHARS
+    const rawText     = hasText && text.length > MAX_INPUT_CHARS
       ? text.slice(0, MAX_INPUT_CHARS) + '\n\n[... truncated ...]'
       : text
     const cleanedText  = hasText ? cleanInput(rawText) : rawText
     const noiseRemoved = hasText && cleanedText !== rawText
     const inputText    = cleanedText || '(image)'
 
-    // ── Style TTL ─────────────────────────────────────────────
     if (hasText) {
       const styleDetected = detectStyleInstruction(cleanedText)
       if (styleDetected) setStyle(sid, styleDetected.style, styleDetected.ttl)
@@ -610,76 +648,52 @@ router.post('/process-text', async (req, res) => {
     if (!processed.ok) return res.status(422).json({ error: processed.reason || 'processing_failed' })
 
     const tValue = processed.result.t
-    // ── تخزين ذكي: السؤال فقط بدون الكود الخام ─────────────────
-    // الكود سيُخزَّن لاحقاً كـ codeHint بعد AST parsing
-    const textForMemory = cleanedText
-      .replace(/```[\s\S]*?```/g, '')     // احذف code blocks
-      .replace(/^\s*export\s+class\s+\w+[\s\S]*$/m, '') // احذف inline class
-      .replace(/^\s*function\s+\w+[\s\S]*$/m, '')        // احذف inline function
-      .replace(/\s{2,}/g, ' ')
-      .trim()
-    storeSemanticEntry(sid, tValue, textForMemory || inputText)
 
-    // ─── Code storage: handled by frontend IndexedDB ──────────────
-    // capsuleContext يأتي جاهزاً من الـ frontend
+    const textForMemory = cleanedText
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/^\s*export\s+class\s+\w+[\s\S]*$/m, '')
+      .replace(/^\s*function\s+\w+[\s\S]*$/m, '')
+      .replace(/\s{2,}/g, ' ').trim()
+    storeSemanticEntry(sid, tValue, textForMemory || inputText)
 
     const engine      = getEngine(sid)
     const fieldPrompt = engine.buildFieldPrompt?.() ?? null
 
-    // ── Similarity ────────────────────────────────────────────
-    // engine.semanticVector() هو المسار الصحيح في CELF_Engine_AI_V5
     const questionVector = engine.semanticVector?.(cleanedText) ?? null
     console.log('CELF vector length:', questionVector?.length ?? 'NULL')
-    const semanticMemory   = engine.field?.semanticMemory ?? []
-    const prevVector       = semanticMemory.length >= 2 ? semanticMemory.at(-2)?.vector : null
+
+    const semanticMemory     = engine.field?.semanticMemory ?? []
+    const prevVector         = semanticMemory.length >= 2 ? semanticMemory.at(-2)?.vector : null
     const questionSimilarity = (questionVector && prevVector)
       ? engine.cosineSimilarity(questionVector, prevVector)
       : null
 
     const textMap = semanticTextMaps.get(sid)
 
-    // ── lastTopicText مع fallback من history ─────────────────
-    // يستخدم السؤال السابق لا الحالي (الحالي آخر عنصر في history)
     const userMsgs    = (history ?? []).filter(h => h.role === 'user')
-    const prevUserMsg = userMsgs.length >= 2
-      ? userMsgs[userMsgs.length - 2]
-      : null
-
+    const prevUserMsg = userMsgs.length >= 2 ? userMsgs[userMsgs.length - 2] : null
     const lastTopicText =
       textMap?.get(tValue - 1)?.text
       ?? prevUserMsg?.content?.split(/\s+/).slice(0, 8).join(' ')
       ?? null
 
-    // ── Inline Code + Redis Retrieval ───────────────────────────
+    // ── Inline Code + AST ────────────────────────────────────
     const structIndex = indexStore?.get(sid) ?? null
     const codeBlocks  = detectCodeBlocks(cleanedText)
     let   codeHint    = null
 
-
-
     if (codeBlocks.length > 0 && structIndex) {
-      const tempPath = `session_inline/${sid}/msg_${tValue}.js`
-
-      // ── كشف النسخة السابقة قبل التحديث ──────────────────────
+      const tempPath       = `session_inline/${sid}/msg_${tValue}.js`
       const changedNodeIds = getChangedNodeIds(structIndex, tempPath)
+      const updateResult   = structIndex.updateFile(tempPath, codeBlocks.join('\n\n'))
 
-      // ── تحديث AST بالكود الجديد ──────────────────────────────
-      const updateResult = structIndex.updateFile(tempPath, codeBlocks.join('\n\n'))
-
-      // ── نسيان الكبسولات المتغيرة ─────────────────────────────
-      if (updateResult?.changed && changedNodeIds.length > 0) {
+      if (updateResult?.changed && changedNodeIds.length > 0)
         decayChangedCapsules(engine, changedNodeIds, structIndex)
-      }
 
-      // ── بناء كبسولات جديدة من الكود المحدث ──────────────────
       structIndex.injectSemanticVectors(engine)
       structIndex.injectIntoVault(engine)
-
-      // ── هيكل الكود (buildCodeHint: 50 token دائماً) ──────────────
       codeHint = buildCodeHint(structIndex)
 
-      // ─── Code capsules → handled by frontend IndexedDB ─────────
-      // ── حدّث الذاكرة الدلالية ───────────────────────────────
       if (codeHint) {
         const codeMemory = codeHint
           .replace('[code structure]', '')
@@ -687,7 +701,7 @@ router.post('/process-text', async (req, res) => {
           .trim()
         if (codeMemory) storeSemanticEntry(sid, tValue + 0.5, codeMemory)
       }
-    }  // ← إغلاق if (codeBlocks.length > 0 && structIndex)
+    }
 
     // ── Route Context ─────────────────────────────────────────
     const rawRoute      = engine.routeContext(cleanedText, 5)
@@ -703,7 +717,7 @@ router.post('/process-text', async (req, res) => {
       celfResult:        processed.celfResult,
       passToLLM:         processed.passToLLM,
       routedContext:     vaultHit ? { items: routedContext, vaultHit } : routedContext,
-      questionText:      cleanedText,    // ← للحكم على طول السؤال
+      questionText:      cleanedText,
       questionSimilarity,
       lastTopicText,
       activeStyle
@@ -712,21 +726,44 @@ router.post('/process-text', async (req, res) => {
     if (built.blocked) return res.status(422).json({ blocked: true, reason: 'semantic_constraint' })
     if (!built.passToLLM && !hasImage) return res.json({ reply: null, skippedLLM: true, reason: 'weak_semantic_field' })
 
-    // ── Context من Frontend IndexedDB ────────────────────────────
-    // capsuleContext جاهز من indexeddb.js — لا حاجة لمعالجته
-    const frontendContext = typeof capsuleContext === 'string' && capsuleContext.length > 0
-      ? capsuleContext
-      : null
+    // ══════════════════════════════════════════════════════════
+    //  ② Retrieval — CELF يُقيّم capsuleContext
+    // ══════════════════════════════════════════════════════════
+    let frontendContext   = null
+    let capsuleEvalResult = { score: 0, used: false, reason: 'skipped' }
 
-    // system = codeHint (AST) + frontendContext (code+answer) + built hint
-    const systemHint = [codeHint, frontendContext, built.systemHint]
-      .filter(Boolean)
-      .join('\n') || null
+    if (typeof capsuleContext === 'string' && capsuleContext.length > 0 && questionVector) {
+      capsuleEvalResult = evaluateCapsuleContext(
+        engine,
+        questionVector,
+        capsuleContext,
+        cleanedText
+      )
+      if (capsuleEvalResult.used) frontendContext = capsuleContext
+    }
+
     const continuity = built.context?.continuity ?? 0
+
+    // ══════════════════════════════════════════════════════════
+    //  ③ Mini Context — CELF يُشكّل systemHint
+    // ══════════════════════════════════════════════════════════
+    const miniCtxResult = buildMiniContext({
+      engine,
+      frontendContext,
+      capsuleEvalResult,
+      vaultHit,
+      codeHint,
+      builtSystemHint: built.systemHint,
+      activeStyle,
+      continuity,
+      phase: processed.celfResult.phase ?? 'warmup'
+    })
+
+    const systemHint = miniCtxResult.miniContext
     const maxTokens  = 4096
 
     // ── Messages ──────────────────────────────────────────────
-    const userContent     = hasImage
+    const userContent = hasImage
       ? [
           { type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } },
           ...(hasText ? [{ type: 'text', text: cleanedText }] : [])
@@ -751,9 +788,7 @@ router.post('/process-text', async (req, res) => {
     const useDeep   = cogTarget?._meta?.deepAnalysis === true
     const model     = useDeep ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001'
 
-    // ═══════════════════════════════════════════════════════════
-    //  ✅ إصلاح: buildClaudeBody لا يُرسل system إذا كان null
-    // ═══════════════════════════════════════════════════════════
+    // ── Claude ────────────────────────────────────────────────
     let claudeData
     let reply             = null
     let inputTokensTotal  = 0
@@ -762,13 +797,12 @@ router.post('/process-text', async (req, res) => {
     try {
       const claudeBody     = buildClaudeBody(model, maxTokens, systemHint, messages)
       const claudeResponse = await fetchClaude(claudeBody)
-
-      claudeData = await claudeResponse.json()
+      claudeData           = await claudeResponse.json()
 
       if (!claudeResponse.ok)
         throw new Error(`Claude error: ${claudeData?.error?.message ?? claudeResponse.status}`)
 
-      // ── معالجة web_search tool_use (multi-turn) ──────────────────
+      // web_search multi-turn
       let toolLoopCount = 0
       while (claudeData?.stop_reason === 'tool_use' && toolLoopCount < 3) {
         toolLoopCount++
@@ -791,12 +825,11 @@ router.post('/process-text', async (req, res) => {
         claudeData     = await loopResp.json()
       }
 
-      // ── استخرج النص النهائي ────────────────────────────────────
       reply = claudeData?.content
         ?.filter(c => c.type === 'text')
         .map(c => c.text)
-        .join('\n')
-        .trim() || null
+        .join('\n').trim() || null
+
       inputTokensTotal  = claudeData?.usage?.input_tokens  ?? 0
       outputTokensTotal = claudeData?.usage?.output_tokens ?? 0
 
@@ -819,24 +852,14 @@ router.post('/process-text', async (req, res) => {
     }
 
     // ── Observer ──────────────────────────────────────────────
-    // لا يعمل في:
-    // 1. السؤال الأول (لا سياق للمقارنة)
-    // 2. الصور
-    // 3. الأسئلة الحوارية القصيرة جداً (≤ 2 كلمة)
-    // 4. إذا لا يوجد vector
-
-    const wordCount     = cleanedText.trim().split(/\s+/).length
-    const isFirstMsg    = (tValue <= 1)
-    const isTooShort    = (wordCount <= 2)
-    const isCodeOnly    = (codeBlocks.length > 0 && wordCount <= 8)
+    const wordCount  = cleanedText.trim().split(/\s+/).length
+    const isFirstMsg = (tValue <= 1)
+    const isTooShort = (wordCount <= 2)
+    const isCodeOnly = (codeBlocks.length > 0 && wordCount <= 8)
 
     let observerBox = null
-    const shouldObserve = reply &&
-      !hasImage &&
-      !isFirstMsg &&
-      !isTooShort &&
-      !isCodeOnly &&
-      questionVector?.length
+    const shouldObserve = reply && !hasImage && !isFirstMsg &&
+      !isTooShort && !isCodeOnly && questionVector?.length
 
     if (shouldObserve) {
       observerBox = observe({
@@ -848,13 +871,30 @@ router.post('/process-text', async (req, res) => {
         lang:           processed.signals?.lang ?? 'en'
       })
 
-      // ── تحويل Observer → Capsule + Anchor ────────────────────
       if (observerBox) {
         storeCapsule(sid, observerBox, lastTopicText, tValue)
         updateAnchors(sid, lastTopicText, questionSimilarity ?? 0.5)
       }
+    }
 
-      // ─── Answer capsule → frontend sends next request ────────────
+    // ══════════════════════════════════════════════════════════
+    //  ① Feedback — CELF يتعلم من رد LLM
+    //  sourceWeight: 0.25 — الرد يؤثر خفيفاً دون drift
+    // ══════════════════════════════════════════════════════════
+    let feedbackApplied   = false
+    let feedbackCoherence = null
+
+    if (reply) {
+      const replyCompressed = compressReplyForFeedback(reply)
+      if (replyCompressed) {
+        try {
+          engine.process(replyCompressed, { sourceWeight: 0.25 })
+          feedbackApplied   = true
+          feedbackCoherence = engine.field?.semanticCoherence ?? null
+        } catch (feedbackErr) {
+          console.warn('[CELF feedback]', feedbackErr.message)
+        }
+      }
     }
 
     // ── Metrics ───────────────────────────────────────────────
@@ -864,17 +904,20 @@ router.post('/process-text', async (req, res) => {
 
     metricsStore.set(sid, {
       sessionId: sid,
-      inputTokens: inputTokensTotal,
+      inputTokens:  inputTokensTotal,
       outputTokens: outputTokensTotal,
-      totalTokens: inputTokensTotal + outputTokensTotal,
+      totalTokens:  inputTokensTotal + outputTokensTotal,
       costUSD, maxTokens, payloadSize,
       routeConfidence:    Math.round(routeConf * 1000) / 1000,
       continuity,
       phase:              processed.celfResult.phase ?? 'warmup',
-      questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null,
+      questionSimilarity: questionSimilarity !== null
+        ? Math.round(questionSimilarity * 100) / 100 : null,
       activeStyle,
       noiseRemoved,
-      updatedAt:          new Date().toISOString()
+      feedbackApplied,
+      feedbackCoherence,
+      updatedAt: new Date().toISOString()
     })
 
     return res.json({
@@ -891,12 +934,23 @@ router.post('/process-text', async (req, res) => {
         capsules:           (capsuleMemory.get(sid) ?? []).length,
         anchors:            (anchorMemory.get(sid)  ?? []).length,
         questionSimilarity: questionSimilarity !== null
-          ? Math.round(questionSimilarity * 100) / 100
-          : null,
+          ? Math.round(questionSimilarity * 100) / 100 : null,
         activeStyle,
         lastTopicText,
         vaultHitUsed:       !!vaultHit?.compressed,
-        hasCapsuleCtx:      !!frontendContext
+        hasCapsuleCtx:      !!frontendContext,
+        // ── جديد v8.0 ─────────────────────────────────────
+        feedbackApplied,
+        feedbackCoherence,
+        capsuleEval: {
+          score:  capsuleEvalResult.score,
+          used:   capsuleEvalResult.used,
+          reason: capsuleEvalResult.reason
+        },
+        miniContext: {
+          tokenEstimate: miniCtxResult.tokenEstimate,
+          layers:        miniCtxResult.layers
+        }
       },
 
       metrics: {
@@ -905,15 +959,19 @@ router.post('/process-text', async (req, res) => {
         totalTokens:        inputTokensTotal + outputTokensTotal,
         costUSD, maxTokens,
         routeConfidence:    Math.round(routeConf * 1000) / 1000,
-        vaultHit:           vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null,
+        vaultHit:           vaultHit
+          ? { score: vaultHit.score, compressed: vaultHit.compressed } : null,
         model,
         inlineCode:         codeBlocks.length > 0,
         payloadSize,
-        questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null,
+        questionSimilarity: questionSimilarity !== null
+          ? Math.round(questionSimilarity * 100) / 100 : null,
         activeStyle,
         styleTtlRemaining:  styleStore.get(sid)?.ttl ?? 0,
         noiseRemoved,
-        truncated:          hasText && text.length > MAX_INPUT_CHARS
+        truncated:          hasText && text.length > MAX_INPUT_CHARS,
+        feedbackApplied,
+        feedbackCoherence
       }
     })
 
