@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
 //  process-text.route.js — v8.0
-//  التغييرات عن v7.2:
+//  التغييرات عن v7.2
 //  ① Feedback      — CELF يتعلم من رد LLM (sourceWeight: 0.25)
 //  ② Retrieval     — CELF يُقيّم capsuleContext قبل إرساله
 //  ③ Mini Context  — CELF يُشكّل systemHint بشكل منظم
