@@ -1,9 +1,9 @@
 // ═══════════════════════════════════════════════════════════════
-//  process-text.route.js — v8.0
-//  التغييرات عن v7.2
+//  process-text.route.js — v8.1
+//  التغييرات عن v7.2:
 //  ① Feedback      — CELF يتعلم من رد LLM (sourceWeight: 0.25)
 //  ② Retrieval     — CELF يُقيّم capsuleContext قبل إرساله
-//  ③ Mini Context  — CELF يُشكّل systemHint  بشكل منظم
+//  ③ Mini Context  — CELF يُشكّل systemHint بشكل منظم
 // ═══════════════════════════════════════════════════════════════
 
 import express from 'express'
@@ -407,6 +407,7 @@ function buildMiniContext({
   }
   if (activeStyle && styleMap[activeStyle]) parts.push(styleMap[activeStyle])
 
+  parts.push('Be concise. Max 3 paragraphs unless code is required.')
   const miniContext = parts.filter(Boolean).join('\n').trim() || null
 
   return {
@@ -502,7 +503,7 @@ function buildHistoryLayer(history, continuity, sid) {
   )
 
   if (continuity >= 0.70) {
-    const msgs = clean.slice(-6)
+    const msgs = clean.slice(-4)
     if (msgs.length < 2) return []
     return msgs.map(h => ({
       role:    h.role,
@@ -513,7 +514,7 @@ function buildHistoryLayer(history, continuity, sid) {
   }
 
   if (continuity >= 0.40) {
-    const msgs = clean.slice(-3)
+    const msgs = clean.slice(-2)
     const compressed = msgs.length >= 2 ? msgs.map(h => ({
       role:    h.role,
       content: h.role === 'assistant'
@@ -536,7 +537,7 @@ function checkPayload(systemHint, messages) {
   return size
 }
 
-async function fetchClaude(body, timeoutMs = 90000) {
+async function fetchClaude(body, timeoutMs = 50000) {
   const controller = new AbortController()
   const timer      = setTimeout(() => controller.abort(), timeoutMs)
   try {
@@ -559,7 +560,7 @@ function buildClaudeBody(model, maxTokens, systemHint, messages) {
   const body = { model, max_tokens: maxTokens, messages }
   if (systemHint && String(systemHint).trim())
     body.system = String(systemHint).trim()
- 
+
   return body
 }
 
@@ -606,7 +607,7 @@ router.get('/process-text', (_req, res) => {
     ok: true, status: 'online',
     engine: 'CELF_Engine_AI_V5',
     llm:    'Claude Haiku 4.5',
-    version: '8.0'
+    version: '8.1'
   })
 })
 
@@ -760,7 +761,7 @@ router.post('/process-text', async (req, res) => {
     })
 
     const systemHint = miniCtxResult.miniContext
-    const maxTokens  = 4096
+    const maxTokens = codeBlocks.length > 0 ? 3000 : 1500
 
     // ── Messages ──────────────────────────────────────────────
     const userContent = hasImage
@@ -802,28 +803,7 @@ router.post('/process-text', async (req, res) => {
       if (!claudeResponse.ok)
         throw new Error(`Claude error: ${claudeData?.error?.message ?? claudeResponse.status}`)
 
-      // web_search multi-turn
-      let toolLoopCount = 0
-      while (claudeData?.stop_reason === 'tool_use' && toolLoopCount < 3) {
-        toolLoopCount++
-        const toolUseBlocks = claudeData.content?.filter(c => c.type === 'tool_use') ?? []
-        if (!toolUseBlocks.length) break
 
-        const toolResults = toolUseBlocks.map(tu => ({
-          type:        'tool_result',
-          tool_use_id: tu.id,
-          content:     []
-        }))
-
-        const loopMessages = [
-          ...claudeBody.messages,
-          { role: 'assistant', content: claudeData.content },
-          { role: 'user',      content: toolResults }
-        ]
-
-        const loopResp = await fetchClaude({ ...claudeBody, messages: loopMessages })
-        claudeData     = await loopResp.json()
-      }
 
       reply = claudeData?.content
         ?.filter(c => c.type === 'text')
