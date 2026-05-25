@@ -657,8 +657,14 @@ export class CELF_Engine_AI_V5 {
       }
     }
     const id = `cap_${this.state.t}_${checksum.slice(0, 6)}`
+    const cleanText = text
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/^(import|export|class|function|const|let|var|async)\s.*/gm, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+      .slice(0, 200) || text.slice(0, 80)
     this.vault.set(id, {
-      id, text: text.slice(0, 200), checksum, vector: perturb.vector.slice(),
+      id, text: cleanText, checksum, vector: perturb.vector.slice(),
       phase: this.state.phase, t: this.state.t, error: feedback.magnitude,
       theta: this._round4(this.field.signature * 1.618033988749895 % this.cycle),
       reinforcement: 0, version: 1
