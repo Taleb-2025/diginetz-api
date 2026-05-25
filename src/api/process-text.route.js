@@ -653,6 +653,20 @@ router.post('/process-text', async (req, res) => {
     }
     const activeStyle = getAndTickStyle(sid)
 
+    // ── استعادة vault من IndexedDB ──────────────────────────
+    const savedVault = req.body.celfVault ?? []
+    if (savedVault.length > 0) {
+      const engine0 = getEngine(sid)
+      for (const cap of savedVault) {
+        if (cap.id && !engine0.vault.has(cap.id)) {
+          engine0.vault.set(cap.id, {
+            ...cap,
+            vector: cap.vector ? new Float32Array(cap.vector) : new Float32Array(64)
+          })
+        }
+      }
+    }
+
     // ── CELF ──────────────────────────────────────────────────
     const processed = feed(sid, inputText)
     if (!processed.ok) return res.status(422).json({ error: processed.reason || 'processing_failed' })
@@ -929,8 +943,21 @@ router.post('/process-text', async (req, res) => {
       updatedAt: new Date().toISOString()
     })
 
+    const vaultToSave = [...getEngine(sid).vault.values()]
+      .slice(-20)
+      .map(c => ({
+        id:            c.id,
+        vector:        Array.from(c.vector ?? []),
+        text:          c.text?.slice(0, 200) ?? '',
+        phase:         c.phase ?? 'warmup',
+        error:         c.error ?? 0,
+        theta:         c.theta ?? 0,
+        reinforcement: c.reinforcement ?? 0
+      }))
+
     return res.json({
       reply,
+      celfVault:    vaultToSave,
       observer: observerBox,
 
       debug: {
