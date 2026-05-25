@@ -863,10 +863,9 @@ router.post('/process-text', async (req, res) => {
     }
 
     // ── Observer ──────────────────────────────────────────────
-    const wordCount  = cleanedText.trim().split(/\s+/).length
     const isFirstMsg = (tValue <= 1)
-    const isTooShort = (wordCount <= 2)
-    const isCodeOnly = (codeBlocks.length > 0 && wordCount <= 8)
+    const isTooShort = (_inputWords <= 2)
+    const isCodeOnly = (codeBlocks.length > 0 && _inputWords <= 8)
 
     let observerBox = null
     const shouldObserve = reply && !hasImage && !isFirstMsg &&
