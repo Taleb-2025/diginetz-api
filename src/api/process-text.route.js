@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  process-text.route.js — v8.1
+//  process-text.route.js — v8.3
 //  التغييرات عن v7.2:
 //  ① Feedback      — CELF يتعلم من رد LLM (sourceWeight: 0.25)
 //  ② Retrieval     — CELF يُقيّم capsuleContext قبل إرساله
@@ -359,6 +359,16 @@ function evaluateCapsuleContext(engine, questionVector, capsuleContext, question
 //  ③ Mini Context — CELF يُشكّل systemHint
 // ══════════════════════════════════════════════════════════════
 
+function isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlocks) {
+  if (codeBlocks.length > 0) return false
+  if (wordCount > 6) return false
+  if (noveltyPressure < 0.65) return false
+  const greetings = /^(salam|salem|hallo|hello|hi|hey|مرحبا|السلام|هاي|اهلا|guten|مرحبأ|مساء|صباح|كيف|wie geht|bonjour)$/i
+  if (greetings.test(cleanedText.trim())) return true
+  if (noveltyPressure > 0.80 && wordCount <= 4) return true
+  return false
+}
+
 function buildStateHint(phase, continuity) {
   if (!phase || phase === 'warmup') return null
   if (phase === 'drift' || continuity < 0.20)
@@ -407,7 +417,6 @@ function buildMiniContext({
   }
   if (activeStyle && styleMap[activeStyle]) parts.push(styleMap[activeStyle])
 
-  parts.push('Be concise. Max 3 paragraphs unless code is required.')
   const miniContext = parts.filter(Boolean).join('\n').trim() || null
 
   return {
@@ -728,12 +737,19 @@ router.post('/process-text', async (req, res) => {
     if (!built.passToLLM && !hasImage) return res.json({ reply: null, skippedLLM: true, reason: 'weak_semantic_field' })
 
     // ══════════════════════════════════════════════════════════
+    //  Standalone Detection — سؤال مستقل لا يحتاج سياقاً
+    // ══════════════════════════════════════════════════════════
+    const wordCount        = cleanedText.trim().split(/\s+/).length
+    const noveltyPressure  = processed.celfResult.field?.noveltyPressure ?? 0
+    const standalone       = isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlocks)
+
+    // ══════════════════════════════════════════════════════════
     //  ② Retrieval — CELF يُقيّم capsuleContext
     // ══════════════════════════════════════════════════════════
     let frontendContext   = null
     let capsuleEvalResult = { score: 0, used: false, reason: 'skipped' }
 
-    if (typeof capsuleContext === 'string' && capsuleContext.length > 0 && questionVector) {
+    if (!standalone && typeof capsuleContext === 'string' && capsuleContext.length > 0 && questionVector) {
       capsuleEvalResult = evaluateCapsuleContext(
         engine,
         questionVector,
@@ -743,7 +759,7 @@ router.post('/process-text', async (req, res) => {
       if (capsuleEvalResult.used) frontendContext = capsuleContext
     }
 
-    const continuity = built.context?.continuity ?? 0
+    const continuity = standalone ? 0 : (built.context?.continuity ?? 0)
 
     // ══════════════════════════════════════════════════════════
     //  ③ Mini Context — CELF يُشكّل systemHint
@@ -760,8 +776,20 @@ router.post('/process-text', async (req, res) => {
       phase: processed.celfResult.phase ?? 'warmup'
     })
 
-    const systemHint = miniCtxResult.miniContext
-    const maxTokens = codeBlocks.length > 0 ? 3000 : 1500
+    const _inputWords = cleanedText.trim().split(/\s+/).length
+    const maxTokens =
+      codeBlocks.length > 0 ? 3000 :
+      _inputWords <= 5       ?  600 :
+      _inputWords <= 15      ? 1200 :
+                               1800
+
+    const conciseHint =
+      codeBlocks.length > 0 ? 'Be thorough with code examples.' :
+      _inputWords <= 5       ? 'Reply in max 2 sentences.' :
+      _inputWords <= 15      ? 'Be concise. Max 2 paragraphs.' :
+                               'Be clear and complete. No unnecessary repetition.'
+
+    const systemHint = [miniCtxResult.miniContext, conciseHint].filter(Boolean).join('\n') || null
 
     // ── Messages ──────────────────────────────────────────────
     const userContent = hasImage
@@ -772,7 +800,7 @@ router.post('/process-text', async (req, res) => {
       : cleanedText
 
     const filteredHistory = filterStyleInstructions(history)
-    const historyMessages = hasImage ? [] : buildHistoryLayer(filteredHistory, continuity, sid)
+    const historyMessages = (hasImage || standalone) ? [] : buildHistoryLayer(filteredHistory, continuity, sid)
     const messages        = [
       ...historyMessages,
       { role: 'user', content: hasImage ? userContent : cleanedText }
@@ -922,6 +950,7 @@ router.post('/process-text', async (req, res) => {
         // ── جديد v8.0 ─────────────────────────────────────
         feedbackApplied,
         feedbackCoherence,
+        standalone,
         capsuleEval: {
           score:  capsuleEvalResult.score,
           used:   capsuleEvalResult.used,
