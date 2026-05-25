@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  process-text.route.js — v8.5
+//  process-text.route.js — v8.6
 //  التغييرات عن v7.2:
 //  ① Feedback      — CELF يتعلم من رد LLM (sourceWeight: 0.25)
 //  ② Retrieval     — CELF يُقيّم capsuleContext قبل إرساله
@@ -546,7 +546,7 @@ function checkPayload(systemHint, messages) {
   return size
 }
 
-async function fetchClaude(body, timeoutMs = 90000) {
+async function fetchClaude(body, timeoutMs = 120000) {
   const controller = new AbortController()
   const timer      = setTimeout(() => controller.abort(), timeoutMs)
   try {
@@ -791,11 +791,17 @@ router.post('/process-text', async (req, res) => {
     })
 
     const _inputWords = cleanedText.trim().split(/\s+/).length
+    const inputEstimate = Math.ceil(
+      (systemHint?.length ?? 0) / 4 +
+      JSON.stringify(messages).length / 4
+    )
+    const remaining = Math.max(1000, 180000 - inputEstimate)
     const maxTokens =
-      codeBlocks.length > 0 ? 3000 :
-      _inputWords <= 5       ?  600 :
-      _inputWords <= 15      ? 1200 :
-                               1800
+      codeBlocks.length > 0
+        ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4)))
+        : _inputWords <= 5  ?  600
+        : _inputWords <= 15 ? 1200
+        :                     1800
 
     const _noMarkdown = codeBlocks.length === 0
       ? ' No markdown. No bullet points. No bold text.' : ''
