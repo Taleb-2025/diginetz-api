@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  process-text.route.js — v8.3
+//  process-text.route.js — v8.4
 //  التغييرات عن v7.2:
 //  ① Feedback      — CELF يتعلم من رد LLM (sourceWeight: 0.25)
 //  ② Retrieval     — CELF يُقيّم capsuleContext قبل إرساله
@@ -783,11 +783,14 @@ router.post('/process-text', async (req, res) => {
       _inputWords <= 15      ? 1200 :
                                1800
 
+    const _noMarkdown = codeBlocks.length === 0
+      ? ' No markdown. No bullet points. No bold text.' : ''
+
     const conciseHint =
       codeBlocks.length > 0 ? 'Be thorough with code examples.' :
-      _inputWords <= 5       ? 'Reply in max 2 sentences.' :
-      _inputWords <= 15      ? 'Be concise. Max 2 paragraphs.' :
-                               'Be clear and complete. No unnecessary repetition.'
+      _inputWords <= 5       ? 'Reply in max 2 sentences.' + _noMarkdown :
+      _inputWords <= 15      ? 'Be concise. Max 2 paragraphs.' + _noMarkdown :
+                               'Be clear and complete.' + _noMarkdown
 
     const systemHint = [miniCtxResult.miniContext, conciseHint].filter(Boolean).join('\n') || null
 
