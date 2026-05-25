@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  process-text.route.js — v8.6
+//  process-text.route.js — v8.7
 //  التغييرات عن v7.2:
 //  ① Feedback      — CELF يتعلم من رد LLM (sourceWeight: 0.25)
 //  ② Retrieval     — CELF يُقيّم capsuleContext قبل إرساله
@@ -793,12 +793,12 @@ router.post('/process-text', async (req, res) => {
     const _inputWords = cleanedText.trim().split(/\s+/).length
 
     const _noMarkdown = codeBlocks.length === 0
-      ? ' No markdown. No bullet points. No bold text.' : ''
+      ? ' No markdown unless necessary. No bullet points. No bold text.' : ''
 
     const conciseHint =
       codeBlocks.length > 0 ? 'Be thorough with code examples.' :
-      _inputWords <= 5       ? 'Reply in max 2 sentences.' + _noMarkdown :
-      _inputWords <= 15      ? 'Be concise. Max 2 paragraphs.' + _noMarkdown :
+      _inputWords <= 5       ? 'Be concise and complete.' + _noMarkdown :
+      _inputWords <= 15      ? 'Answer fully but without repetition.' + _noMarkdown :
                                'Be clear and complete.' + _noMarkdown
 
     const systemHint = [miniCtxResult.miniContext, conciseHint].filter(Boolean).join('\n') || null
@@ -826,9 +826,9 @@ router.post('/process-text', async (req, res) => {
     const maxTokens =
       codeBlocks.length > 0
         ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4)))
-        : _inputWords <= 5  ?  600
-        : _inputWords <= 15 ? 1200
-        :                     1800
+        : _inputWords <= 5  ?  1000
+        : _inputWords <= 15 ? 1800
+        :                     2500
 
     let payloadSize = 0
     try {
