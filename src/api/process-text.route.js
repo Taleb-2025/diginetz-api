@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  process-text.route.js — v8.4
+//  process-text.route.js — v8.5
 //  التغييرات عن v7.2:
 //  ① Feedback      — CELF يتعلم من رد LLM (sourceWeight: 0.25)
 //  ② Retrieval     — CELF يُقيّم capsuleContext قبل إرساله
@@ -546,7 +546,7 @@ function checkPayload(systemHint, messages) {
   return size
 }
 
-async function fetchClaude(body, timeoutMs = 50000) {
+async function fetchClaude(body, timeoutMs = 90000) {
   const controller = new AbortController()
   const timer      = setTimeout(() => controller.abort(), timeoutMs)
   try {
@@ -816,9 +816,7 @@ router.post('/process-text', async (req, res) => {
       return res.status(413).json({ error: 'prompt_too_large', detail: e.message })
     }
 
-    const cogTarget = engine.buildCognitiveTarget?.(cleanedText, structIndex)
-    const useDeep   = cogTarget?._meta?.deepAnalysis === true
-    const model     = useDeep ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001'
+    const model = 'claude-haiku-4-5-20251001'
 
     // ── Claude ────────────────────────────────────────────────
     let claudeData
