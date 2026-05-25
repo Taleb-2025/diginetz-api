@@ -791,17 +791,6 @@ router.post('/process-text', async (req, res) => {
     })
 
     const _inputWords = cleanedText.trim().split(/\s+/).length
-    const inputEstimate = Math.ceil(
-      (systemHint?.length ?? 0) / 4 +
-      JSON.stringify(messages).length / 4
-    )
-    const remaining = Math.max(1000, 180000 - inputEstimate)
-    const maxTokens =
-      codeBlocks.length > 0
-        ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4)))
-        : _inputWords <= 5  ?  600
-        : _inputWords <= 15 ? 1200
-        :                     1800
 
     const _noMarkdown = codeBlocks.length === 0
       ? ' No markdown. No bullet points. No bold text.' : ''
@@ -828,6 +817,18 @@ router.post('/process-text', async (req, res) => {
       ...historyMessages,
       { role: 'user', content: hasImage ? userContent : cleanedText }
     ]
+
+    const inputEstimate = Math.ceil(
+      (systemHint?.length ?? 0) / 4 +
+      JSON.stringify(messages).length / 4
+    )
+    const remaining = Math.max(1000, 180000 - inputEstimate)
+    const maxTokens =
+      codeBlocks.length > 0
+        ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4)))
+        : _inputWords <= 5  ?  600
+        : _inputWords <= 15 ? 1200
+        :                     1800
 
     let payloadSize = 0
     try {
