@@ -335,70 +335,29 @@ function buildFragmentContext(sid, history) {
   return [...buildAnchorContext(sid), { role: 'assistant', content: `[fragment] ${fragment}` }]
 }
 
-
-
-
-
 function buildHistoryLayer(history, continuity, sid, needsRawCode = false) {
   const filtered = filterStyleInstructions(history)
-  const clean = filtered.filter(
-    h =>
-      h &&
-      (h.role === 'user' || h.role === 'assistant') &&
-      typeof h.content === 'string' &&
-      h.content.length > 0
-  )
+  const clean    = filtered.filter(h => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string' && h.content.length > 0)
+
   if (continuity >= 0.70) {
     const msgs = clean.slice(-4)
     if (msgs.length < 2) return []
-    return msgs.map(h => ({
-      role: h.role,
-      content:
-        needsRawCode
-          ? h.content
-          : h.role === 'assistant'
-            ? compressAssistantMessage(h.content)
-            : compressUserMessage(h.content)
-    }))
+    return msgs.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) }))
   }
+
   if (continuity >= 0.40) {
     const msgs = clean.slice(-2)
-    const compressed =
-      msgs.length >= 2
-        ? msgs.map(h => ({
-            role: h.role,
-            content:
-              needsRawCode
-                ? h.content
-                : h.role === 'assistant'
-                  ? compressAssistantMessage(h.content)
-                  : compressUserMessage(h.content)
-          }))
-        : []
-    return [
-      ...compressed,
-      ...buildCapsuleContext(sid)
-    ]
+    const compressed = msgs.length >= 2 ? msgs.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) })) : []
+    return [...compressed, ...buildCapsuleContext(sid)]
   }
-  if (continuity >= 0.20) {
-    return [
-      ...buildCapsuleContext(sid),
-      ...buildAnchorContext(sid)
-    ]
-  }
+
+  if (continuity >= 0.20) return [...buildCapsuleContext(sid), ...buildAnchorContext(sid)]
   return buildFragmentContext(sid, history)
 }
 
-
-
-
-
-
-  
-
 function checkPayload(systemHint, messages) {
   const size = JSON.stringify({ system: systemHint, messages }).length
-  if (size > 80000) throw new Error('prompt_too_large')
+  if (size > 120000) throw new Error('prompt_too_large')
   return size
 }
 
@@ -444,7 +403,7 @@ async function continuationCall(currentText, partialReply, systemHint, timeoutMs
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '9.1' })
+  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '9.2' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -519,44 +478,11 @@ router.post('/process-text', async (req, res) => {
     const wordCount       = cleanedText.trim().split(/\s+/).length
     const noveltyPressure = processed.celfResult.field?.noveltyPressure ?? 0
 
-
-const historyHasCode = (history ?? []).some(
-  h =>
-    h.role === 'user' &&
-    typeof h.content === 'string' &&
-    detectCodeBlocks(h.content).length > 0
-)
-
-const assistantHasCode = (history ?? []).some(
-  h =>
-    h.role === 'assistant' &&
-    typeof h.content === 'string' &&
-    detectCodeBlocks(h.content).length > 0
-)
-
-const hasCodeContext =
-  codeBlocks.length > 0 ||
-  historyHasCode ||
-  assistantHasCode
-
-const technicalIntent =
-  detectTechnicalIntent(cleanedText)
-
-const needsRawCode =
-  hasCodeContext && technicalIntent
-
-const _codeOnlyMsg =
-  codeBlocks.length > 0 &&
-  wordCount <= 4
-    ? 'Analyze this code: identify its purpose, structure, and any issues.'
-    : null
-
-
-
-
-
-
-    
+    const historyHasCode  = (history ?? []).some(h => h.role === 'user' && detectCodeBlocks(h.content).length > 0)
+    const hasCodeContext   = codeBlocks.length > 0 || historyHasCode
+    const needsRawCode     = hasCodeContext && detectTechnicalIntent(cleanedText)
+    const _codeOnlyMsg     = codeBlocks.length > 0 && wordCount <= 4
+      ? 'Analyze this code: identify its purpose, structure, and any issues.' : null
 
     const rawRoute      = engine.routeContext(cleanedText, 5)
     const routeItems    = Array.isArray(rawRoute) ? rawRoute : (rawRoute?.items ?? [])
@@ -591,115 +517,31 @@ const _codeOnlyMsg =
       h.role === 'user' &&
       /error|خطأ|لا يعمل|مشكلة|فشل|يعطي|not working|doesn't work|broken|crash/i.test(h.content)
     )
-
-
-
-
-
     const _reflective = prevCodeFailed && hasCodeContext
-  ? 'Previous attempt had issues. Identify the root cause first, then provide a corrected solution.'
-  : null
+      ? 'Previous attempt had issues. Identify the root cause first, then provide a corrected solution.' : null
 
-const userContent = hasImage
-  ? [
-      {
-        type: 'image',
-        source: {
-          type: 'base64',
-          media_type: imageMimeType,
-          data: image
-        }
-      },
-      ...(hasText
-        ? [{ type: 'text', text: cleanedText }]
-        : [])
-    ]
-  : cleanedText
+    const _tldr = messages.length > 6
+      ? 'Be direct. Avoid restating context already known.' : null
 
-const filteredHistory = filterStyleInstructions(history)
+    const systemHint = [miniCtxResult.miniContext, _codeOnlyMsg, _reflective, _tldr, conciseHint].filter(Boolean).join('\n') || null
 
-const historyMessages =
-  (hasImage || standalone)
-    ? []
-    : buildHistoryLayer(
-        filteredHistory,
-        continuity,
-        sid,
-        needsRawCode
-      )
+    const userContent = hasImage ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: cleanedText }] : [])] : cleanedText
 
-const messages = [
-  ...historyMessages,
-  {
-    role: 'user',
-    content: hasImage
-      ? userContent
-      : cleanedText
-  }
-]
+    const filteredHistory = filterStyleInstructions(history)
+    const historyMessages = (hasImage || standalone) ? [] : buildHistoryLayer(filteredHistory, continuity, sid, needsRawCode)
+    const messages        = [...historyMessages, { role: 'user', content: hasImage ? userContent : cleanedText }]
 
-const _tldr = messages.length > 6
-  ? 'Be direct. Avoid restating context already known.'
-  : null
+    const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
+    const remaining     = Math.max(1000, 180000 - inputEstimate)
+    const maxTokens     = codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
 
-const systemHint = [
-  miniCtxResult.miniContext,
-  _codeOnlyMsg,
-  _reflective,
-  _tldr,
-  conciseHint
-].filter(Boolean).join('\n') || null
+    let payloadSize = 0
+    try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large', detail: e.message }) }
 
-const inputEstimate = Math.ceil(
-  (systemHint?.length ?? 0) / 4 +
-  JSON.stringify(messages).length / 4
-)
+    const model = 'claude-haiku-4-5-20251001'
 
-const remaining = Math.max(
-  1000,
-  180000 - inputEstimate
-)
+    let claudeData, reply = null, inputTokensTotal = 0, outputTokensTotal = 0
 
-const maxTokens =
-  codeBlocks.length > 0
-    ? Math.min(
-        4000,
-        Math.max(
-          1000,
-          Math.floor(remaining * 0.4)
-        )
-      )
-    : _inputWords <= 5
-      ? 1000
-      : _inputWords <= 15
-        ? 1800
-        : 2500
-
-let payloadSize = 0
-
-try {
-  payloadSize = checkPayload(
-    systemHint,
-    messages
-  )
-} catch (e) {
-  return res.status(413).json({
-    error: 'prompt_too_large',
-    detail: e.message
-  })
-}
-
-const model = 'claude-haiku-4-5-20251001'
-
-let claudeData
-let reply = null
-let inputTokensTotal = 0
-let outputTokensTotal = 0
-
-
-
-
-    
     try {
       const claudeBody     = buildClaudeBody(model, maxTokens, systemHint, messages)
       console.log('=== TO LLM ===', JSON.stringify({ system: systemHint, msgCount: messages.length, maxTokens, standalone, needsRawCode, model }, null, 2))
