@@ -335,61 +335,59 @@ function buildFragmentContext(sid, history) {
   return [...buildAnchorContext(sid), { role: 'assistant', content: `[fragment] ${fragment}` }]
 }
 
+
+
+
+
 function buildHistoryLayer(history, continuity, sid, needsRawCode = false) {
   const filtered = filterStyleInstructions(history)
-  const clean    = filtered.filter(h => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string' && h.content.length > 0)
-
-
-
-if (continuity >= 0.70) {
-  const msgs = clean.slice(-4)
-
-  if (msgs.length < 2) return []
-
-  return msgs.map(h => ({
-    role: h.role,
-
-    content:
-      needsRawCode
-        ? h.content
-        : h.role === 'assistant'
-          ? compressAssistantMessage(h.content)
-          : compressUserMessage(h.content)
-  }))
+  const clean = filtered.filter(
+    h =>
+      h &&
+      (h.role === 'user' || h.role === 'assistant') &&
+      typeof h.content === 'string' &&
+      h.content.length > 0
+  )
+  if (continuity >= 0.70) {
+    const msgs = clean.slice(-4)
+    if (msgs.length < 2) return []
+    return msgs.map(h => ({
+      role: h.role,
+      content:
+        needsRawCode
+          ? h.content
+          : h.role === 'assistant'
+            ? compressAssistantMessage(h.content)
+            : compressUserMessage(h.content)
+    }))
+  }
+  if (continuity >= 0.40) {
+    const msgs = clean.slice(-2)
+    const compressed =
+      msgs.length >= 2
+        ? msgs.map(h => ({
+            role: h.role,
+            content:
+              needsRawCode
+                ? h.content
+                : h.role === 'assistant'
+                  ? compressAssistantMessage(h.content)
+                  : compressUserMessage(h.content)
+          }))
+        : []
+    return [
+      ...compressed,
+      ...buildCapsuleContext(sid)
+    ]
+  }
+  if (continuity >= 0.20) {
+    return [
+      ...buildCapsuleContext(sid),
+      ...buildAnchorContext(sid)
+    ]
+  }
+  return buildFragmentContext(sid, history)
 }
-
-if (continuity >= 0.40) {
-  const msgs = clean.slice(-2)
-
-  const compressed =
-    msgs.length >= 2
-      ? msgs.map(h => ({
-          role: h.role,
-
-          content:
-            needsRawCode
-              ? h.content
-              : h.role === 'assistant'
-                ? compressAssistantMessage(h.content)
-                : compressUserMessage(h.content)
-        }))
-      : []
-
-  return [
-    ...compressed,
-    ...buildCapsuleContext(sid)
-  ]
-}
-
-if (continuity >= 0.20) {
-  return [
-    ...buildCapsuleContext(sid),
-    ...buildAnchorContext(sid)
-  ]
-}
-
-return buildFragmentContext(sid, history)
-
 
 
 
