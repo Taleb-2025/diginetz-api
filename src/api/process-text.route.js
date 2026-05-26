@@ -359,6 +359,12 @@ function evaluateCapsuleContext(engine, questionVector, capsuleContext, question
 //  ③ Mini Context — CELF يُشكّل systemHint
 // ══════════════════════════════════════════════════════════════
 
+function detectTechnicalIntent(text, codeBlocks) {
+  if (!codeBlocks.length) return false
+  const intentPattern = /تعديل|إصلاح|حلل|تحليل|أصلح|عدّل|احذف|أضف|استبدل|حسّن|اكتب|أعد|debug|fix|edit|rewrite|refactor|analyze|update|improve|replace|add|remove|correct|review|check/i
+  return intentPattern.test(text)
+}
+
 function isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlocks) {
   if (codeBlocks.length > 0) return false
   if (wordCount > 6) return false
@@ -622,7 +628,7 @@ router.get('/process-text', (_req, res) => {
     ok: true, status: 'online',
     engine: 'CELF_Engine_AI_V5',
     llm:    'Claude Haiku 4.5',
-    version: '8.1'
+    version: '8.8'
   })
 })
 
@@ -753,6 +759,8 @@ router.post('/process-text', async (req, res) => {
     const vaultHit      = Array.isArray(rawRoute) ? null : (rawRoute?.vaultHit ?? null)
     const routedContext = enrichRouteContext(routeItems, sid)
     const routeConf     = calcRouteConfidence(routedContext)
+
+    const needsRawCode = detectTechnicalIntent(cleanedText, codeBlocks)
 
     // ── Build Frame ───────────────────────────────────────────
     const built = build({
