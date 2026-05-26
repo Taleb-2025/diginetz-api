@@ -517,31 +517,115 @@ router.post('/process-text', async (req, res) => {
       h.role === 'user' &&
       /error|خطأ|لا يعمل|مشكلة|فشل|يعطي|not working|doesn't work|broken|crash/i.test(h.content)
     )
+
+
+
+
+
     const _reflective = prevCodeFailed && hasCodeContext
-      ? 'Previous attempt had issues. Identify the root cause first, then provide a corrected solution.' : null
+  ? 'Previous attempt had issues. Identify the root cause first, then provide a corrected solution.'
+  : null
 
-    const _tldr = messages.length > 6
-      ? 'Be direct. Avoid restating context already known.' : null
+const userContent = hasImage
+  ? [
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: imageMimeType,
+          data: image
+        }
+      },
+      ...(hasText
+        ? [{ type: 'text', text: cleanedText }]
+        : [])
+    ]
+  : cleanedText
 
-    const systemHint = [miniCtxResult.miniContext, _codeOnlyMsg, _reflective, _tldr, conciseHint].filter(Boolean).join('\n') || null
+const filteredHistory = filterStyleInstructions(history)
 
-    const userContent = hasImage ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: cleanedText }] : [])] : cleanedText
+const historyMessages =
+  (hasImage || standalone)
+    ? []
+    : buildHistoryLayer(
+        filteredHistory,
+        continuity,
+        sid,
+        needsRawCode
+      )
 
-    const filteredHistory = filterStyleInstructions(history)
-    const historyMessages = (hasImage || standalone) ? [] : buildHistoryLayer(filteredHistory, continuity, sid, needsRawCode)
-    const messages        = [...historyMessages, { role: 'user', content: hasImage ? userContent : cleanedText }]
+const messages = [
+  ...historyMessages,
+  {
+    role: 'user',
+    content: hasImage
+      ? userContent
+      : cleanedText
+  }
+]
 
-    const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
-    const remaining     = Math.max(1000, 180000 - inputEstimate)
-    const maxTokens     = codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
+const _tldr = messages.length > 6
+  ? 'Be direct. Avoid restating context already known.'
+  : null
 
-    let payloadSize = 0
-    try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large', detail: e.message }) }
+const systemHint = [
+  miniCtxResult.miniContext,
+  _codeOnlyMsg,
+  _reflective,
+  _tldr,
+  conciseHint
+].filter(Boolean).join('\n') || null
 
-    const model = 'claude-haiku-4-5-20251001'
+const inputEstimate = Math.ceil(
+  (systemHint?.length ?? 0) / 4 +
+  JSON.stringify(messages).length / 4
+)
 
-    let claudeData, reply = null, inputTokensTotal = 0, outputTokensTotal = 0
+const remaining = Math.max(
+  1000,
+  180000 - inputEstimate
+)
 
+const maxTokens =
+  codeBlocks.length > 0
+    ? Math.min(
+        4000,
+        Math.max(
+          1000,
+          Math.floor(remaining * 0.4)
+        )
+      )
+    : _inputWords <= 5
+      ? 1000
+      : _inputWords <= 15
+        ? 1800
+        : 2500
+
+let payloadSize = 0
+
+try {
+  payloadSize = checkPayload(
+    systemHint,
+    messages
+  )
+} catch (e) {
+  return res.status(413).json({
+    error: 'prompt_too_large',
+    detail: e.message
+  })
+}
+
+const model = 'claude-haiku-4-5-20251001'
+
+let claudeData
+let reply = null
+let inputTokensTotal = 0
+let outputTokensTotal = 0
+
+
+
+
+    
     try {
       const claudeBody     = buildClaudeBody(model, maxTokens, systemHint, messages)
       console.log('=== TO LLM ===', JSON.stringify({ system: systemHint, msgCount: messages.length, maxTokens, standalone, needsRawCode, model }, null, 2))
