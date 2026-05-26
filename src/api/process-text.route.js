@@ -339,21 +339,64 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false) {
   const filtered = filterStyleInstructions(history)
   const clean    = filtered.filter(h => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string' && h.content.length > 0)
 
-  if (continuity >= 0.70) {
-    const msgs = clean.slice(-4)
-    if (msgs.length < 2) return []
-    return msgs.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) }))
-  }
 
-  if (continuity >= 0.40) {
-    const msgs = clean.slice(-2)
-    const compressed = msgs.length >= 2 ? msgs.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) })) : []
-    return [...compressed, ...buildCapsuleContext(sid)]
-  }
 
-  if (continuity >= 0.20) return [...buildCapsuleContext(sid), ...buildAnchorContext(sid)]
-  return buildFragmentContext(sid, history)
+if (continuity >= 0.70) {
+  const msgs = clean.slice(-4)
+
+  if (msgs.length < 2) return []
+
+  return msgs.map(h => ({
+    role: h.role,
+
+    content:
+      needsRawCode
+        ? h.content
+        : h.role === 'assistant'
+          ? compressAssistantMessage(h.content)
+          : compressUserMessage(h.content)
+  }))
 }
+
+if (continuity >= 0.40) {
+  const msgs = clean.slice(-2)
+
+  const compressed =
+    msgs.length >= 2
+      ? msgs.map(h => ({
+          role: h.role,
+
+          content:
+            needsRawCode
+              ? h.content
+              : h.role === 'assistant'
+                ? compressAssistantMessage(h.content)
+                : compressUserMessage(h.content)
+        }))
+      : []
+
+  return [
+    ...compressed,
+    ...buildCapsuleContext(sid)
+  ]
+}
+
+if (continuity >= 0.20) {
+  return [
+    ...buildCapsuleContext(sid),
+    ...buildAnchorContext(sid)
+  ]
+}
+
+return buildFragmentContext(sid, history)
+
+
+
+
+
+
+
+  
 
 function checkPayload(systemHint, messages) {
   const size = JSON.stringify({ system: systemHint, messages }).length
@@ -478,11 +521,44 @@ router.post('/process-text', async (req, res) => {
     const wordCount       = cleanedText.trim().split(/\s+/).length
     const noveltyPressure = processed.celfResult.field?.noveltyPressure ?? 0
 
-    const historyHasCode  = (history ?? []).some(h => h.role === 'user' && detectCodeBlocks(h.content).length > 0)
-    const hasCodeContext   = codeBlocks.length > 0 || historyHasCode
-    const needsRawCode     = hasCodeContext && detectTechnicalIntent(cleanedText)
-    const _codeOnlyMsg     = codeBlocks.length > 0 && wordCount <= 4
-      ? 'Analyze this code: identify its purpose, structure, and any issues.' : null
+
+const historyHasCode = (history ?? []).some(
+  h =>
+    h.role === 'user' &&
+    typeof h.content === 'string' &&
+    detectCodeBlocks(h.content).length > 0
+)
+
+const assistantHasCode = (history ?? []).some(
+  h =>
+    h.role === 'assistant' &&
+    typeof h.content === 'string' &&
+    detectCodeBlocks(h.content).length > 0
+)
+
+const hasCodeContext =
+  codeBlocks.length > 0 ||
+  historyHasCode ||
+  assistantHasCode
+
+const technicalIntent =
+  detectTechnicalIntent(cleanedText)
+
+const needsRawCode =
+  hasCodeContext && technicalIntent
+
+const _codeOnlyMsg =
+  codeBlocks.length > 0 &&
+  wordCount <= 4
+    ? 'Analyze this code: identify its purpose, structure, and any issues.'
+    : null
+
+
+
+
+
+
+    
 
     const rawRoute      = engine.routeContext(cleanedText, 5)
     const routeItems    = Array.isArray(rawRoute) ? rawRoute : (rawRoute?.items ?? [])
