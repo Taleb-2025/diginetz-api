@@ -747,6 +747,9 @@ router.post('/process-text', async (req, res) => {
     // ── needsRawCode — هل يحتاج الكود الخام؟ ──────────────────
     const needsRawCode = detectTechnicalIntent(cleanedText, codeBlocks)
 
+    const _codeOnlyMsg = codeBlocks.length > 0 && wordCount <= 4
+      ? 'Analyze this code: identify its purpose, structure, and any issues.' : null
+
     // ── Route Context ─────────────────────────────────────────
     const rawRoute      = engine.routeContext(cleanedText, 5)
     const routeItems    = Array.isArray(rawRoute) ? rawRoute : (rawRoute?.items ?? [])
@@ -821,7 +824,7 @@ router.post('/process-text', async (req, res) => {
       _inputWords <= 15      ? 'Answer fully but without repetition.' + _noMarkdown :
                                'Be clear and complete.' + _noMarkdown
 
-    const systemHint = [miniCtxResult.miniContext, conciseHint].filter(Boolean).join('\n') || null
+    const systemHint = [miniCtxResult.miniContext, _codeOnlyMsg, conciseHint].filter(Boolean).join('\n') || null
 
     // ── Messages ──────────────────────────────────────────────
     const userContent = hasImage
