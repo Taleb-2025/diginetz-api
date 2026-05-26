@@ -520,16 +520,19 @@ router.post('/process-text', async (req, res) => {
     const _reflective = prevCodeFailed && hasCodeContext
       ? 'Previous attempt had issues. Identify the root cause first, then provide a corrected solution.' : null
 
-    const _tldr = messages.length > 6
-      ? 'Be direct. Avoid restating context already known.' : null
-
-    const systemHint = [miniCtxResult.miniContext, _codeOnlyMsg, _reflective, _tldr, conciseHint].filter(Boolean).join('\n') || null
-
+    
     const userContent = hasImage ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: cleanedText }] : [])] : cleanedText
 
     const filteredHistory = filterStyleInstructions(history)
     const historyMessages = (hasImage || standalone) ? [] : buildHistoryLayer(filteredHistory, continuity, sid, needsRawCode)
     const messages        = [...historyMessages, { role: 'user', content: hasImage ? userContent : cleanedText }]
+
+    const _tldr = messages.length > 6
+      ? 'Be direct. Avoid restating context already known.'
+      : null
+
+    const systemHint = [miniCtxResult.miniContext, _codeOnlyMsg, _reflective, _tldr, conciseHint].filter(Boolean).join('\n') || null
+
 
     const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
     const remaining     = Math.max(1000, 180000 - inputEstimate)
