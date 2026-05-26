@@ -207,6 +207,46 @@ export class CELF_Engine_AI_V5 {
       h3 = Math.abs(hh3 >>> 0)
     }
 
+    const SYNONYMS = {
+      'أصلح':'fix','إصلاح':'fix','اصلح':'fix',
+      'عدّل':'edit','عدل':'edit','تعديل':'edit','تعديلات':'edit',
+      'حلل':'analyze','تحليل':'analyze','analyze':'analyze',
+      'أنشئ':'create','انشئ':'create','ابنِ':'build',
+      'اكتب':'write','كتابة':'write',
+      'احذف':'delete','حذف':'delete','ازل':'remove','إزالة':'remove',
+      'أضف':'add','إضافة':'add','أضف':'add',
+      'استبدل':'replace','استبدال':'replace',
+      'حسّن':'improve','تحسين':'improve','طوّر':'improve',
+      'خطأ':'error','أخطاء':'error','مشكلة':'bug','مشاكل':'bug',
+      'فشل':'fail','فشلت':'fail',
+      'شرح':'explain','اشرح':'explain','وضّح':'explain','توضيح':'explain',
+      'ابحث':'search','بحث':'search',
+      'صمم':'design','تصميم':'design',
+      'اختبر':'test','اختبار':'test',
+      'نفّذ':'execute','تنفيذ':'execute',
+      'دمج':'merge','ادمج':'merge',
+      'حوّل':'convert','تحويل':'convert',
+      'رتّب':'sort','ترتيب':'sort',
+      'فلتر':'filter','تصفية':'filter',
+      'قسّم':'split','تقسيم':'split',
+      'دالة':'function','كلاس':'class','صنف':'class',
+      'متغير':'variable','ثابت':'constant',
+      'حلقة':'loop','شرط':'condition',
+      'مصفوفة':'array','قائمة':'list','كائن':'object',
+      'واجهة':'interface','نوع':'type',
+      'استيراد':'import','تصدير':'export',
+      'خادم':'server','عميل':'client','قاعدة':'database',
+      'warum':'why','wie':'how','was':'what','wer':'who','wo':'where',
+      'erstellen':'create','löschen':'delete','ändern':'edit',
+      'reparieren':'fix','analysieren':'analyze','erklären':'explain',
+      'verbessern':'improve','hinzufügen':'add','entfernen':'remove',
+      'suchen':'search','testen':'test','schreiben':'write',
+      'fehler':'error','problem':'bug','lösung':'fix',
+      'funktion':'function','klasse':'class','variable':'variable',
+      'schleife':'loop','bedingung':'condition','objekt':'object',
+      'server':'server','datenbank':'database','import':'import',
+    }
+
     const _hash = (s) => {
       let fh = 2166136261
       for (let i = 0; i < s.length; i++) { fh ^= s.charCodeAt(i); fh = Math.imul(fh, 16777619) }
@@ -225,22 +265,26 @@ export class CELF_Engine_AI_V5 {
     ])
 
     for (let i = 0; i < tokens.length; i++) {
-      const tok = tokens[i]
+      const tok        = tokens[i]
+      const normalized = SYNONYMS[tok.toLowerCase()] || tok
       const posW = 1.0 / Math.sqrt(i + 1)
-      const idfW = IDF_BOOST.has(tok) ? 1.8 : 1.0
+      const idfW = IDF_BOOST.has(tok) || IDF_BOOST.has(normalized) ? 1.8 : 1.0
       const w    = posW * idfW
 
-      _place(_hash(tok), w * 0.20)
+      _place(_hash(normalized), w * 0.20)
+      if (normalized !== tok) _place(_hash(tok), w * 0.07)
 
-      if (i + 1 < tokens.length)
-        _place(_hash(tok + '|' + tokens[i + 1]), w * 0.45)
+      const nxt  = i + 1 < tokens.length ? (SYNONYMS[tokens[i+1].toLowerCase()] || tokens[i+1]) : null
+      const nxt2 = i + 2 < tokens.length ? (SYNONYMS[tokens[i+2].toLowerCase()] || tokens[i+2]) : null
 
-      if (i + 2 < tokens.length)
-        _place(_hash(tok + '|' + tokens[i + 1] + '|' + tokens[i + 2]), w * 0.38)
+      if (nxt)
+        _place(_hash(normalized + '|' + nxt), w * 0.45)
 
-      if (tok.length > 4) {
+      if (nxt && nxt2)
+        _place(_hash(normalized + '|' + nxt + '|' + nxt2), w * 0.38)
+
+      if (tok.length > 4)
         _place(_hash(tok.slice(0, Math.ceil(tok.length * 0.6))), w * 0.12)
-      }
     }
 
     const CODE_SIGNALS = [
