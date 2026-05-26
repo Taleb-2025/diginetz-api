@@ -1,11 +1,3 @@
-// ═══════════════════════════════════════════════════════════════
-//  process-text.route.js — v8.8
-//  التغييرات عن v7.2:
-//  ① Feedback      — CELF يتعلم من رد LLM (sourceWeight: 0.25)
-//  ② Retrieval     — CELF يُقيّم capsuleContext قبل إرساله
-//  ③ Mini Context  — CELF يُشكّل systemHint بشكل منظم
-// ═══════════════════════════════════════════════════════════════
-
 import express from 'express'
 import { CELF_Engine_AI_V5 } from '../engines/celf-engine-v5.js'
 import { parse }             from '../utils/lightweight-parser.js'
@@ -41,11 +33,7 @@ const FILLERS = new Set([
   'هل','في','من','على','مع','هو','هي','كان','لا','أو','و','ما','هذا','ذلك'
 ])
 
-// ── Style TTL ────────────────────────────────────────────────────
-
-function setStyle(sid, style, ttl) {
-  styleStore.set(sid, { style, ttl })
-}
+function setStyle(sid, style, ttl) { styleStore.set(sid, { style, ttl }) }
 
 function getAndTickStyle(sid) {
   const entry = styleStore.get(sid)
@@ -55,15 +43,10 @@ function getAndTickStyle(sid) {
   return entry.style
 }
 
-// ── أدوات مساعدة ────────────────────────────────────────────────
-
 function semanticHash(text) {
   const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 200)
   let h = 2166136261
-  for (let i = 0; i < normalized.length; i++) {
-    h ^= normalized.charCodeAt(i)
-    h  = Math.imul(h, 16777619)
-  }
+  for (let i = 0; i < normalized.length; i++) { h ^= normalized.charCodeAt(i); h = Math.imul(h, 16777619) }
   return (Math.abs(h >>> 0)).toString(36)
 }
 
@@ -79,48 +62,36 @@ function jaccardSimilarity(textA, textB) {
   if (!setA.size || !setB.size) return 0
   let overlap = 0
   for (const w of setA) if (setB.has(w)) overlap++
-  return (setA.size + setB.size - overlap) > 0
-    ? overlap / (setA.size + setB.size - overlap) : 0
+  return (setA.size + setB.size - overlap) > 0 ? overlap / (setA.size + setB.size - overlap) : 0
 }
 
 function detectCodeBlocks(text) {
   const blocks = []
   const fenced = /```(?:js|javascript|ts|typescript|jsx|tsx)?\s*\n([\s\S]*?)```/gi
   let match
-  while ((match = fenced.exec(text)) !== null) {
-    const code = match[1].trim()
-    if (code.length > 30) blocks.push(code)
-  }
+  while ((match = fenced.exec(text)) !== null) { const code = match[1].trim(); if (code.length > 30) blocks.push(code) }
   if (blocks.length === 0) {
     const codeSignals = [
       /^(import|export|const|let|var|function|class|async)\s/m,
       /=>\s*\{/, /\bthis\.\w+\s*=/, /^\s{2,}(const|let|var|return|if|for)\s/m
     ]
-    if (codeSignals.filter(p => p.test(text)).length >= 2 &&
-        text.length > 50 && text.length < 20000)
-      blocks.push(text)
+    if (codeSignals.filter(p => p.test(text)).length >= 2 && text.length > 50 && text.length < 20000) blocks.push(text)
   }
   return blocks
 }
 
 function getEngine(sessionId) {
   if (sessions.has(sessionId)) {
-    const e = sessions.get(sessionId)
-    sessions.delete(sessionId)
-    sessions.set(sessionId, e)
-    return e
+    const e = sessions.get(sessionId); sessions.delete(sessionId); sessions.set(sessionId, e); return e
   }
   if (sessions.size >= MAX_SESSIONS) {
     const oldest = sessions.keys().next().value
-    sessions.delete(oldest)
-    semanticTextMaps.delete(oldest)
-    styleStore.delete(oldest)
+    sessions.delete(oldest); semanticTextMaps.delete(oldest); styleStore.delete(oldest)
   }
   const engine = new CELF_Engine_AI_V5({
     resolution: 120, ringCount: 3, cycle: 360,
     diffusionRate: 0.08, constraintRate: 0.12,
-    attractorLimit: 8, historyLimit: 128,
-    archiveLimit: 128, semanticMemoryLimit: 96
+    attractorLimit: 8, historyLimit: 128, archiveLimit: 128, semanticMemoryLimit: 96
   })
   sessions.set(sessionId, engine)
   return engine
@@ -129,54 +100,40 @@ function getEngine(sessionId) {
 function mapIntent(snapshot) {
   const s = snapshot?.perturbation?.semantic
   if (!s) return 'statement'
-  if (s.question)        return 'question'
+  if (s.question) return 'question'
   if (s.intent?.execute) return 'command'
-  if (s.error)           return 'complaint'
-  if (s.emotional)       return 'emotional'
+  if (s.error) return 'complaint'
+  if (s.emotional) return 'emotional'
   return 'statement'
 }
 
 function feed(sessionId, text) {
   const signals = parse(text)
   if (!signals.valid) return { ok: false, reason: signals.reason ?? 'invalid_signals' }
-
   const engine   = getEngine(sessionId)
   const snapshot = engine.process(text)
-
   const field        = snapshot.field        ?? {}
   const metrics      = snapshot.metrics      ?? {}
   const control      = snapshot.control      ?? {}
   const perturbation = snapshot.perturbation ?? {}
   const attractors   = snapshot.attractors   ?? []
-
   const coherence  = Number(field.coherence        ?? 0)
   const resonance  = Number(field.resonance         ?? 0)
   const confidence = Number(field.semanticGrounding ?? 0)
   const intent     = mapIntent(snapshot)
-
-  const passToLLM =
-    coherence  > 0.15 || resonance > 0.20 ||
-    intent === 'greeting' || intent === 'emotional' ||
-    confidence < 0.4
-
-  return {
-    ok: true, passToLLM, signals,
-    result: snapshot,
-    celfResult: { phase: snapshot.phase, t: snapshot.t, field, metrics, control, perturbation, attractors }
-  }
+  const passToLLM  = coherence > 0.15 || resonance > 0.20 || intent === 'greeting' || intent === 'emotional' || confidence < 0.4
+  return { ok: true, passToLLM, signals, result: snapshot, celfResult: { phase: snapshot.phase, t: snapshot.t, field, metrics, control, perturbation, attractors } }
 }
 
 function storeSemanticEntry(sid, t, text) {
   const map        = semanticTextMaps.get(sid) ?? new Map()
   const compressed = semanticCompress(text, 15)
   if (!compressed) return
-
   const hash = semanticHash(compressed)
   for (const [, entry] of map) {
     if (entry.hash === hash) return
     if (jaccardSimilarity(entry.text, compressed) >= DEDUP_JACCARD_THRESHOLD) return
   }
-
   map.set(t, { hash, text: compressed })
   if (map.size > MAX_TEXT_MAP) map.delete(map.keys().next().value)
   semanticTextMaps.set(sid, map)
@@ -184,10 +141,7 @@ function storeSemanticEntry(sid, t, text) {
 
 function enrichRouteContext(rawRoute, sid) {
   const map = semanticTextMaps.get(sid) ?? new Map()
-  return rawRoute.map(item => ({
-    ...item,
-    text: map.get(item.t)?.text ?? ''
-  }))
+  return rawRoute.map(item => ({ ...item, text: map.get(item.t)?.text ?? '' }))
 }
 
 function calcRouteConfidence(routedContext) {
@@ -202,10 +156,8 @@ function decayChangedCapsules(engine, changedNodeIds, structIndex) {
   for (const nodeId of changedNodeIds) {
     const node = structIndex.nodes.get(nodeId)
     if (!node?.vaultCapsuleId) continue
-    const capsule = engine.vault?.get?.(node.vaultCapsuleId)
-      ?? engine.getActiveCapsules?.().find(c => c.id === node.vaultCapsuleId)
-    if (capsule && typeof capsule.weight === 'number')
-      capsule.weight = Math.max(0, capsule.weight * 0.25)
+    const capsule = engine.vault?.get?.(node.vaultCapsuleId) ?? engine.getActiveCapsules?.().find(c => c.id === node.vaultCapsuleId)
+    if (capsule && typeof capsule.weight === 'number') capsule.weight = Math.max(0, capsule.weight * 0.25)
     node.vaultCapsuleId = null
     structIndex.capsuleLinks.delete(nodeId)
   }
@@ -224,24 +176,11 @@ function buildCodeHint(structIndex) {
   if (!structIndex) return null
   const nodes = [...structIndex.nodes.values()]
   if (!nodes.length) return null
-
-  const classes  = nodes.filter(n => n.type === 'class').map(n => n.symbol)
-  const methods  = nodes.filter(n => n.type === 'method' || n.type === 'function')
-    .sort((a, b) => (b.usedBy?.length ?? 0) - (a.usedBy?.length ?? 0))
-    .slice(0, 6).map(n => n.symbol)
-  const extDeps  = [...new Set(nodes.flatMap(n => n.imports ?? []).filter(i => !i.startsWith('.')))].slice(0, 4)
-  const callChain = nodes.filter(n => n.calls?.length > 0)
-    .sort((a, b) => (b.usedBy?.length ?? 0) - (a.usedBy?.length ?? 0))
-    .slice(0, 3).map(n => `${n.symbol} → ${n.calls.slice(0,2).join(', ')}`)
-
-  return [
-    '[code structure]',
-    classes.length    ? `class: ${classes.join(', ')}`    : null,
-    methods.length    ? `methods: ${methods.join(', ')}`   : null,
-    extDeps.length    ? `external: ${extDeps.join(', ')}`  : null,
-    callChain.length  ? `flow: ${callChain.join(' | ')}`   : null,
-    'analyze: practical usage and risks — not philosophy'
-  ].filter(Boolean).join('\n')
+  const classes   = nodes.filter(n => n.type === 'class').map(n => n.symbol)
+  const methods   = nodes.filter(n => n.type === 'method' || n.type === 'function').sort((a, b) => (b.usedBy?.length ?? 0) - (a.usedBy?.length ?? 0)).slice(0, 6).map(n => n.symbol)
+  const extDeps   = [...new Set(nodes.flatMap(n => n.imports ?? []).filter(i => !i.startsWith('.')))].slice(0, 4)
+  const callChain = nodes.filter(n => n.calls?.length > 0).sort((a, b) => (b.usedBy?.length ?? 0) - (a.usedBy?.length ?? 0)).slice(0, 3).map(n => `${n.symbol} → ${n.calls.slice(0,2).join(', ')}`)
+  return ['[code structure]', classes.length ? `class: ${classes.join(', ')}` : null, methods.length ? `methods: ${methods.join(', ')}` : null, extDeps.length ? `external: ${extDeps.join(', ')}` : null, callChain.length ? `flow: ${callChain.join(' | ')}` : null, 'analyze: practical usage and risks — not philosophy'].filter(Boolean).join('\n')
 }
 
 function extractCodePurpose(lang, surroundingText, codeContent) {
@@ -253,8 +192,8 @@ function extractCodePurpose(lang, surroundingText, codeContent) {
   const funcNames    = declarations.slice(0, 2).map(d => d.split(/\s+/).at(-1))
   const parts = []
   if (lang && lang !== 'code') parts.push(lang)
-  if (foundTech.length)        parts.push(foundTech.join('+'))
-  if (foundConcept)            parts.push(foundConcept)
+  if (foundTech.length) parts.push(foundTech.join('+'))
+  if (foundConcept) parts.push(foundConcept)
   if (funcNames.length && !foundTech.length) parts.push(funcNames.join(','))
   return parts.length > 1 ? `[${parts.join(': ')}]` : `[${lang || 'code'} implementation]`
 }
@@ -262,9 +201,7 @@ function extractCodePurpose(lang, surroundingText, codeContent) {
 function compressAssistantMessage(content) {
   if (typeof content !== 'string') return content
   const codeBlockPattern = /```(\w*)\n?([\s\S]*?)```/g
-  const parts   = []
-  let lastIndex = 0
-  let match
+  const parts = []; let lastIndex = 0; let match
   codeBlockPattern.lastIndex = 0
   while ((match = codeBlockPattern.exec(content)) !== null) {
     const textBefore  = content.slice(lastIndex, match.index)
@@ -284,83 +221,38 @@ function compressAssistantMessage(content) {
 
 function compressUserMessage(content) {
   if (typeof content !== 'string') return content.slice(0, 400)
-  const hasCode = /```[\s\S]*?```/.test(content) ||
-                  /export\s+class\s+\w+/.test(content) ||
-                  /function\s+\w+\s*\(/.test(content)
+  const hasCode = /```[\s\S]*?```/.test(content) || /export\s+class\s+\w+/.test(content) || /function\s+\w+\s*\(/.test(content)
   if (!hasCode) return content.slice(0, 400)
-  const withoutCode = content
-    .replace(/```[\s\S]*?```/g, '[code attached]')
-    .replace(/export\s+(class|function|const|default)\s+[\s\S]{0,50}/g, '[code attached]')
-    .replace(/\s{2,}/g, ' ').trim()
+  const withoutCode = content.replace(/```[\s\S]*?```/g, '[code attached]').replace(/export\s+(class|function|const|default)\s+[\s\S]{0,50}/g, '[code attached]').replace(/\s{2,}/g, ' ').trim()
   return withoutCode.slice(0, 300) || '[code message]'
 }
 
-// ══════════════════════════════════════════════════════════════
-//  ① Feedback — CELF يتعلم من رد LLM
-// ══════════════════════════════════════════════════════════════
-
 function compressReplyForFeedback(reply) {
   if (!reply || typeof reply !== 'string') return null
-  return reply
-    .replace(/```[\s\S]*?```/g, '[code]')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-    .slice(0, 400)
+  return reply.replace(/```[\s\S]*?```/g, '[code]').replace(/\n{3,}/g, '\n\n').trim().slice(0, 400)
 }
 
-// ══════════════════════════════════════════════════════════════
-//  ② Retrieval — CELF يُقيّم capsuleContext
-// ══════════════════════════════════════════════════════════════
-
 function evaluateCapsuleContext(engine, questionVector, capsuleContext, questionText) {
-  if (!capsuleContext || !questionVector?.length)
-    return { score: 0, used: false, reason: 'no_context' }
-
+  if (!capsuleContext || !questionVector?.length) return { score: 0, used: false, reason: 'no_context' }
   const capsuleVector = engine.semanticVector?.(capsuleContext)
-  if (!capsuleVector?.length)
-    return { score: 0, used: false, reason: 'no_vector' }
-
+  if (!capsuleVector?.length) return { score: 0, used: false, reason: 'no_vector' }
   const semanticScore = engine.cosineSimilarity(questionVector, capsuleVector)
-
-  const tokenize = t => t.toLowerCase()
-    .replace(/[،,.:;!?()[\]{}<>"']/g, ' ')
-    .split(/\s+/).filter(w => w.length > 3)
-
+  const tokenize = t => t.toLowerCase().replace(/[،,.:;!?()[\]{}<>"']/g, ' ').split(/\s+/).filter(w => w.length > 3)
   const qTokens      = new Set(tokenize(questionText))
   const lexicalMatch = tokenize(capsuleContext).filter(w => qTokens.has(w)).length
   const lexicalBonus = Math.min(0.20, lexicalMatch * 0.07)
-
-  const questionHasCode = /كود|error|function|class|fix|bug|خطأ|برمج|api|express|react|vue|angular|javascript|typescript/i
-    .test(questionText)
-  const capsuleHasCode = /function|class|error|const|let|var|=>|import|export|express|react|vue|angular|app\.|get\(|post\(/i
-    .test(capsuleContext)
+  const questionHasCode = /كود|error|function|class|fix|bug|خطأ|برمج|api|express|react|vue|angular|javascript|typescript/i.test(questionText)
+  const capsuleHasCode  = /function|class|error|const|let|var|=>|import|export|express|react|vue|angular|app\.|get\(|post\(/i.test(capsuleContext)
   const codeBonus = (questionHasCode && capsuleHasCode) ? 0.20 : 0
-
   const hasAnySignal = lexicalMatch > 0 || codeBonus > 0 || semanticScore >= 0.45
-  if (!hasAnySignal)
-    return { score: semanticScore, used: false, reason: 'no_signal' }
-
+  if (!hasAnySignal) return { score: semanticScore, used: false, reason: 'no_signal' }
   const finalScore = Math.min(1, semanticScore + codeBonus + lexicalBonus)
   const threshold  = questionHasCode ? 0.18 : 0.28
   const used       = finalScore >= threshold
-
-  return {
-    score:         Math.round(finalScore * 1000) / 1000,
-    semanticScore: Math.round(semanticScore * 1000) / 1000,
-    codeBonus,
-    lexicalBonus:  Math.round(lexicalBonus * 1000) / 1000,
-    used,
-    threshold,
-    reason: used ? 'relevant' : `below_threshold_${threshold}`
-  }
+  return { score: Math.round(finalScore * 1000) / 1000, semanticScore: Math.round(semanticScore * 1000) / 1000, codeBonus, lexicalBonus: Math.round(lexicalBonus * 1000) / 1000, used, threshold, reason: used ? 'relevant' : `below_threshold_${threshold}` }
 }
 
-// ══════════════════════════════════════════════════════════════
-//  ③ Mini Context — CELF يُشكّل systemHint
-// ══════════════════════════════════════════════════════════════
-
-function detectTechnicalIntent(text, codeBlocks) {
-  if (!codeBlocks.length) return false
+function detectTechnicalIntent(text) {
   const intentPattern = /تعديل|إصلاح|حلل|تحليل|أصلح|عدّل|احذف|أضف|استبدل|حسّن|اكتب|أعد|debug|fix|edit|rewrite|refactor|analyze|update|improve|replace|add|remove|correct|review|check/i
   return intentPattern.test(text)
 }
@@ -377,71 +269,26 @@ function isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlock
 
 function buildStateHint(phase, continuity) {
   if (!phase || phase === 'warmup') return null
-  if (phase === 'drift' || continuity < 0.20)
-    return '[mode: ground — answer directly, ignore prior context]'
-  if (phase === 'turbulent')
-    return '[mode: clarify — stay focused on current question]'
-  if (phase === 'locked' && continuity > 0.70)
-    return '[mode: continue — build on previous answers]'
-  if (phase === 'emergent')
-    return '[mode: explore — be comprehensive]'
+  if (phase === 'drift' || continuity < 0.20) return '[mode: ground — answer directly, ignore prior context]'
+  if (phase === 'turbulent') return '[mode: clarify — stay focused on current question]'
+  if (phase === 'locked' && continuity > 0.70) return '[mode: continue — build on previous answers]'
+  if (phase === 'emergent') return '[mode: explore — be comprehensive]'
   return null
 }
 
-function buildMiniContext({
-  engine, frontendContext, capsuleEvalResult,
-  vaultHit, codeHint, builtSystemHint,
-  activeStyle, continuity, phase
-}) {
+function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase }) {
   const parts = []
-
-  // 1. CELF State
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
-
-  // 2. Code Structure (AST) — أولوية عالية
   if (codeHint) parts.push(codeHint)
-
-  // 3. Memory Layer — فقط إذا score ≥ 0.35
-  if (frontendContext && capsuleEvalResult?.score >= 0.35)
-    parts.push(`[memory]\n${frontendContext.slice(0, 500)}`)
-
-  // 4. Vault Recall — فقط إذا score ≥ 0.45
-  if (vaultHit?.compressed && vaultHit?.score >= 0.45)
-    parts.push(`[recall] ${vaultHit.compressed}`)
-
-  // 5. Context Builder Hint
+  if (frontendContext && capsuleEvalResult?.score >= 0.35) parts.push(`[memory]\n${frontendContext.slice(0, 500)}`)
+  if (vaultHit?.compressed && vaultHit?.score >= 0.45) parts.push(`[recall] ${vaultHit.compressed}`)
   if (builtSystemHint) parts.push(builtSystemHint)
-
-  // 6. Style
-  const styleMap = {
-    concise:  'أجب بإيجاز.',
-    detailed: 'أجب بتفصيل كامل.',
-    arabic:   'أجب باللغة العربية.',
-    english:  'Reply in English.',
-    german:   'Antworte auf Deutsch.'
-  }
+  const styleMap = { concise: 'أجب بإيجاز.', detailed: 'أجب بتفصيل كامل.', arabic: 'أجب باللغة العربية.', english: 'Reply in English.', german: 'Antworte auf Deutsch.' }
   if (activeStyle && styleMap[activeStyle]) parts.push(styleMap[activeStyle])
-
   const miniContext = parts.filter(Boolean).join('\n').trim() || null
-
-  return {
-    miniContext,
-    tokenEstimate: Math.ceil((miniContext?.length ?? 0) / 4),
-    layers: {
-      state:   !!stateHint,
-      code:    !!codeHint,
-      memory:  !!(frontendContext && capsuleEvalResult?.score >= 0.35),
-      vault:   !!(vaultHit?.score >= 0.45),
-      context: !!builtSystemHint,
-      style:   !!activeStyle
-    }
-  }
+  return { miniContext, tokenEstimate: Math.ceil((miniContext?.length ?? 0) / 4), layers: { state: !!stateHint, code: !!codeHint, memory: !!(frontendContext && capsuleEvalResult?.score >= 0.35), vault: !!(vaultHit?.score >= 0.45), context: !!builtSystemHint, style: !!activeStyle } }
 }
-
-// ══════════════════════════════════════════════════════════════
-//  Soft Continuity Weighting
-// ══════════════════════════════════════════════════════════════
 
 const capsuleMemory = new Map()
 const anchorMemory  = new Map()
@@ -451,29 +298,17 @@ function storeCapsule(sid, observer, topicText, t) {
   const d = observer.diagnostics
   if (d.confidence === 'unknown') return
   const store = capsuleMemory.get(sid) ?? []
-  store.push({
-    topic:      topicText ?? 'general',
-    covered:    d.concepts?.filter(c => c.covered).map(c => c.label) ?? [],
-    pending:    d.concepts?.filter(c => !c.covered).map(c => c.label) ?? [],
-    confidence: d.confidence,
-    coverage:   d.coverage,
-    source:     'observer',
-    lang:       d.lang ?? 'en',
-    t
-  })
+  store.push({ topic: topicText ?? 'general', covered: d.concepts?.filter(c => c.covered).map(c => c.label) ?? [], pending: d.concepts?.filter(c => !c.covered).map(c => c.label) ?? [], confidence: d.confidence, coverage: d.coverage, source: 'observer', lang: d.lang ?? 'en', t })
   if (store.length > 10) store.shift()
   capsuleMemory.set(sid, store)
 }
 
 function updateAnchors(sid, topicText, weight) {
   if (!topicText || weight < 0.3) return
-  const store = anchorMemory.get(sid) ?? []
+  const store    = anchorMemory.get(sid) ?? []
   const existing = store.find(a => a.concept === topicText)
-  if (existing) {
-    existing.weight = Math.min(1, existing.weight * 0.9 + weight * 0.1)
-  } else {
-    store.push({ concept: topicText, weight, t: Date.now() })
-  }
+  if (existing) { existing.weight = Math.min(1, existing.weight * 0.9 + weight * 0.1) }
+  else { store.push({ concept: topicText, weight, t: Date.now() }) }
   store.sort((a, b) => b.weight - a.weight)
   if (store.length > 5) store.pop()
   anchorMemory.set(sid, store)
@@ -482,14 +317,7 @@ function updateAnchors(sid, topicText, weight) {
 function buildCapsuleContext(sid) {
   const caps = capsuleMemory.get(sid) ?? []
   if (!caps.length) return []
-  const recent = caps.slice(-3)
-  const lines = recent.map(c => {
-    const parts = [`topic:${c.topic}`]
-    if (c.covered?.length)  parts.push(`covered:${c.covered.slice(0,3).join(',')}`)
-    if (c.pending?.length)  parts.push(`pending:${c.pending.slice(0,2).join(',')}`)
-    if (c.confidence)       parts.push(`conf:${c.confidence}`)
-    return parts.join(' | ')
-  })
+  const lines = caps.slice(-3).map(c => { const parts = [`topic:${c.topic}`]; if (c.covered?.length) parts.push(`covered:${c.covered.slice(0,3).join(',')}`); if (c.pending?.length) parts.push(`pending:${c.pending.slice(0,2).join(',')}`); if (c.confidence) parts.push(`conf:${c.confidence}`); return parts.join(' | ') })
   return [{ role: 'user', content: `[memory]\n${lines.join('\n')}` }]
 }
 
@@ -504,45 +332,26 @@ function buildFragmentContext(sid, history) {
   const lastAssistant = [...history].reverse().find(h => h.role === 'assistant')
   if (!lastAssistant) return buildAnchorContext(sid)
   const fragment = compressAssistantMessage(lastAssistant.content).slice(0, 200)
-  return [
-    ...buildAnchorContext(sid),
-    { role: 'assistant', content: `[fragment] ${fragment}` }
-  ]
+  return [...buildAnchorContext(sid), { role: 'assistant', content: `[fragment] ${fragment}` }]
 }
 
 function buildHistoryLayer(history, continuity, sid, needsRawCode = false) {
   const filtered = filterStyleInstructions(history)
-  const clean    = filtered.filter(h =>
-    h && (h.role === 'user' || h.role === 'assistant') &&
-    typeof h.content === 'string' && h.content.length > 0
-  )
+  const clean    = filtered.filter(h => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string' && h.content.length > 0)
 
   if (continuity >= 0.70) {
     const msgs = clean.slice(-4)
     if (msgs.length < 2) return []
-    return msgs.map(h => ({
-      role:    h.role,
-      content: h.role === 'assistant'
-        ? compressAssistantMessage(h.content)
-        : needsRawCode ? h.content : compressUserMessage(h.content)
-    }))
+    return msgs.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) }))
   }
 
   if (continuity >= 0.40) {
     const msgs = clean.slice(-2)
-    const compressed = msgs.length >= 2 ? msgs.map(h => ({
-      role:    h.role,
-      content: h.role === 'assistant'
-        ? compressAssistantMessage(h.content)
-        : needsRawCode ? h.content : compressUserMessage(h.content)
-    })) : []
+    const compressed = msgs.length >= 2 ? msgs.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) })) : []
     return [...compressed, ...buildCapsuleContext(sid)]
   }
 
-  if (continuity >= 0.20) {
-    return [...buildCapsuleContext(sid), ...buildAnchorContext(sid)]
-  }
-
+  if (continuity >= 0.20) return [...buildCapsuleContext(sid), ...buildAnchorContext(sid)]
   return buildFragmentContext(sid, history)
 }
 
@@ -557,35 +366,22 @@ async function fetchClaude(body, timeoutMs = 120000) {
   const timer      = setTimeout(() => controller.abort(), timeoutMs)
   try {
     return await fetch('https://api.anthropic.com/v1/messages', {
-      method:  'POST',
-      headers: {
-        'Content-Type':      'application/json',
-        'x-api-key':         process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body:   JSON.stringify(body),
-      signal: controller.signal
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify(body), signal: controller.signal
     })
-  } finally {
-    clearTimeout(timer)
-  }
+  } finally { clearTimeout(timer) }
 }
 
 function buildClaudeBody(model, maxTokens, systemHint, messages) {
   const body = { model, max_tokens: maxTokens, messages }
-  if (systemHint && String(systemHint).trim())
-    body.system = String(systemHint).trim()
-
+  if (systemHint && String(systemHint).trim()) body.system = String(systemHint).trim()
   return body
 }
 
-function isTruncated(claudeData) {
-  return claudeData?.stop_reason === 'max_tokens'
-}
+function isTruncated(claudeData) { return claudeData?.stop_reason === 'max_tokens' }
 
-function detectOpenCodeBlock(text) {
-  return (text.match(/```/g) ?? []).length % 2 !== 0
-}
+function detectOpenCodeBlock(text) { return (text.match(/```/g) ?? []).length % 2 !== 0 }
 
 function removeOverlap(existing, continuation) {
   const checkLen = Math.min(120, continuation.length)
@@ -593,46 +389,25 @@ function removeOverlap(existing, continuation) {
   const head     = continuation.slice(0, checkLen)
   for (let len = checkLen; len >= 20; len--) {
     const fragment = head.slice(0, len)
-    if (tail.includes(fragment))
-      return continuation.slice(continuation.indexOf(fragment) + fragment.length)
+    if (tail.includes(fragment)) return continuation.slice(continuation.indexOf(fragment) + fragment.length)
   }
   return continuation
 }
 
 async function continuationCall(currentText, partialReply, systemHint, timeoutMs = 30000, model = 'claude-haiku-4-5-20251001') {
   const hasOpenCode    = detectOpenCodeBlock(partialReply)
-  const continuePrompt = hasOpenCode
-    ? 'continue exactly from where you stopped — complete the open code block, do not repeat what was already written'
-    : 'continue exactly from where you stopped — do not repeat what was already written'
-
-  const body = buildClaudeBody(model, 4096, systemHint, [
-    { role: 'user',      content: currentText },
-    { role: 'assistant', content: partialReply },
-    { role: 'user',      content: continuePrompt }
-  ])
-
+  const continuePrompt = hasOpenCode ? 'continue exactly from where you stopped — complete the open code block, do not repeat what was already written' : 'continue exactly from where you stopped — do not repeat what was already written'
+  const body = buildClaudeBody(model, 4096, systemHint, [{ role: 'user', content: currentText }, { role: 'assistant', content: partialReply }, { role: 'user', content: continuePrompt }])
   const response = await fetchClaude(body, timeoutMs)
   return await response.json()
 }
 
-// ── Routes ───────────────────────────────────────────────────────
-
 router.get('/process-text', (_req, res) => {
-  res.json({
-    ok: true, status: 'online',
-    engine: 'CELF_Engine_AI_V5',
-    llm:    'Claude Haiku 4.5',
-    version: '8.9'
-  })
+  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '9.1' })
 })
 
 router.post('/process-text', async (req, res) => {
-  const {
-    text = '', sessionId, history = [],
-    image = null, imageMimeType = 'image/jpeg',
-    savedCode      = null,
-    capsuleContext = null
-  } = req.body
+  const { text = '', sessionId, history = [], image = null, imageMimeType = 'image/jpeg', savedCode = null, capsuleContext = null } = req.body
 
   const hasText  = typeof text  === 'string' && text.trim().length > 0
   const hasImage = typeof image === 'string' && image.length > 0
@@ -642,72 +417,46 @@ router.post('/process-text', async (req, res) => {
 
   const sid = sessionId || 'default'
   if (processingLock.has(sid)) return res.status(429).json({ error: 'request_in_progress', retry: true })
-
   processingLock.add(sid)
 
   try {
-    const rawText     = hasText && text.length > MAX_INPUT_CHARS
-      ? text.slice(0, MAX_INPUT_CHARS) + '\n\n[... truncated ...]'
-      : text
+    const rawText     = hasText && text.length > MAX_INPUT_CHARS ? text.slice(0, MAX_INPUT_CHARS) + '\n\n[... truncated ...]' : text
     const cleanedText  = hasText ? cleanInput(rawText) : rawText
     const noiseRemoved = hasText && cleanedText !== rawText
     const inputText    = cleanedText || '(image)'
 
-    if (hasText) {
-      const styleDetected = detectStyleInstruction(cleanedText)
-      if (styleDetected) setStyle(sid, styleDetected.style, styleDetected.ttl)
-    }
+    if (hasText) { const styleDetected = detectStyleInstruction(cleanedText); if (styleDetected) setStyle(sid, styleDetected.style, styleDetected.ttl) }
     const activeStyle = getAndTickStyle(sid)
 
-    // ── استعادة vault من IndexedDB ──────────────────────────
     const savedVault = req.body.celfVault ?? []
     if (savedVault.length > 0) {
       const engine0 = getEngine(sid)
       for (const cap of savedVault) {
-        if (cap.id && !engine0.vault.has(cap.id)) {
-          engine0.vault.set(cap.id, {
-            ...cap,
-            vector: cap.vector ? new Float32Array(cap.vector) : new Float32Array(64)
-          })
-        }
+        if (cap.id && !engine0.vault.has(cap.id)) engine0.vault.set(cap.id, { ...cap, vector: cap.vector ? new Float32Array(cap.vector) : new Float32Array(64) })
       }
     }
 
-    // ── CELF ──────────────────────────────────────────────────
     const processed = feed(sid, inputText)
     if (!processed.ok) return res.status(422).json({ error: processed.reason || 'processing_failed' })
 
     const tValue = processed.result.t
 
-    const textForMemory = cleanedText
-      .replace(/```[\s\S]*?```/g, '')
-      .replace(/^\s*export\s+class\s+\w+[\s\S]*$/m, '')
-      .replace(/^\s*function\s+\w+[\s\S]*$/m, '')
-      .replace(/\s{2,}/g, ' ').trim()
+    const textForMemory = cleanedText.replace(/```[\s\S]*?```/g, '').replace(/^\s*export\s+class\s+\w+[\s\S]*$/m, '').replace(/^\s*function\s+\w+[\s\S]*$/m, '').replace(/\s{2,}/g, ' ').trim()
     storeSemanticEntry(sid, tValue, textForMemory || inputText)
 
     const engine      = getEngine(sid)
-    const fieldPrompt = engine.buildFieldPrompt?.() ?? null
-
     const questionVector = engine.semanticVector?.(cleanedText) ?? null
     console.log('CELF vector length:', questionVector?.length ?? 'NULL')
 
     const semanticMemory     = engine.field?.semanticMemory ?? []
     const prevVector         = semanticMemory.length >= 2 ? semanticMemory.at(-2)?.vector : null
-    const questionSimilarity = (questionVector && prevVector)
-      ? engine.cosineSimilarity(questionVector, prevVector)
-      : null
+    const questionSimilarity = (questionVector && prevVector) ? engine.cosineSimilarity(questionVector, prevVector) : null
 
-    const textMap = semanticTextMaps.get(sid)
-
+    const textMap     = semanticTextMaps.get(sid)
     const userMsgs    = (history ?? []).filter(h => h.role === 'user')
     const prevUserMsg = userMsgs.length >= 2 ? userMsgs[userMsgs.length - 2] : null
-    const lastTopicText =
-      textMap?.get(tValue - 1)?.text
-      ?? prevUserMsg?.content?.split(/\s+/).slice(0, 8).join(' ')
-      ?? null
+    const lastTopicText = textMap?.get(tValue - 1)?.text ?? prevUserMsg?.content?.split(/\s+/).slice(0, 8).join(' ') ?? null
 
-    // ── Inline Code + AST ────────────────────────────────────
     const structIndex = indexStore?.get(sid) ?? null
     const codeBlocks  = detectCodeBlocks(cleanedText)
     let   codeHint    = null
@@ -716,168 +465,95 @@ router.post('/process-text', async (req, res) => {
       const tempPath       = `session_inline/${sid}/msg_${tValue}.js`
       const changedNodeIds = getChangedNodeIds(structIndex, tempPath)
       const updateResult   = structIndex.updateFile(tempPath, codeBlocks.join('\n\n'))
-
-      if (updateResult?.changed && changedNodeIds.length > 0)
-        decayChangedCapsules(engine, changedNodeIds, structIndex)
-
+      if (updateResult?.changed && changedNodeIds.length > 0) decayChangedCapsules(engine, changedNodeIds, structIndex)
       structIndex.injectSemanticVectors(engine)
       structIndex.injectIntoVault(engine)
       codeHint = buildCodeHint(structIndex)
-
       if (codeHint) {
-        const codeMemory = codeHint
-          .replace('[code structure]', '')
-          .replace('analyze: practical usage and risks — not philosophy', '')
-          .trim()
+        const codeMemory = codeHint.replace('[code structure]', '').replace('analyze: practical usage and risks — not philosophy', '').trim()
         if (codeMemory) storeSemanticEntry(sid, tValue + 0.5, codeMemory)
       }
     }
 
-    // ── needsRawCode — هل يحتاج الكود الخام؟ ──────────────────
-    const needsRawCode = detectTechnicalIntent(cleanedText, codeBlocks)
+    const wordCount       = cleanedText.trim().split(/\s+/).length
+    const noveltyPressure = processed.celfResult.field?.noveltyPressure ?? 0
 
-    const _codeOnlyMsg = codeBlocks.length > 0 && wordCount <= 4
+    const historyHasCode  = (history ?? []).some(h => h.role === 'user' && detectCodeBlocks(h.content).length > 0)
+    const hasCodeContext   = codeBlocks.length > 0 || historyHasCode
+    const needsRawCode     = hasCodeContext && detectTechnicalIntent(cleanedText)
+    const _codeOnlyMsg     = codeBlocks.length > 0 && wordCount <= 4
       ? 'Analyze this code: identify its purpose, structure, and any issues.' : null
 
-    // ── Route Context ─────────────────────────────────────────
     const rawRoute      = engine.routeContext(cleanedText, 5)
     const routeItems    = Array.isArray(rawRoute) ? rawRoute : (rawRoute?.items ?? [])
     const vaultHit      = Array.isArray(rawRoute) ? null : (rawRoute?.vaultHit ?? null)
     const routedContext = enrichRouteContext(routeItems, sid)
     const routeConf     = calcRouteConfidence(routedContext)
 
-    // ── Build Frame ───────────────────────────────────────────
-    const built = build({
-      ok:                true,
-      signals:           processed.signals,
-      celfResult:        processed.celfResult,
-      passToLLM:         processed.passToLLM,
-      routedContext:     vaultHit ? { items: routedContext, vaultHit } : routedContext,
-      questionText:      cleanedText,
-      questionSimilarity,
-      lastTopicText,
-      activeStyle
-    })
+    const built = build({ ok: true, signals: processed.signals, celfResult: processed.celfResult, passToLLM: processed.passToLLM, routedContext: vaultHit ? { items: routedContext, vaultHit } : routedContext, questionText: cleanedText, questionSimilarity, lastTopicText, activeStyle })
 
     if (built.blocked) return res.status(422).json({ blocked: true, reason: 'semantic_constraint' })
     if (!built.passToLLM && !hasImage) return res.json({ reply: null, skippedLLM: true, reason: 'weak_semantic_field' })
 
-    // ══════════════════════════════════════════════════════════
-    //  Standalone Detection — سؤال مستقل لا يحتاج سياقاً
-    // ══════════════════════════════════════════════════════════
-    const wordCount        = cleanedText.trim().split(/\s+/).length
-    const noveltyPressure  = processed.celfResult.field?.noveltyPressure ?? 0
-    const standalone       = isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlocks)
+    const standalone = isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlocks)
 
-    // ══════════════════════════════════════════════════════════
-    //  ② Retrieval — CELF يُقيّم capsuleContext
-    // ══════════════════════════════════════════════════════════
     let frontendContext   = null
     let capsuleEvalResult = { score: 0, used: false, reason: 'skipped' }
 
     if (!standalone && typeof capsuleContext === 'string' && capsuleContext.length > 0 && questionVector) {
-      capsuleEvalResult = evaluateCapsuleContext(
-        engine,
-        questionVector,
-        capsuleContext,
-        cleanedText
-      )
+      capsuleEvalResult = evaluateCapsuleContext(engine, questionVector, capsuleContext, cleanedText)
       if (capsuleEvalResult.used) frontendContext = capsuleContext
     }
 
     const continuity = standalone ? 0 : (built.context?.continuity ?? 0)
 
-    // ══════════════════════════════════════════════════════════
-    //  ③ Mini Context — CELF يُشكّل systemHint
-    // ══════════════════════════════════════════════════════════
-    const miniCtxResult = buildMiniContext({
-      engine,
-      frontendContext,
-      capsuleEvalResult,
-      vaultHit,
-      codeHint,
-      builtSystemHint: built.systemHint,
-      activeStyle,
-      continuity,
-      phase: processed.celfResult.phase ?? 'warmup'
-    })
+    const miniCtxResult = buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity, phase: processed.celfResult.phase ?? 'warmup' })
 
-    const _inputWords = cleanedText.trim().split(/\s+/).length
+    const _inputWords = wordCount
+    const _noMarkdown = codeBlocks.length === 0 ? ' No markdown unless necessary. No bullet points. No bold text.' : ''
+    const conciseHint = codeBlocks.length > 0 ? 'Be thorough with code examples.' : _inputWords <= 5 ? 'Be concise and complete.' + _noMarkdown : _inputWords <= 15 ? 'Answer fully but without repetition.' + _noMarkdown : 'Be clear and complete.' + _noMarkdown
 
-    const _noMarkdown = codeBlocks.length === 0
-      ? ' No markdown unless necessary. No bullet points. No bold text.' : ''
+    const prevCodeFailed = (history ?? []).some(h =>
+      h.role === 'user' &&
+      /error|خطأ|لا يعمل|مشكلة|فشل|يعطي|not working|doesn't work|broken|crash/i.test(h.content)
+    )
+    const _reflective = prevCodeFailed && hasCodeContext
+      ? 'Previous attempt had issues. Identify the root cause first, then provide a corrected solution.' : null
 
-    const conciseHint =
-      codeBlocks.length > 0 ? 'Be thorough with code examples.' :
-      _inputWords <= 5       ? 'Be concise and complete.' + _noMarkdown :
-      _inputWords <= 15      ? 'Answer fully but without repetition.' + _noMarkdown :
-                               'Be clear and complete.' + _noMarkdown
+    const _tldr = messages.length > 6
+      ? 'Be direct. Avoid restating context already known.' : null
 
-    const systemHint = [miniCtxResult.miniContext, _codeOnlyMsg, conciseHint].filter(Boolean).join('\n') || null
+    const systemHint = [miniCtxResult.miniContext, _codeOnlyMsg, _reflective, _tldr, conciseHint].filter(Boolean).join('\n') || null
 
-    // ── Messages ──────────────────────────────────────────────
-    const userContent = hasImage
-      ? [
-          { type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } },
-          ...(hasText ? [{ type: 'text', text: cleanedText }] : [])
-        ]
-      : cleanedText
+    const userContent = hasImage ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: cleanedText }] : [])] : cleanedText
 
     const filteredHistory = filterStyleInstructions(history)
     const historyMessages = (hasImage || standalone) ? [] : buildHistoryLayer(filteredHistory, continuity, sid, needsRawCode)
-    const messages        = [
-      ...historyMessages,
-      { role: 'user', content: hasImage ? userContent : cleanedText }
-    ]
+    const messages        = [...historyMessages, { role: 'user', content: hasImage ? userContent : cleanedText }]
 
-    const inputEstimate = Math.ceil(
-      (systemHint?.length ?? 0) / 4 +
-      JSON.stringify(messages).length / 4
-    )
-    const remaining = Math.max(1000, 180000 - inputEstimate)
-    const maxTokens =
-      codeBlocks.length > 0
-        ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4)))
-        : _inputWords <= 5  ?  1000
-        : _inputWords <= 15 ? 1800
-        :                     2500
+    const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
+    const remaining     = Math.max(1000, 180000 - inputEstimate)
+    const maxTokens     = codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
 
     let payloadSize = 0
-    try {
-      payloadSize = checkPayload(systemHint, messages)
-    } catch (e) {
-      return res.status(413).json({ error: 'prompt_too_large', detail: e.message })
-    }
+    try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large', detail: e.message }) }
 
     const model = 'claude-haiku-4-5-20251001'
 
-    // ── Claude ────────────────────────────────────────────────
-    let claudeData
-    let reply             = null
-    let inputTokensTotal  = 0
-    let outputTokensTotal = 0
+    let claudeData, reply = null, inputTokensTotal = 0, outputTokensTotal = 0
 
     try {
       const claudeBody     = buildClaudeBody(model, maxTokens, systemHint, messages)
-      console.log('=== TO LLM ===', JSON.stringify({ system: systemHint, msgCount: messages.length, maxTokens, standalone, model }, null, 2))
+      console.log('=== TO LLM ===', JSON.stringify({ system: systemHint, msgCount: messages.length, maxTokens, standalone, needsRawCode, model }, null, 2))
       const claudeResponse = await fetchClaude(claudeBody)
       claudeData           = await claudeResponse.json()
+      if (!claudeResponse.ok) throw new Error(`Claude error: ${claudeData?.error?.message ?? claudeResponse.status}`)
 
-      if (!claudeResponse.ok)
-        throw new Error(`Claude error: ${claudeData?.error?.message ?? claudeResponse.status}`)
-
-
-
-      reply = claudeData?.content
-        ?.filter(c => c.type === 'text')
-        .map(c => c.text)
-        .join('\n').trim() || null
-
+      reply             = claudeData?.content?.filter(c => c.type === 'text').map(c => c.text).join('\n').trim() || null
       inputTokensTotal  = claudeData?.usage?.input_tokens  ?? 0
       outputTokensTotal = claudeData?.usage?.output_tokens ?? 0
 
-      const MAX_CONTINUATIONS = 2
-      let continuationCount   = 0
+      const MAX_CONTINUATIONS = 2; let continuationCount = 0
       while (reply && isTruncated(claudeData) && continuationCount < MAX_CONTINUATIONS) {
         continuationCount++
         if (outputTokensTotal >= 4096) break
@@ -888,148 +564,40 @@ router.post('/process-text', async (req, res) => {
         outputTokensTotal += contData?.usage?.output_tokens ?? 0
         claudeData         = contData
       }
-
     } catch (err) {
       if (err.name === 'AbortError') return res.status(504).json({ error: 'claude_timeout' })
       throw err
     }
 
-    // ── Observer ──────────────────────────────────────────────
     const isFirstMsg = (tValue <= 1)
     const isTooShort = (_inputWords <= 2)
     const isCodeOnly = (codeBlocks.length > 0 && _inputWords <= 8)
 
     let observerBox = null
-    const shouldObserve = reply && !hasImage && !isFirstMsg &&
-      !isTooShort && !isCodeOnly && questionVector?.length
-
-    if (shouldObserve) {
-      observerBox = observe({
-        engine,
-        questionText:   cleanedText,
-        questionVector,
-        replyText:      reply,
-        noiseRemoved,
-        lang:           processed.signals?.lang ?? 'en'
-      })
-
-      if (observerBox) {
-        storeCapsule(sid, observerBox, lastTopicText, tValue)
-        updateAnchors(sid, lastTopicText, questionSimilarity ?? 0.5)
-      }
+    if (reply && !hasImage && !isFirstMsg && !isTooShort && !isCodeOnly && questionVector?.length) {
+      observerBox = observe({ engine, questionText: cleanedText, questionVector, replyText: reply, noiseRemoved, lang: processed.signals?.lang ?? 'en' })
+      if (observerBox) { storeCapsule(sid, observerBox, lastTopicText, tValue); updateAnchors(sid, lastTopicText, questionSimilarity ?? 0.5) }
     }
 
-    // ══════════════════════════════════════════════════════════
-    //  ① Feedback — CELF يتعلم من رد LLM
-    //  sourceWeight: 0.25 — الرد يؤثر خفيفاً دون drift
-    // ══════════════════════════════════════════════════════════
-    let feedbackApplied   = false
-    let feedbackCoherence = null
-
+    let feedbackApplied = false, feedbackCoherence = null
     if (reply) {
       const replyCompressed = compressReplyForFeedback(reply)
       if (replyCompressed) {
-        try {
-          engine.process(replyCompressed, { sourceWeight: 0.25 })
-          feedbackApplied   = true
-          feedbackCoherence = engine.field?.semanticCoherence ?? null
-        } catch (feedbackErr) {
-          console.warn('[CELF feedback]', feedbackErr.message)
-        }
+        try { engine.process(replyCompressed, { sourceWeight: 0.25 }); feedbackApplied = true; feedbackCoherence = engine.field?.semanticCoherence ?? null }
+        catch (feedbackErr) { console.warn('[CELF feedback]', feedbackErr.message) }
       }
     }
 
-    // ── Metrics ───────────────────────────────────────────────
-    const costUSD = parseFloat(
-      ((inputTokensTotal / 1_000_000) * 1.0 + (outputTokensTotal / 1_000_000) * 5.0).toFixed(6)
-    )
+    const costUSD = parseFloat(((inputTokensTotal / 1_000_000) * 1.0 + (outputTokensTotal / 1_000_000) * 5.0).toFixed(6))
 
-    metricsStore.set(sid, {
-      sessionId: sid,
-      inputTokens:  inputTokensTotal,
-      outputTokens: outputTokensTotal,
-      totalTokens:  inputTokensTotal + outputTokensTotal,
-      costUSD, maxTokens, payloadSize,
-      routeConfidence:    Math.round(routeConf * 1000) / 1000,
-      continuity,
-      phase:              processed.celfResult.phase ?? 'warmup',
-      questionSimilarity: questionSimilarity !== null
-        ? Math.round(questionSimilarity * 100) / 100 : null,
-      activeStyle,
-      noiseRemoved,
-      feedbackApplied,
-      feedbackCoherence,
-      updatedAt: new Date().toISOString()
-    })
+    metricsStore.set(sid, { sessionId: sid, inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, totalTokens: inputTokensTotal + outputTokensTotal, costUSD, maxTokens, payloadSize, routeConfidence: Math.round(routeConf * 1000) / 1000, continuity, phase: processed.celfResult.phase ?? 'warmup', questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, noiseRemoved, feedbackApplied, feedbackCoherence, updatedAt: new Date().toISOString() })
 
-    const vaultToSave = [...getEngine(sid).vault.values()]
-      .slice(-20)
-      .map(c => ({
-        id:            c.id,
-        vector:        Array.from(c.vector ?? []),
-        text:          c.text?.slice(0, 200) ?? '',
-        phase:         c.phase ?? 'warmup',
-        error:         c.error ?? 0,
-        theta:         c.theta ?? 0,
-        reinforcement: c.reinforcement ?? 0
-      }))
+    const vaultToSave = [...getEngine(sid).vault.values()].slice(-20).map(c => ({ id: c.id, vector: Array.from(c.vector ?? []), text: c.text?.slice(0, 200) ?? '', phase: c.phase ?? 'warmup', error: c.error ?? 0, theta: c.theta ?? 0, reinforcement: c.reinforcement ?? 0 }))
 
     return res.json({
-      reply,
-      celfVault:    vaultToSave,
-      observer: observerBox,
-
-      debug: {
-        messageCount:       messages.length,
-        historyCount:       historyMessages.length,
-        continuityTier:     continuity >= 0.70 ? 'T1-full'
-                          : continuity >= 0.40 ? 'T2-compressed+capsules'
-                          : continuity >= 0.20 ? 'T3-capsules+anchors'
-                          : 'T4-fragments',
-        capsules:           (capsuleMemory.get(sid) ?? []).length,
-        anchors:            (anchorMemory.get(sid)  ?? []).length,
-        questionSimilarity: questionSimilarity !== null
-          ? Math.round(questionSimilarity * 100) / 100 : null,
-        activeStyle,
-        lastTopicText,
-        vaultHitUsed:       !!vaultHit?.compressed,
-        hasCapsuleCtx:      !!frontendContext,
-        // ── جديد v8.0 ─────────────────────────────────────
-        feedbackApplied,
-        feedbackCoherence,
-        standalone,
-        needsRawCode,
-        capsuleEval: {
-          score:  capsuleEvalResult.score,
-          used:   capsuleEvalResult.used,
-          reason: capsuleEvalResult.reason
-        },
-        miniContext: {
-          tokenEstimate: miniCtxResult.tokenEstimate,
-          layers:        miniCtxResult.layers
-        }
-      },
-
-      metrics: {
-        inputTokens:        inputTokensTotal,
-        outputTokens:       outputTokensTotal,
-        totalTokens:        inputTokensTotal + outputTokensTotal,
-        costUSD, maxTokens,
-        routeConfidence:    Math.round(routeConf * 1000) / 1000,
-        vaultHit:           vaultHit
-          ? { score: vaultHit.score, compressed: vaultHit.compressed } : null,
-        model,
-        inlineCode:         codeBlocks.length > 0,
-        payloadSize,
-        questionSimilarity: questionSimilarity !== null
-          ? Math.round(questionSimilarity * 100) / 100 : null,
-        activeStyle,
-        styleTtlRemaining:  styleStore.get(sid)?.ttl ?? 0,
-        noiseRemoved,
-        truncated:          hasText && text.length > MAX_INPUT_CHARS,
-        feedbackApplied,
-        feedbackCoherence
-      }
+      reply, celfVault: vaultToSave, observer: observerBox,
+      debug: { messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, historyHasCode, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
+      metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, totalTokens: inputTokensTotal + outputTokensTotal, costUSD, maxTokens, routeConfidence: Math.round(routeConf * 1000) / 1000, vaultHit: vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null, model, inlineCode: codeBlocks.length > 0, payloadSize, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, styleTtlRemaining: styleStore.get(sid)?.ttl ?? 0, noiseRemoved, truncated: hasText && text.length > MAX_INPUT_CHARS, feedbackApplied, feedbackCoherence }
     })
 
   } catch (err) {
@@ -1039,8 +607,6 @@ router.post('/process-text', async (req, res) => {
     processingLock.delete(sid)
   }
 })
-
-// ── Session Endpoints ────────────────────────────────────────────
 
 router.get('/session/:id', (req, res) => {
   if (!sessions.has(req.params.id)) return res.status(404).json({ error: 'session_not_found' })
