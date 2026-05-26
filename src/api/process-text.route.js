@@ -375,12 +375,6 @@ function isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlock
   return false
 }
 
-function detectTechnicalIntent(text, codeBlocks) {
-  if (!codeBlocks.length) return false
-  const intentPattern = /تعديل|إصلاح|حلل|تحليل|أصلح|عدّل|احذف|أضف|استبدل|حسّن|اكتب|أعد|debug|fix|edit|rewrite|refactor|analyze|update|improve|replace|add|remove|correct|review|check|explain.*code|شرح.*كود/i
-  return intentPattern.test(text)
-}
-
 function buildStateHint(phase, continuity) {
   if (!phase || phase === 'warmup') return null
   if (phase === 'drift' || continuity < 0.20)
