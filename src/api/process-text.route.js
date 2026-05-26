@@ -281,8 +281,8 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
   if (codeHint) parts.push(codeHint)
-  if (frontendContext && capsuleEvalResult?.score >= 0.35) parts.push(`[memory]\n${frontendContext.slice(0, 500)}`)
-  if (vaultHit?.compressed && vaultHit?.score >= 0.45) parts.push(`[recall] ${vaultHit.compressed}`)
+  if (frontendContext && capsuleEvalResult?.score >= 0.50) parts.push(`[memory]\n${frontendContext.slice(0, 300)}`)
+  if (vaultHit?.compressed && vaultHit?.score >= 0.55) parts.push(`[recall] ${vaultHit.compressed}`)
   if (builtSystemHint) parts.push(builtSystemHint)
   const styleMap = { concise: 'أجب بإيجاز.', detailed: 'أجب بتفصيل كامل.', arabic: 'أجب باللغة العربية.', english: 'Reply in English.', german: 'Antworte auf Deutsch.' }
   if (activeStyle && styleMap[activeStyle]) parts.push(styleMap[activeStyle])
@@ -513,11 +513,11 @@ router.post('/process-text', async (req, res) => {
     const _noMarkdown = codeBlocks.length === 0 ? ' No markdown unless necessary. No bullet points. No bold text.' : ''
     const conciseHint = codeBlocks.length > 0 ? 'Be thorough with code examples.' : _inputWords <= 5 ? 'Be concise and complete.' + _noMarkdown : _inputWords <= 15 ? 'Answer fully but without repetition.' + _noMarkdown : 'Be clear and complete.' + _noMarkdown
 
-    const prevCodeFailed = (history ?? []).some(h =>
+    const prevCodeFailed = hasCodeContext && (history ?? []).some(h =>
       h.role === 'user' &&
-      /error|خطأ|لا يعمل|مشكلة|فشل|يعطي|not working|doesn't work|broken|crash/i.test(h.content)
+      /لا يعمل|لا يشتغل|not working|doesn't work|broken|crash|يعطي خطأ|gives error/i.test(h.content)
     )
-    const _reflective = prevCodeFailed && hasCodeContext
+    const _reflective = prevCodeFailed
       ? 'Previous attempt had issues. Identify the root cause first, then provide a corrected solution.' : null
 
     
