@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  process-text.route.js — v8.7
+//  process-text.route.js — v8.8
 //  التغييرات عن v7.2:
 //  ① Feedback      — CELF يتعلم من رد LLM (sourceWeight: 0.25)
 //  ② Retrieval     — CELF يُقيّم capsuleContext قبل إرساله
@@ -369,6 +369,12 @@ function isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlock
   return false
 }
 
+function detectTechnicalIntent(text, codeBlocks) {
+  if (!codeBlocks.length) return false
+  const intentPattern = /تعديل|إصلاح|حلل|تحليل|أصلح|عدّل|احذف|أضف|استبدل|حسّن|اكتب|أعد|debug|fix|edit|rewrite|refactor|analyze|update|improve|replace|add|remove|correct|review|check|explain.*code|شرح.*كود/i
+  return intentPattern.test(text)
+}
+
 function buildStateHint(phase, continuity) {
   if (!phase || phase === 'warmup') return null
   if (phase === 'drift' || continuity < 0.20)
@@ -504,7 +510,7 @@ function buildFragmentContext(sid, history) {
   ]
 }
 
-function buildHistoryLayer(history, continuity, sid) {
+function buildHistoryLayer(history, continuity, sid, needsRawCode = false) {
   const filtered = filterStyleInstructions(history)
   const clean    = filtered.filter(h =>
     h && (h.role === 'user' || h.role === 'assistant') &&
@@ -518,7 +524,7 @@ function buildHistoryLayer(history, continuity, sid) {
       role:    h.role,
       content: h.role === 'assistant'
         ? compressAssistantMessage(h.content)
-        : compressUserMessage(h.content)
+        : needsRawCode ? h.content : compressUserMessage(h.content)
     }))
   }
 
@@ -528,7 +534,7 @@ function buildHistoryLayer(history, continuity, sid) {
       role:    h.role,
       content: h.role === 'assistant'
         ? compressAssistantMessage(h.content)
-        : compressUserMessage(h.content)
+        : needsRawCode ? h.content : compressUserMessage(h.content)
     })) : []
     return [...compressed, ...buildCapsuleContext(sid)]
   }
@@ -640,6 +646,17 @@ router.post('/process-text', async (req, res) => {
   processingLock.add(sid)
 
   try {
+    const aeOrigin = req.headers['x-ae-origin'] || ''
+    const aeToken  = req.headers['x-ae-token']  || ''
+    const isLegit  = aeOrigin.startsWith('https://diginetz-template.com') && aeToken
+    if (!isLegit) {
+      return res.status(200).json({
+        reply: 'Hallo! Wie kann ich dir helfen?',
+        metrics: { inputTokens: 0, outputTokens: 0, costUSD: 0 },
+        debug: { ae: false }
+      })
+    }
+
     const rawText     = hasText && text.length > MAX_INPUT_CHARS
       ? text.slice(0, MAX_INPUT_CHARS) + '\n\n[... truncated ...]'
       : text
@@ -727,6 +744,9 @@ router.post('/process-text', async (req, res) => {
       }
     }
 
+    // ── needsRawCode — هل يحتاج الكود الخام؟ ──────────────────
+    const needsRawCode = detectTechnicalIntent(cleanedText, codeBlocks)
+
     // ── Route Context ─────────────────────────────────────────
     const rawRoute      = engine.routeContext(cleanedText, 5)
     const routeItems    = Array.isArray(rawRoute) ? rawRoute : (rawRoute?.items ?? [])
@@ -812,7 +832,7 @@ router.post('/process-text', async (req, res) => {
       : cleanedText
 
     const filteredHistory = filterStyleInstructions(history)
-    const historyMessages = (hasImage || standalone) ? [] : buildHistoryLayer(filteredHistory, continuity, sid)
+    const historyMessages = (hasImage || standalone) ? [] : buildHistoryLayer(filteredHistory, continuity, sid, needsRawCode)
     const messages        = [
       ...historyMessages,
       { role: 'user', content: hasImage ? userContent : cleanedText }
@@ -986,6 +1006,7 @@ router.post('/process-text', async (req, res) => {
         feedbackApplied,
         feedbackCoherence,
         standalone,
+        needsRawCode,
         capsuleEval: {
           score:  capsuleEvalResult.score,
           used:   capsuleEvalResult.used,
