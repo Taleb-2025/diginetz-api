@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  process-text.route.js — v8.8
+//  process-text.route.js — v8.7
 //  التغييرات عن v7.2:
 //  ① Feedback      — CELF يتعلم من رد LLM (sourceWeight: 0.25)
 //  ② Retrieval     — CELF يُقيّم capsuleContext قبل إرساله
@@ -359,12 +359,6 @@ function evaluateCapsuleContext(engine, questionVector, capsuleContext, question
 //  ③ Mini Context — CELF يُشكّل systemHint
 // ══════════════════════════════════════════════════════════════
 
-function detectTechnicalIntent(text, codeBlocks) {
-  if (!codeBlocks.length) return false
-  const intentPattern = /تعديل|إصلاح|حلل|تحليل|أصلح|عدّل|احذف|أضف|استبدل|حسّن|اكتب|أعد|debug|fix|edit|rewrite|refactor|analyze|update|improve|replace|add|remove|correct|review|check/i
-  return intentPattern.test(text)
-}
-
 function isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlocks) {
   if (codeBlocks.length > 0) return false
   if (wordCount > 6) return false
@@ -510,7 +504,7 @@ function buildFragmentContext(sid, history) {
   ]
 }
 
-function buildHistoryLayer(history, continuity, sid, needsRawCode = false) {
+function buildHistoryLayer(history, continuity, sid) {
   const filtered = filterStyleInstructions(history)
   const clean    = filtered.filter(h =>
     h && (h.role === 'user' || h.role === 'assistant') &&
@@ -524,7 +518,7 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false) {
       role:    h.role,
       content: h.role === 'assistant'
         ? compressAssistantMessage(h.content)
-        : needsRawCode ? h.content : compressUserMessage(h.content)
+        : compressUserMessage(h.content)
     }))
   }
 
@@ -534,7 +528,7 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false) {
       role:    h.role,
       content: h.role === 'assistant'
         ? compressAssistantMessage(h.content)
-        : needsRawCode ? h.content : compressUserMessage(h.content)
+        : compressUserMessage(h.content)
     })) : []
     return [...compressed, ...buildCapsuleContext(sid)]
   }
@@ -622,7 +616,7 @@ router.get('/process-text', (_req, res) => {
     ok: true, status: 'online',
     engine: 'CELF_Engine_AI_V5',
     llm:    'Claude Haiku 4.5',
-    version: '8.8'
+    version: '8.1'
   })
 })
 
@@ -646,17 +640,6 @@ router.post('/process-text', async (req, res) => {
   processingLock.add(sid)
 
   try {
-    const aeOrigin = req.headers['x-ae-origin'] || ''
-    const aeToken  = req.headers['x-ae-token']  || ''
-    const isLegit  = aeOrigin.startsWith('https://diginetz-template.com') && aeToken
-    if (!isLegit) {
-      return res.status(200).json({
-        reply: 'Hallo! Wie kann ich dir helfen?',
-        metrics: { inputTokens: 0, outputTokens: 0, costUSD: 0 },
-        debug: { ae: false }
-      })
-    }
-
     const rawText     = hasText && text.length > MAX_INPUT_CHARS
       ? text.slice(0, MAX_INPUT_CHARS) + '\n\n[... truncated ...]'
       : text
@@ -744,12 +727,6 @@ router.post('/process-text', async (req, res) => {
       }
     }
 
-    // ── needsRawCode — هل يحتاج الكود الخام؟ ──────────────────
-    const needsRawCode = detectTechnicalIntent(cleanedText, codeBlocks)
-
-    const _codeOnlyMsg = codeBlocks.length > 0 && wordCount <= 4
-      ? 'Analyze this code: identify its purpose, structure, and any issues.' : null
-
     // ── Route Context ─────────────────────────────────────────
     const rawRoute      = engine.routeContext(cleanedText, 5)
     const routeItems    = Array.isArray(rawRoute) ? rawRoute : (rawRoute?.items ?? [])
@@ -824,7 +801,7 @@ router.post('/process-text', async (req, res) => {
       _inputWords <= 15      ? 'Answer fully but without repetition.' + _noMarkdown :
                                'Be clear and complete.' + _noMarkdown
 
-    const systemHint = [miniCtxResult.miniContext, _codeOnlyMsg, conciseHint].filter(Boolean).join('\n') || null
+    const systemHint = [miniCtxResult.miniContext, conciseHint].filter(Boolean).join('\n') || null
 
     // ── Messages ──────────────────────────────────────────────
     const userContent = hasImage
@@ -835,7 +812,7 @@ router.post('/process-text', async (req, res) => {
       : cleanedText
 
     const filteredHistory = filterStyleInstructions(history)
-    const historyMessages = (hasImage || standalone) ? [] : buildHistoryLayer(filteredHistory, continuity, sid, needsRawCode)
+    const historyMessages = (hasImage || standalone) ? [] : buildHistoryLayer(filteredHistory, continuity, sid)
     const messages        = [
       ...historyMessages,
       { role: 'user', content: hasImage ? userContent : cleanedText }
@@ -1009,7 +986,6 @@ router.post('/process-text', async (req, res) => {
         feedbackApplied,
         feedbackCoherence,
         standalone,
-        needsRawCode,
         capsuleEval: {
           score:  capsuleEvalResult.score,
           used:   capsuleEvalResult.used,
