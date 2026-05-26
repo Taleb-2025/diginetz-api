@@ -754,8 +754,6 @@ router.post('/process-text', async (req, res) => {
     const routedContext = enrichRouteContext(routeItems, sid)
     const routeConf     = calcRouteConfidence(routedContext)
 
-    const needsRawCode = detectTechnicalIntent(cleanedText, codeBlocks)
-
     // ── Build Frame ───────────────────────────────────────────
     const built = build({
       ok:                true,
