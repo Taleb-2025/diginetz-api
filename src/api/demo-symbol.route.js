@@ -38,11 +38,21 @@ router.post('/', async (req, res) => {
   try {
 
     const {
-      text = '',
-      history = []
+      text = ''
     } = req.body
 
-    const messages = history.slice(-4)
+    // ── NO HISTORY ─────────────────────────────
+    // Only current message is sent to Claude
+    // This makes symbolic continuity testing real
+
+    const messages = [
+
+      {
+        role: 'user',
+        content: text
+      }
+
+    ]
 
     const body = {
 
@@ -69,11 +79,16 @@ Rules:
 []  = grouped context
 
 Infer intent from symbols naturally.
+
 Do not explain the symbols themselves.
+
 Continue the semantic direction implicitly.
+
+Assume symbolic markers may compress previous semantic context.
 `,
 
       messages
+
     }
 
     const data = await fetchClaude(body)
@@ -86,8 +101,11 @@ Continue the semantic direction implicitly.
         ?.trim() || null
 
     return res.json({
+
       ok: true,
+
       reply
+
     })
 
   } catch (err) {
@@ -104,6 +122,7 @@ Continue the semantic direction implicitly.
       error: err.message
 
     })
+
   }
 
 })
@@ -116,7 +135,9 @@ router.get('/', (_req, res) => {
 
     route: 'demo-symbol',
 
-    status: 'online'
+    status: 'online',
+
+    history: false
 
   })
 
