@@ -38,14 +38,16 @@ router.post('/', async (req, res) => {
   try {
 
     const {
-      text = ''
+      text = '',
+      history = []
     } = req.body
 
-    // ── NO HISTORY ─────────────────────────────
-    // Only current message is sent to Claude
-    // This makes symbolic continuity testing real
+    // ── Tiny Context Window ─────────────────────
+    // Only last message survives
 
     const messages = [
+
+      ...history.slice(-1),
 
       {
         role: 'user',
@@ -137,7 +139,7 @@ router.get('/', (_req, res) => {
 
     status: 'online',
 
-    history: false
+    historyWindow: 1
 
   })
 
