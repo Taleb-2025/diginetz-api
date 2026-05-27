@@ -390,6 +390,9 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   return { miniContext, tokenEstimate: Math.ceil((miniContext?.length ?? 0) / 4), layers: { state: !!stateHint, code: !!codeHint, memory: !!(frontendContext && capsuleEvalResult?.score >= 0.35), vault: !!(vaultHit?.score >= 0.45), context: !!builtSystemHint, style: !!activeStyle } }
 }
 
+const rawCodeStore     = new Map()
+const codeSessionStore = new Map()
+
 const capsuleMemory = new Map()
 const anchorMemory  = new Map()
 
@@ -535,7 +538,7 @@ async function continuationCall(currentText, partialReply, systemHint, timeoutMs
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '9.7' })
+  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '9.8' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -607,12 +610,26 @@ router.post('/process-text', async (req, res) => {
       }
     }
 
+    if (codeBlocks.length > 0) {
+      rawCodeStore.set(sid, { raw: codeBlocks.join('\n\n'), updatedAt: tValue })
+      codeSessionStore.set(sid, { active: true, ttl: 6 })
+    } else {
+      const cs = codeSessionStore.get(sid)
+      if (cs?.active) {
+        cs.ttl--
+        if (cs.ttl <= 0) cs.active = false
+      }
+    }
+
     const wordCount       = cleanedText.trim().split(/\s+/).length
     const noveltyPressure = processed.celfResult.field?.noveltyPressure ?? 0
 
     const historyHasCode  = (history ?? []).some(h => h.role === 'user' && detectCodeBlocks(h.content).length > 0)
     const hasCodeContext   = codeBlocks.length > 0 || historyHasCode
-    const needsRawCode     = hasCodeContext && detectTechnicalIntent(cleanedText)
+    const codeSession      = codeSessionStore.get(sid)
+    const sessionActive    = codeSession?.active && codeSession?.ttl > 0
+    const EDITOR_INTENT    = /اصلح|اصلحه|عدل|عدله|نقاط ضعف|أخطاء قاتلة|review|fix|edit|refactor|analyze|تحليل|تعديل|debug|improve|حسّن/i
+    const needsRawCode     = (sessionActive || hasCodeContext) && (detectTechnicalIntent(cleanedText) || EDITOR_INTENT.test(cleanedText))
     const _codeOnlyMsg     = codeBlocks.length > 0 && wordCount <= 4
       ? 'Analyze this code: identify its purpose, structure, and any issues.' : null
 
@@ -646,7 +663,9 @@ router.post('/process-text', async (req, res) => {
     const hardDrift          = semanticState?.driftCount >= 3
     const effectiveContinuity = (fieldShifted || hardDrift) ? 0 : continuity
 
-    const miniCtxResult = buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit: fieldShifted ? null : vaultHit, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals })
+    const _editorFront  = editorMode ? null : frontendContext
+    const _editorVault  = (editorMode || fieldShifted) ? null : vaultHit
+    const miniCtxResult = buildMiniContext({ engine, frontendContext: _editorFront, capsuleEvalResult, vaultHit: _editorVault, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals })
 
     const _inputWords = wordCount
     const _noMarkdown = codeBlocks.length === 0 ? ' No markdown unless necessary. No bullet points. No bold text.' : ''
@@ -662,10 +681,35 @@ router.post('/process-text', async (req, res) => {
     
     const userContent = hasImage ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: cleanedText }] : [])] : cleanedText
 
+    const storedRaw = rawCodeStore.get(sid)?.raw ?? null
+
+    if (needsRawCode && !storedRaw && !codeBlocks.length) {
+      return res.json({
+        reply: 'أحتاج الكود الخام مرة أخرى — المتاح الآن ملخص فقط. أرسل الكود مجدداً.',
+        codeRequired: true,
+        celfVault: [],
+        metrics: { inputTokens: 0, outputTokens: 0, costUSD: 0, maxTokens: 0, model: 'none' }
+      })
+    }
+
     const filteredHistory = filterStyleInstructions(history)
     const currentDomain   = semanticState?.dominantDomain ?? classifyDomain(cleanedText)
-    const historyMessages = (hasImage || standalone) ? [] : buildHistoryLayer(filteredHistory, effectiveContinuity, sid, needsRawCode, currentDomain)
-    const messages        = [...historyMessages, { role: 'user', content: hasImage ? userContent : cleanedText }]
+
+    let historyMessages
+    const editorMode = needsRawCode && (storedRaw || codeBlocks.length > 0)
+
+    if (editorMode) {
+      const lastAssistantPatch = [...filteredHistory].reverse().find(h => h.role === 'assistant' && detectCodeBlocks(h.content).length > 0)
+      const rawMsg    = storedRaw ? { role: 'user', content: storedRaw } : null
+      const patchMsg  = lastAssistantPatch ? { role: 'assistant', content: compressAssistantMessage(lastAssistantPatch.content) } : null
+      historyMessages = [rawMsg, patchMsg].filter(Boolean)
+    } else if (hasImage || standalone) {
+      historyMessages = []
+    } else {
+      historyMessages = buildHistoryLayer(filteredHistory, effectiveContinuity, sid, false, currentDomain)
+    }
+
+    const messages = [...historyMessages, { role: 'user', content: hasImage ? userContent : cleanedText }]
 
     const _tldr = messages.length > 6
       ? 'Be direct. Avoid restating context already known.'
@@ -722,6 +766,14 @@ router.post('/process-text', async (req, res) => {
       if (observerBox) { storeCapsule(sid, observerBox, lastTopicText, tValue); updateAnchors(sid, lastTopicText, questionSimilarity ?? 0.5) }
     }
 
+    if (reply && needsRawCode) {
+      const replyBlocks = detectCodeBlocks(reply)
+      if (replyBlocks.length > 0 && replyBlocks[0].length > 200) {
+        rawCodeStore.set(sid, { raw: replyBlocks.join('\n\n'), updatedAt: tValue })
+        codeSessionStore.set(sid, { active: true, ttl: 6 })
+      }
+    }
+
     let feedbackApplied = false, feedbackCoherence = null
     if (reply) {
       const replyCompressed = compressReplyForFeedback(reply)
@@ -739,7 +791,7 @@ router.post('/process-text', async (req, res) => {
 
     return res.json({
       reply, celfVault: vaultToSave, observer: observerBox,
-      debug: { messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
+      debug: { messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, editorMode, sessionActive, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, totalTokens: inputTokensTotal + outputTokensTotal, costUSD, maxTokens, routeConfidence: Math.round(routeConf * 1000) / 1000, vaultHit: vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null, model, inlineCode: codeBlocks.length > 0, payloadSize, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, styleTtlRemaining: styleStore.get(sid)?.ttl ?? 0, noiseRemoved, truncated: hasText && text.length > MAX_INPUT_CHARS, feedbackApplied, feedbackCoherence }
     })
 
@@ -771,6 +823,8 @@ router.delete('/session/:id', (req, res) => {
   processingLock.delete(req.params.id)
   _semanticState.delete(req.params.id)
   _fieldHistory.delete(req.params.id)
+  rawCodeStore.delete(req.params.id)
+  codeSessionStore.delete(req.params.id)
   return res.json({ ok: true })
 })
 
