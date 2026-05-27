@@ -267,6 +267,58 @@ function isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlock
   return false
 }
 
+function buildFieldSignals(celfResult, cleanedText, codeBlocks, continuity) {
+  const signals = []
+  const field   = celfResult.field ?? {}
+  const phase   = celfResult.phase ?? 'warmup'
+  const exec    = field.executionReadiness ?? 0
+  const intent  = field.intentPressure    ?? 0
+  const novel   = field.noveltyPressure   ?? 0
+  const coher   = field.semanticCoherence ?? 0
+  const ground  = field.semanticGrounding ?? 0
+
+  const DOMAIN_PATTERNS = [
+    [/#?(backend|server|api|express|fastapi|django|flask|nestjs)/i,    '#backend'],
+    [/#?(frontend|react|vue|angular|html|css|ui|ux)/i,                 '#frontend'],
+    [/#?(database|db|redis|postgres|mysql|mongodb|sql)/i,              '#database'],
+    [/#?(auth|security|jwt|token|oauth|session)/i,                     '#security'],
+    [/#?(cache|caching|memory|buffer|queue)/i,                         '#cache'],
+    [/#?(deploy|docker|railway|nginx|kubernetes|cloud)/i,              '#devops'],
+    [/#?(test|debug|error|bug|exception|crash)/i,                      '#debugging'],
+    [/#?(algo|algorithm|complexity|data.?struct)/i,                    '#algorithms'],
+    [/فلسف|نفس|مشاع|emotion|feel|love|fear|anxiety|philosophy|psycho/i, '#general'],
+  ]
+
+  for (const [pat, label] of DOMAIN_PATTERNS) {
+    if (pat.test(cleanedText)) { signals.push(label); break }
+  }
+
+  if (codeBlocks.length > 0)  signals.push('#code')
+  if (exec > 0.60)             signals.push('>execute')
+  if (intent > 0.55 && exec < 0.40) signals.push('>analyze')
+  if (novel > 0.70)            signals.push('>explore')
+  if (continuity > 0.65 && coher > 0.50) signals.push('>continuation')
+  if (ground < 0.25)           signals.push('?ambiguous')
+  if (/خطأ|error|fail|crash|مشكلة|bug/i.test(cleanedText)) signals.push('?failure')
+  if (/لماذا|why|warum|pourquoi/i.test(cleanedText))       signals.push('?causal')
+
+  return signals.length ? signals.join(' ') : null
+}
+
+const _fieldHistory = new Map()
+
+function detectFieldShift(sid, currentVector, engine, continuity) {
+  const prev = _fieldHistory.get(sid)
+  if (!prev) {
+    _fieldHistory.set(sid, { vector: currentVector, t: Date.now() })
+    return false
+  }
+  const sim = engine.cosineSimilarity(prev.vector, currentVector)
+  _fieldHistory.set(sid, { vector: currentVector, t: Date.now() })
+  if (sim < 0.22 && continuity > 0.45) return true
+  return false
+}
+
 function buildStateHint(phase, continuity) {
   if (!phase || phase === 'warmup') return null
   if (phase === 'drift' || continuity < 0.20) return '[mode: ground — answer directly, ignore prior context]'
@@ -276,8 +328,9 @@ function buildStateHint(phase, continuity) {
   return null
 }
 
-function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase }) {
+function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals }) {
   const parts = []
+  if (fieldSignals) parts.push(fieldSignals)
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
   if (codeHint) parts.push(codeHint)
@@ -335,18 +388,50 @@ function buildFragmentContext(sid, history) {
   return [...buildAnchorContext(sid), { role: 'assistant', content: `[fragment] ${fragment}` }]
 }
 
-function buildHistoryLayer(history, continuity, sid, needsRawCode = false) {
+function classifyDomain(text) {
+  if (!text || typeof text !== 'string') return 'general'
+  const t = text.toLowerCase()
+  if (/فلسف|نفس|مشاع|emotion|feel|love|fear|anxiety|philosophy|psycho|spiritua/i.test(t)) return 'emotional'
+  if (/error|bug|crash|exception|debug|fix|مشكلة|خطأ|لا يعمل|fail|broken/i.test(t)) return 'debugging'
+  if (/backend|express|fastapi|django|flask|nestjs|server|api|route|endpoint|middleware|request|response/i.test(t)) return 'backend'
+  if (/frontend|react|vue|angular|html|css|dom|component|jsx|tsx|ui|ux|style|tailwind/i.test(t)) return 'frontend'
+  if (/database|redis|postgres|mysql|mongodb|sqlite|sql|query|schema|migration|orm|prisma/i.test(t)) return 'database'
+  if (/auth|jwt|token|oauth|session|cookie|bcrypt|password|login|signup|permission/i.test(t)) return 'security'
+  if (/docker|railway|nginx|kubernetes|deploy|cloud|aws|gcp|azure|vercel|ci|cd|pipeline/i.test(t)) return 'devops'
+  if (/algorithm|complexity|sort|search|graph|tree|binary|dynamic|recursion|data.?struct/i.test(t)) return 'algorithms'
+  if (/test|jest|mocha|cypress|spec|unit|integration|mock|coverage/i.test(t)) return 'testing'
+  if (/const|let|var|function|class|import|export|async|await|promise|callback|=>/.test(t) && t.length > 80) return 'code'
+  return 'general'
+}
+
+function buildHistoryLayer(history, continuity, sid, needsRawCode = false, currentDomain = 'general') {
   const filtered = filterStyleInstructions(history)
   const clean    = filtered.filter(h => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string' && h.content.length > 0)
 
+  const PASS_ALWAYS = new Set(['general','emotional'])
+  const domainFiltered = currentDomain === 'general'
+    ? clean
+    : clean.filter(h => {
+        const msgDomain = classifyDomain(h.content)
+        return PASS_ALWAYS.has(msgDomain) || msgDomain === currentDomain
+      })
+
+  const withFallback = (filtered, minCount, fallback) => {
+    if (filtered.length >= minCount) return filtered
+    const extra = fallback.filter(h => !filtered.includes(h))
+    return [...filtered, ...extra.slice(-(minCount - filtered.length))]
+  }
+
   if (continuity >= 0.70) {
-    const msgs = clean.slice(-4)
+    const raw  = domainFiltered.slice(-4)
+    const msgs = withFallback(raw, 2, clean.slice(-4))
     if (msgs.length < 2) return []
     return msgs.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) }))
   }
 
   if (continuity >= 0.40) {
-    const msgs = clean.slice(-2)
+    const raw        = domainFiltered.slice(-2)
+    const msgs       = withFallback(raw, 2, clean.slice(-2))
     const compressed = msgs.length >= 2 ? msgs.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) })) : []
     return [...compressed, ...buildCapsuleContext(sid)]
   }
@@ -403,7 +488,7 @@ async function continuationCall(currentText, partialReply, systemHint, timeoutMs
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '9.2' })
+  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '9.5' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -507,7 +592,11 @@ router.post('/process-text', async (req, res) => {
 
     const continuity = standalone ? 0 : (built.context?.continuity ?? 0)
 
-    const miniCtxResult = buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity, phase: processed.celfResult.phase ?? 'warmup' })
+    const fieldSignals  = buildFieldSignals(processed.celfResult, cleanedText, codeBlocks, continuity)
+    const fieldShifted  = !standalone && questionVector ? detectFieldShift(sid, questionVector, engine, continuity) : false
+    const effectiveContinuity = fieldShifted ? 0 : continuity
+
+    const miniCtxResult = buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit: fieldShifted ? null : vaultHit, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals })
 
     const _inputWords = wordCount
     const _noMarkdown = codeBlocks.length === 0 ? ' No markdown unless necessary. No bullet points. No bold text.' : ''
@@ -515,7 +604,7 @@ router.post('/process-text', async (req, res) => {
 
     const prevCodeFailed = hasCodeContext && (history ?? []).some(h =>
       h.role === 'user' &&
-      /لا يعمل|لا يشتغل|not working|doesn't work|broken|crash|يعطي خطأ|gives error/i.test(h.content)
+      /لا يعمل|لا يشتغل|not working|doesn't work|broken|crash|gives error/i.test(h.content)
     )
     const _reflective = prevCodeFailed
       ? 'Previous attempt had issues. Identify the root cause first, then provide a corrected solution.' : null
@@ -524,7 +613,8 @@ router.post('/process-text', async (req, res) => {
     const userContent = hasImage ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: cleanedText }] : [])] : cleanedText
 
     const filteredHistory = filterStyleInstructions(history)
-    const historyMessages = (hasImage || standalone) ? [] : buildHistoryLayer(filteredHistory, continuity, sid, needsRawCode)
+    const currentDomain   = classifyDomain(cleanedText)
+    const historyMessages = (hasImage || standalone) ? [] : buildHistoryLayer(filteredHistory, effectiveContinuity, sid, needsRawCode, currentDomain)
     const messages        = [...historyMessages, { role: 'user', content: hasImage ? userContent : cleanedText }]
 
     const _tldr = messages.length > 6
@@ -599,7 +689,7 @@ router.post('/process-text', async (req, res) => {
 
     return res.json({
       reply, celfVault: vaultToSave, observer: observerBox,
-      debug: { messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, historyHasCode, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
+      debug: { messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, historyHasCode, currentDomain, fieldSignals, fieldShifted, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, totalTokens: inputTokensTotal + outputTokensTotal, costUSD, maxTokens, routeConfidence: Math.round(routeConf * 1000) / 1000, vaultHit: vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null, model, inlineCode: codeBlocks.length > 0, payloadSize, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, styleTtlRemaining: styleStore.get(sid)?.ttl ?? 0, noiseRemoved, truncated: hasText && text.length > MAX_INPUT_CHARS, feedbackApplied, feedbackCoherence }
     })
 
