@@ -393,6 +393,95 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
 const rawCodeStore     = new Map()
 const codeSessionStore = new Map()
 
+function extractSymbols(raw) {
+  const symbols = []
+  const patterns = [
+    /function\s+(\w+)/g,
+    /class\s+(\w+)/g,
+    /const\s+(\w+)\s*=/g,
+    /router\.(get|post|put|delete|patch)\(['"](\/[^'"]*)['"]/g,
+    /import\s+.*\s+from\s+['"]([^'"]+)['"]/g,
+    /export\s+(class|function|const)\s+(\w+)/g
+  ]
+  for (const pat of patterns) {
+    let m; pat.lastIndex = 0
+    while ((m = pat.exec(raw)) !== null) {
+      const sym = m[2] || m[1]
+      if (sym && sym.length > 2) symbols.push(sym.toLowerCase())
+    }
+  }
+  return [...new Set(symbols)].slice(0, 25)
+}
+
+function compressCodeSemantics(raw, symbols) {
+  const domain  = classifyDomain(raw)
+  const topSyms = symbols.slice(0, 6).join(', ')
+  const lines   = raw.split('\n').filter(l => l.trim() && !l.trim().startsWith('//')).length
+  return `${domain} code: ${topSyms || 'general'} (~${lines} lines)`
+}
+
+function storeCodeContext(sid, rawArr, engine, tValue) {
+  const contexts = rawCodeStore.get(sid) ?? []
+  for (const raw of rawArr) {
+    if (!raw || raw.length < 30) continue
+    let cs = 2166136261
+    for (let i = 0; i < raw.length; i++) { cs ^= raw.charCodeAt(i); cs = Math.imul(cs, 16777619) }
+    const hash = Math.abs(cs >>> 0).toString(16)
+    const existing = contexts.find(c => c.hash === hash)
+    if (existing) { existing.updatedAt = Date.now(); existing.msgIndex = tValue; continue }
+    const symbols       = extractSymbols(raw)
+    const summary       = compressCodeSemantics(raw, symbols)
+    const codeVector    = engine.semanticVector(raw.slice(0, 2000))
+    const summaryVector = engine.semanticVector(summary)
+    contexts.push({
+      id: `ctx_${tValue}_${hash.slice(0,6)}`,
+      raw,
+      codeVector,
+      summaryVector,
+      symbols,
+      summary,
+      domain: classifyDomain(raw),
+      hash,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      msgIndex: tValue
+    })
+  }
+  if (contexts.length > 10) contexts.splice(0, contexts.length - 10)
+  rawCodeStore.set(sid, contexts)
+}
+
+function retrieveRelevantCode(questionVector, questionText, sid, currentMsgIndex) {
+  const contexts = rawCodeStore.get(sid) ?? []
+  if (!contexts.length) return null
+  let best = null, bestScore = 0
+  const qLower = questionText.toLowerCase()
+  for (const ctx of contexts) {
+    const codeSim    = questionVector ? engine_cosine(questionVector, ctx.codeVector)    : 0
+    const summarySim = questionVector ? engine_cosine(questionVector, ctx.summaryVector) : 0
+    const symbolBoost = ctx.symbols.filter(s => qLower.includes(s)).length * 0.12
+    const msgAge      = Math.max(0, currentMsgIndex - ctx.msgIndex)
+    const freshness   = Math.max(0, 1 - msgAge / 20)
+    const rawScore    = codeSim * 0.55 + summarySim * 0.30 + Math.min(0.30, symbolBoost) * 0.15
+    const finalScore  = rawScore * 0.85 + freshness * 0.15
+    if (finalScore > bestScore) { bestScore = finalScore; best = { ctx, score: finalScore, symbolBoost } }
+  }
+  if (!best) return null
+  const hasEditIntent = /اصلح|عدل|نقاط ضعف|review|fix|edit|refactor|analyze|debug|improve|حسّن/i.test(questionText)
+  let threshold = 0.30
+  if (best.symbolBoost > 0) threshold = 0.20
+  if (hasEditIntent)        threshold -= 0.05
+  return best.score >= threshold ? best.ctx : null
+}
+
+function engine_cosine(a, b) {
+  if (!a?.length || !b?.length) return 0
+  const n = Math.min(a.length, b.length)
+  let dot = 0, na = 0, nb = 0
+  for (let i = 0; i < n; i++) { dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i] }
+  return (na > 0 && nb > 0) ? Math.max(0, Math.min(1, dot / (Math.sqrt(na) * Math.sqrt(nb)))) : 0
+}
+
 const capsuleMemory = new Map()
 const anchorMemory  = new Map()
 
@@ -538,7 +627,7 @@ async function continuationCall(currentText, partialReply, systemHint, timeoutMs
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '10.0' })
+  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '10.1' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -611,14 +700,11 @@ router.post('/process-text', async (req, res) => {
     }
 
     if (codeBlocks.length > 0) {
-      rawCodeStore.set(sid, { raw: codeBlocks.join('\n\n'), updatedAt: tValue })
+      storeCodeContext(sid, codeBlocks, engine, tValue)
       codeSessionStore.set(sid, { active: true, ttl: 6 })
     } else {
       const cs = codeSessionStore.get(sid)
-      if (cs?.active) {
-        cs.ttl--
-        if (cs.ttl <= 0) cs.active = false
-      }
+      if (cs?.active) { cs.ttl--; if (cs.ttl <= 0) cs.active = false }
     }
 
     const wordCount       = cleanedText.trim().split(/\s+/).length
@@ -628,9 +714,12 @@ router.post('/process-text', async (req, res) => {
     const hasCodeContext   = codeBlocks.length > 0 || historyHasCode
     const codeSession      = codeSessionStore.get(sid)
     const sessionActive    = codeSession?.active && codeSession?.ttl > 0
-    const hasStoredRaw     = !!rawCodeStore.get(sid)?.raw
+    const hasStoredContexts = (rawCodeStore.get(sid) ?? []).length > 0
+    const matchedCode      = hasStoredContexts && questionVector
+      ? retrieveRelevantCode(questionVector, cleanedText, sid, tValue)
+      : null
+    const needsRawCode     = !!matchedCode
     const EDITOR_INTENT    = /اصلح|اصلحه|عدل|عدله|نقاط ضعف|أخطاء قاتلة|review|fix|edit|refactor|analyze|تحليل|تعديل|debug|improve|حسّن/i
-    const needsRawCode     = hasStoredRaw && (detectTechnicalIntent(cleanedText) || EDITOR_INTENT.test(cleanedText))
     const _codeOnlyMsg     = codeBlocks.length > 0 && wordCount <= 4
       ? 'Analyze this code: identify its purpose, structure, and any issues.' : null
 
@@ -678,8 +767,8 @@ router.post('/process-text', async (req, res) => {
     
     const userContent = hasImage ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: cleanedText }] : [])] : cleanedText
 
-    const storedRaw  = rawCodeStore.get(sid)?.raw ?? null
-    const editorMode = needsRawCode
+    const storedRaw  = matchedCode?.raw ?? null
+    const editorMode = !!matchedCode
 
     const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: (editorMode || fieldShifted) ? null : vaultHit, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals })
 
@@ -768,8 +857,9 @@ router.post('/process-text', async (req, res) => {
     if (reply && needsRawCode) {
       const replyBlocks = detectCodeBlocks(reply)
       if (replyBlocks.length > 0 && replyBlocks[0].length > 200) {
-        rawCodeStore.set(sid, { raw: replyBlocks.join('\n\n'), updatedAt: tValue })
+        storeCodeContext(sid, replyBlocks, engine, tValue + 0.9)
         codeSessionStore.set(sid, { active: true, ttl: 6 })
+        if (matchedCode) matchedCode.updatedAt = Date.now()
       }
     }
 
@@ -790,7 +880,7 @@ router.post('/process-text', async (req, res) => {
 
     return res.json({
       reply, celfVault: vaultToSave, observer: observerBox,
-      debug: { messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, editorMode, sessionActive, hasStoredRaw, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
+      debug: { messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, editorMode, sessionActive, hasStoredContexts, matchedCodeId: matchedCode?.id ?? null, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, totalTokens: inputTokensTotal + outputTokensTotal, costUSD, maxTokens, routeConfidence: Math.round(routeConf * 1000) / 1000, vaultHit: vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null, model, inlineCode: codeBlocks.length > 0, payloadSize, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, styleTtlRemaining: styleStore.get(sid)?.ttl ?? 0, noiseRemoved, truncated: hasText && text.length > MAX_INPUT_CHARS, feedbackApplied, feedbackCoherence }
     })
 
