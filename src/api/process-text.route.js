@@ -267,42 +267,89 @@ function isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlock
   return false
 }
 
-function buildFieldSignals(celfResult, cleanedText, codeBlocks, continuity) {
-  const signals = []
-  const field   = celfResult.field ?? {}
-  const phase   = celfResult.phase ?? 'warmup'
-  const exec    = field.executionReadiness ?? 0
-  const intent  = field.intentPressure    ?? 0
-  const novel   = field.noveltyPressure   ?? 0
-  const coher   = field.semanticCoherence ?? 0
-  const ground  = field.semanticGrounding ?? 0
+const _semanticState = new Map()
 
-  const DOMAIN_PATTERNS = [
-    [/#?(backend|server|api|express|fastapi|django|flask|nestjs)/i,    '#backend'],
-    [/#?(frontend|react|vue|angular|html|css|ui|ux)/i,                 '#frontend'],
-    [/#?(database|db|redis|postgres|mysql|mongodb|sql)/i,              '#database'],
-    [/#?(auth|security|jwt|token|oauth|session)/i,                     '#security'],
-    [/#?(cache|caching|memory|buffer|queue)/i,                         '#cache'],
-    [/#?(deploy|docker|railway|nginx|kubernetes|cloud)/i,              '#devops'],
-    [/#?(test|debug|error|bug|exception|crash)/i,                      '#debugging'],
-    [/#?(algo|algorithm|complexity|data.?struct)/i,                    '#algorithms'],
-    [/فلسف|نفس|مشاع|emotion|feel|love|fear|anxiety|philosophy|psycho/i, '#general'],
-  ]
+function getSemanticState(sid) {
+  if (!_semanticState.has(sid)) {
+    _semanticState.set(sid, {
+      dominantDomain:   'general',
+      candidateDomain:  'general',
+      candidateCount:   0,
+      driftCount:       0,
+      domainWeights:    {}
+    })
+  }
+  return _semanticState.get(sid)
+}
 
-  for (const [pat, label] of DOMAIN_PATTERNS) {
-    if (pat.test(cleanedText)) { signals.push(label); break }
+function updateSemanticState(sid, detectedDomain) {
+  const state   = getSemanticState(sid)
+  const DECAY   = 0.92
+  const BOOST   = 0.28
+  const weights = state.domainWeights
+
+  for (const d of Object.keys(weights)) {
+    weights[d] *= DECAY
+    if (weights[d] < 0.05) delete weights[d]
+  }
+  weights[detectedDomain] = Math.min(1.0, (weights[detectedDomain] ?? 0) + BOOST)
+
+  if (detectedDomain !== state.dominantDomain && detectedDomain !== 'general') {
+    state.driftCount++
+    if (detectedDomain === state.candidateDomain) {
+      state.candidateCount++
+      if (state.candidateCount >= 3) {
+        state.dominantDomain  = detectedDomain
+        state.candidateCount  = 0
+        state.driftCount      = 0
+      }
+    } else {
+      state.candidateDomain = detectedDomain
+      state.candidateCount  = 1
+    }
+  } else if (detectedDomain === state.dominantDomain) {
+    state.candidateCount = 0
+    state.driftCount     = 0
+  } else if (detectedDomain === 'general') {
+    state.driftCount = Math.max(0, state.driftCount - 1)
   }
 
-  if (codeBlocks.length > 0)  signals.push('#code')
-  if (exec > 0.60)             signals.push('>execute')
-  if (intent > 0.55 && exec < 0.40) signals.push('>analyze')
-  if (novel > 0.70)            signals.push('>explore')
+  return state
+}
+
+function getTopSignals(weights, topN = 2) {
+  return Object.entries(weights)
+    .filter(([, w]) => w >= 0.25)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, topN)
+    .map(([d]) => '#' + d)
+    .join(' ') || null
+}
+
+function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity) {
+  const field  = celfResult.field ?? {}
+  const exec   = field.executionReadiness ?? 0
+  const intent = field.intentPressure    ?? 0
+  const novel  = field.noveltyPressure   ?? 0
+  const coher  = field.semanticCoherence ?? 0
+  const ground = field.semanticGrounding ?? 0
+
+  const detected = classifyDomain(cleanedText)
+  const state    = updateSemanticState(sid, detected)
+  const domSigs  = getTopSignals(state.domainWeights)
+
+  const signals = []
+  if (domSigs) signals.push(domSigs)
+  if (codeBlocks.length > 0)             signals.push('#code')
+  if (exec > 0.60)                       signals.push('>execute')
+  if (intent > 0.55 && exec < 0.40)     signals.push('>analyze')
+  if (novel > 0.70)                      signals.push('>explore')
   if (continuity > 0.65 && coher > 0.50) signals.push('>continuation')
-  if (ground < 0.25)           signals.push('?ambiguous')
+  if (ground < 0.25)                     signals.push('?ambiguous')
   if (/خطأ|error|fail|crash|مشكلة|bug/i.test(cleanedText)) signals.push('?failure')
   if (/لماذا|why|warum|pourquoi/i.test(cleanedText))       signals.push('?causal')
 
-  return signals.length ? signals.join(' ') : null
+  return { text: signals.join(' ') || null, state }
 }
 
 const _fieldHistory = new Map()
@@ -488,7 +535,7 @@ async function continuationCall(currentText, partialReply, systemHint, timeoutMs
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '9.5' })
+  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '9.7' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -592,9 +639,12 @@ router.post('/process-text', async (req, res) => {
 
     const continuity = standalone ? 0 : (built.context?.continuity ?? 0)
 
-    const fieldSignals  = buildFieldSignals(processed.celfResult, cleanedText, codeBlocks, continuity)
+    const _fsResult     = buildFieldSignals(sid, processed.celfResult, cleanedText, codeBlocks, continuity)
+    const fieldSignals  = _fsResult.text
+    const semanticState = _fsResult.state
     const fieldShifted  = !standalone && questionVector ? detectFieldShift(sid, questionVector, engine, continuity) : false
-    const effectiveContinuity = fieldShifted ? 0 : continuity
+    const hardDrift          = semanticState?.driftCount >= 3
+    const effectiveContinuity = (fieldShifted || hardDrift) ? 0 : continuity
 
     const miniCtxResult = buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit: fieldShifted ? null : vaultHit, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals })
 
@@ -613,7 +663,7 @@ router.post('/process-text', async (req, res) => {
     const userContent = hasImage ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: cleanedText }] : [])] : cleanedText
 
     const filteredHistory = filterStyleInstructions(history)
-    const currentDomain   = classifyDomain(cleanedText)
+    const currentDomain   = semanticState?.dominantDomain ?? classifyDomain(cleanedText)
     const historyMessages = (hasImage || standalone) ? [] : buildHistoryLayer(filteredHistory, effectiveContinuity, sid, needsRawCode, currentDomain)
     const messages        = [...historyMessages, { role: 'user', content: hasImage ? userContent : cleanedText }]
 
@@ -689,7 +739,7 @@ router.post('/process-text', async (req, res) => {
 
     return res.json({
       reply, celfVault: vaultToSave, observer: observerBox,
-      debug: { messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, historyHasCode, currentDomain, fieldSignals, fieldShifted, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
+      debug: { messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, totalTokens: inputTokensTotal + outputTokensTotal, costUSD, maxTokens, routeConfidence: Math.round(routeConf * 1000) / 1000, vaultHit: vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null, model, inlineCode: codeBlocks.length > 0, payloadSize, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, styleTtlRemaining: styleStore.get(sid)?.ttl ?? 0, noiseRemoved, truncated: hasText && text.length > MAX_INPUT_CHARS, feedbackApplied, feedbackCoherence }
     })
 
@@ -719,6 +769,8 @@ router.delete('/session/:id', (req, res) => {
   semanticTextMaps.delete(req.params.id)
   styleStore.delete(req.params.id)
   processingLock.delete(req.params.id)
+  _semanticState.delete(req.params.id)
+  _fieldHistory.delete(req.params.id)
   return res.json({ ok: true })
 })
 
