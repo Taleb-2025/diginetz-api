@@ -538,7 +538,7 @@ async function continuationCall(currentText, partialReply, systemHint, timeoutMs
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '9.8' })
+  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '9.9' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -629,7 +629,7 @@ router.post('/process-text', async (req, res) => {
     const codeSession      = codeSessionStore.get(sid)
     const sessionActive    = codeSession?.active && codeSession?.ttl > 0
     const EDITOR_INTENT    = /اصلح|اصلحه|عدل|عدله|نقاط ضعف|أخطاء قاتلة|review|fix|edit|refactor|analyze|تحليل|تعديل|debug|improve|حسّن/i
-    const needsRawCode     = (sessionActive || hasCodeContext) && (detectTechnicalIntent(cleanedText) || EDITOR_INTENT.test(cleanedText))
+    const needsRawCode     = sessionActive && (detectTechnicalIntent(cleanedText) || EDITOR_INTENT.test(cleanedText))
     const _codeOnlyMsg     = codeBlocks.length > 0 && wordCount <= 4
       ? 'Analyze this code: identify its purpose, structure, and any issues.' : null
 
@@ -663,10 +663,6 @@ router.post('/process-text', async (req, res) => {
     const hardDrift          = semanticState?.driftCount >= 3
     const effectiveContinuity = (fieldShifted || hardDrift) ? 0 : continuity
 
-    const _editorFront  = editorMode ? null : frontendContext
-    const _editorVault  = (editorMode || fieldShifted) ? null : vaultHit
-    const miniCtxResult = buildMiniContext({ engine, frontendContext: _editorFront, capsuleEvalResult, vaultHit: _editorVault, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals })
-
     const _inputWords = wordCount
     const _noMarkdown = codeBlocks.length === 0 ? ' No markdown unless necessary. No bullet points. No bold text.' : ''
     const conciseHint = codeBlocks.length > 0 ? 'Be thorough with code examples.' : _inputWords <= 5 ? 'Be concise and complete.' + _noMarkdown : _inputWords <= 15 ? 'Answer fully but without repetition.' + _noMarkdown : 'Be clear and complete.' + _noMarkdown
@@ -681,7 +677,10 @@ router.post('/process-text', async (req, res) => {
     
     const userContent = hasImage ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: cleanedText }] : [])] : cleanedText
 
-    const storedRaw = rawCodeStore.get(sid)?.raw ?? null
+    const storedRaw  = rawCodeStore.get(sid)?.raw ?? null
+    const editorMode = needsRawCode && (storedRaw || codeBlocks.length > 0)
+
+    const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: (editorMode || fieldShifted) ? null : vaultHit, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals })
 
     if (needsRawCode && !storedRaw && !codeBlocks.length) {
       return res.json({
@@ -696,12 +695,11 @@ router.post('/process-text', async (req, res) => {
     const currentDomain   = semanticState?.dominantDomain ?? classifyDomain(cleanedText)
 
     let historyMessages
-    const editorMode = needsRawCode && (storedRaw || codeBlocks.length > 0)
 
     if (editorMode) {
       const lastAssistantPatch = [...filteredHistory].reverse().find(h => h.role === 'assistant' && detectCodeBlocks(h.content).length > 0)
       const rawMsg    = storedRaw ? { role: 'user', content: storedRaw } : null
-      const patchMsg  = lastAssistantPatch ? { role: 'assistant', content: compressAssistantMessage(lastAssistantPatch.content) } : null
+      const patchMsg  = lastAssistantPatch ? { role: 'assistant', content: lastAssistantPatch.content.slice(0, 1200) } : null
       historyMessages = [rawMsg, patchMsg].filter(Boolean)
     } else if (hasImage || standalone) {
       historyMessages = []
