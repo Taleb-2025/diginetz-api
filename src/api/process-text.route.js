@@ -237,6 +237,11 @@ function evaluateCapsuleContext(engine, questionVector, capsuleContext, question
   const capsuleVector = engine.semanticVector?.(capsuleContext)
   if (!capsuleVector?.length) return { score: 0, used: false, reason: 'no_vector' }
   const semanticScore = engine.cosineSimilarity(questionVector, capsuleVector)
+  const fieldScore    = engine.fieldSimilarity(
+    { vector: questionVector, attractors: engine.state.attractors, field: engine.field },
+    { vector: capsuleVector,  attractors: [], field: { signature: 0 } }
+  )
+  const blendedScore  = semanticScore * 0.70 + fieldScore * 0.30
   const tokenize = t => t.toLowerCase().replace(/[،,.:;!?()[\]{}<>"']/g, ' ').split(/\s+/).filter(w => w.length > 3)
   const qTokens      = new Set(tokenize(questionText))
   const lexicalMatch = tokenize(capsuleContext).filter(w => qTokens.has(w)).length
@@ -244,9 +249,9 @@ function evaluateCapsuleContext(engine, questionVector, capsuleContext, question
   const questionHasCode = /كود|error|function|class|fix|bug|خطأ|برمج|api|express|react|vue|angular|javascript|typescript/i.test(questionText)
   const capsuleHasCode  = /function|class|error|const|let|var|=>|import|export|express|react|vue|angular|app\.|get\(|post\(/i.test(capsuleContext)
   const codeBonus = (questionHasCode && capsuleHasCode) ? 0.20 : 0
-  const hasAnySignal = lexicalMatch > 0 || codeBonus > 0 || semanticScore >= 0.45
+  const hasAnySignal = lexicalMatch > 0 || codeBonus > 0 || blendedScore >= 0.40
   if (!hasAnySignal) return { score: semanticScore, used: false, reason: 'no_signal' }
-  const finalScore = Math.min(1, semanticScore + codeBonus + lexicalBonus)
+  const finalScore = Math.min(1, blendedScore + codeBonus + lexicalBonus)
   const threshold  = questionHasCode ? 0.18 : 0.28
   const used       = finalScore >= threshold
   return { score: Math.round(finalScore * 1000) / 1000, semanticScore: Math.round(semanticScore * 1000) / 1000, codeBonus, lexicalBonus: Math.round(lexicalBonus * 1000) / 1000, used, threshold, reason: used ? 'relevant' : `below_threshold_${threshold}` }
@@ -336,32 +341,88 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity)
 
   const detected = classifyDomain(cleanedText)
   const state    = updateSemanticState(sid, detected)
-  const domSigs  = getTopSignals(state.domainWeights)
+  const dom      = state.dominantDomain !== 'general' ? state.dominantDomain : detected
+
+  const hasFailure    = /خطأ|error|fail|crash|مشكلة|bug/i.test(cleanedText)
+  const hasCausal     = /لماذا|why|warum|pourquoi/i.test(cleanedText)
+  const hasDeepIntent = /بالتفصيل|detailed|full|complete|شامل/i.test(cleanedText)
+  const hasCritical   = /critical|قاتل|خطير|urgent|عاجل/i.test(cleanedText)
+
+  const DOMAIN_KEYWORDS = {
+    backend:    'backend',
+    frontend:   'frontend',
+    database:   'database',
+    security:   'security',
+    devops:     'devops',
+    debugging:  'debugging',
+    algorithms: 'algorithms',
+    testing:    'testing',
+    code:       'code'
+  }
 
   const signals = []
-  if (domSigs) signals.push(domSigs)
-  if (codeBlocks.length > 0)             signals.push('#code')
-  if (exec > 0.60)                       signals.push('>execute')
-  if (intent > 0.55 && exec < 0.40)     signals.push('>analyze')
-  if (novel > 0.70)                      signals.push('>explore')
-  if (continuity > 0.65 && coher > 0.50) signals.push('>continuation')
-  if (ground < 0.25)                     signals.push('?ambiguous')
-  if (/خطأ|error|fail|crash|مشكلة|bug/i.test(cleanedText)) signals.push('?failure')
-  if (/لماذا|why|warum|pourquoi/i.test(cleanedText))       signals.push('?causal')
 
-  return { text: signals.join(' ') || null, state }
+  if (dom !== 'general' && dom !== 'emotional') {
+    const kw = DOMAIN_KEYWORDS[dom] ?? dom
+    if (continuity > 0.65 && coher > 0.50) {
+      signals.push('>#' + kw)
+    } else if (exec > 0.60) {
+      signals.push('>' + kw)
+    } else {
+      signals.push('#' + kw)
+    }
+  }
+
+  if (codeBlocks.length > 0 && dom !== 'code') signals.push('#code')
+
+  if (hasFailure && dom !== 'general') {
+    signals.push('?failure::' + (DOMAIN_KEYWORDS[dom] ?? dom))
+  } else if (hasFailure) {
+    signals.push('?failure')
+  }
+
+  if (hasCritical)               signals.push('!critical')
+  if (hasCausal)                 signals.push('?causal')
+  if (hasDeepIntent)             signals.push('>>depth')
+  if (intent > 0.55 && exec < 0.40 && !hasFailure) signals.push('>analyze')
+  if (novel > 0.70)              signals.push('>explore')
+  if (ground < 0.25)             signals.push('?ambiguous')
+
+  if (state.driftCount >= 2 && dom !== 'general') {
+    signals.push('::drift=>' + (DOMAIN_KEYWORDS[dom] ?? dom))
+  }
+
+  const weighted = []
+  for (const sig of signals) {
+    let w = 0.5
+    if (sig.startsWith('>#'))  w = continuity + coher
+    if (sig.startsWith('?failure')) w = 0.95
+    if (sig.startsWith('!'))   w = 1.0
+    if (sig.startsWith('::drift')) w = 0.85
+    if (sig.startsWith('>>')) w = intent + 0.2
+    if (sig.startsWith('#'))  w = 0.6
+    if (sig.startsWith('>') && !sig.startsWith('>#') && !sig.startsWith('>>')) w = exec + 0.2
+    if (sig.startsWith('?') && !sig.startsWith('?failure')) w = 0.4
+    weighted.push({ text: sig, w })
+  }
+  const MAX_SIGNALS = 4
+  const top = weighted.sort((a, b) => b.w - a.w).slice(0, MAX_SIGNALS).map(s => s.text)
+
+  return { text: top.length ? top.join(' ') : null, state }
 }
 
 const _fieldHistory = new Map()
 
-function detectFieldShift(sid, currentVector, engine, continuity) {
+function detectFieldShift(sid, currentVector, currentSnap, engine, continuity) {
   const prev = _fieldHistory.get(sid)
   if (!prev) {
-    _fieldHistory.set(sid, { vector: currentVector, t: Date.now() })
+    _fieldHistory.set(sid, { vector: currentVector, snap: currentSnap, t: Date.now() })
     return false
   }
-  const sim = engine.cosineSimilarity(prev.vector, currentVector)
-  _fieldHistory.set(sid, { vector: currentVector, t: Date.now() })
+  const sim = prev.snap && currentSnap
+    ? engine.fieldSimilarity(prev.snap, currentSnap)
+    : engine.cosineSimilarity(prev.vector, currentVector)
+  _fieldHistory.set(sid, { vector: currentVector, snap: currentSnap, t: Date.now() })
   if (sim < 0.22 && continuity > 0.45) return true
   return false
 }
@@ -627,11 +688,11 @@ async function continuationCall(currentText, partialReply, systemHint, timeoutMs
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '10.1' })
+  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '10.3' })
 })
 
 router.post('/process-text', async (req, res) => {
-  const { text = '', sessionId, history = [], image = null, imageMimeType = 'image/jpeg', savedCode = null, capsuleContext = null } = req.body
+  const { text = '', sessionId, history = [], image = null, imageMimeType = 'image/jpeg', savedCode = null, capsuleContext = null, recoveredCode = null } = req.body
 
   const hasText  = typeof text  === 'string' && text.trim().length > 0
   const hasImage = typeof image === 'string' && image.length > 0
@@ -749,7 +810,7 @@ router.post('/process-text', async (req, res) => {
     const _fsResult     = buildFieldSignals(sid, processed.celfResult, cleanedText, codeBlocks, continuity)
     const fieldSignals  = _fsResult.text
     const semanticState = _fsResult.state
-    const fieldShifted  = !standalone && questionVector ? detectFieldShift(sid, questionVector, engine, continuity) : false
+    const fieldShifted  = !standalone && questionVector ? detectFieldShift(sid, questionVector, processed.result, engine, continuity) : false
     const hardDrift          = semanticState?.driftCount >= 3
     const effectiveContinuity = (fieldShifted || hardDrift) ? 0 : continuity
 
@@ -797,7 +858,14 @@ router.post('/process-text', async (req, res) => {
       historyMessages = buildHistoryLayer(filteredHistory, effectiveContinuity, sid, false, currentDomain)
     }
 
-    const messages = [...historyMessages, { role: 'user', content: hasImage ? userContent : cleanedText }]
+    const recCode  = recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30
+      ? recoveredCode.slice(0, 8000) : null
+
+    const messages = [
+      ...(recCode && !editorMode ? [{ role: 'user', content: recCode }] : []),
+      ...historyMessages,
+      { role: 'user', content: hasImage ? userContent : cleanedText }
+    ]
 
     const _tldr = messages.length > 6
       ? 'Be direct. Avoid restating context already known.'
@@ -880,7 +948,7 @@ router.post('/process-text', async (req, res) => {
 
     return res.json({
       reply, celfVault: vaultToSave, observer: observerBox,
-      debug: { messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, editorMode, sessionActive, hasStoredContexts, matchedCodeId: matchedCode?.id ?? null, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
+      debug: { messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, editorMode, sessionActive, hasStoredContexts, matchedCodeId: matchedCode?.id ?? null, recoveredCodeInjected: !!recCode, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, totalTokens: inputTokensTotal + outputTokensTotal, costUSD, maxTokens, routeConfidence: Math.round(routeConf * 1000) / 1000, vaultHit: vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null, model, inlineCode: codeBlocks.length > 0, payloadSize, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, styleTtlRemaining: styleStore.get(sid)?.ttl ?? 0, noiseRemoved, truncated: hasText && text.length > MAX_INPUT_CHARS, feedbackApplied, feedbackCoherence }
     })
 
