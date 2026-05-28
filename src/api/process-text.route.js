@@ -498,9 +498,12 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   if (stateHint) parts.push(stateHint)
   if (codeHint) parts.push(codeHint)
   if (frontendContext && capsuleEvalResult?.score >= 0.50) parts.push(`[memory]\n${frontendContext.slice(0, 300)}`)
-  const previousText = prevItem?.text ?? lastTopicText ?? null
+  const _prevRaw     = prevItem?.text ?? lastTopicText ?? null
+  const previousText = _prevRaw
+    ? _prevRaw.replace(/```[\s\S]*?```/g, '').replace(/<[^>]{1,200}>/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 80)
+    : null
   const systemHasPrev = (builtSystemHint ?? '').includes('[previously]')
-  if (previousText && !systemHasPrev) parts.push(`[previously] ${previousText.slice(0, 120)}`)
+  if (previousText && !systemHasPrev) parts.push(`[previously] ${previousText}`)
   if (vaultHit?.compressed && vaultHit?.score >= 0.55 && !systemHasPrev) {
     const vComp = vaultHit.compressed.slice(0, 50)
     const pText = previousText?.slice(0, 50) ?? ''
