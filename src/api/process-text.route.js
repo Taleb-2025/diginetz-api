@@ -393,7 +393,7 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity,
   const hasCausal     = /لماذا|why|warum|pourquoi/i.test(cleanedText)
   const hasDeepIntent = /بالتفصيل|detailed|full|complete|شامل/i.test(cleanedText)
   const hasCritical   = /critical|قاتل|خطير|urgent|عاجل/i.test(cleanedText)
-  const hasFollowup   = /[?؟]|هل|كيف|لماذا|ماذا|what|how|why|is it|does it/i.test(cleanedText)
+  const hasFollowup   = continuity > 0.45 && novel < 0.55 && (prevItem?.score ?? 0) > 0.28
 
   const weighted = []
   const add = (sig, w) => weighted.push({ text: sig, w })
