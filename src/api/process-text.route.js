@@ -670,6 +670,13 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false, curre
   const filtered = filterStyleInstructions(history)
   const clean    = filtered.filter(h => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string' && h.content.length > 0)
 
+  if (clean.length <= 4) {
+    return clean.map(h => ({
+      role: h.role,
+      content: h.role === 'assistant' ? compressAssistantMessage(h.content) : h.content
+    }))
+  }
+
   const PASS_ALWAYS = new Set(['general','emotional'])
   const domainFiltered = currentDomain === 'general'
     ? clean
