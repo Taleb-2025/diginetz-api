@@ -393,12 +393,12 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity,
   const hasCausal     = /لماذا|why|warum|pourquoi/i.test(cleanedText)
   const hasDeepIntent = /بالتفصيل|detailed|full|complete|شامل/i.test(cleanedText)
   const hasCritical   = /critical|قاتل|خطير|urgent|عاجل/i.test(cleanedText)
-  const hasFollowup   = continuity > 0.42 && (prevItem?.score ?? 0) > 0.26
+  const hasFollowup   = (continuity > 0.42 || (prevItem?.score ?? 0) > 0.35) && (prevItem?.score ?? 0) > 0.26
 
   const weighted = []
   const add = (sig, w) => weighted.push({ text: sig, w })
 
-  if (continuity > 0.55) add('>#continuity', continuity + coher)
+  if (continuity > 0.35 || (prevItem && continuity > 0.20)) add('>#continuity', continuity + coher + 0.3)
   if (prevItem?.score > 0.30 && hasFollowup) add('>#followup', prevItem.score + 0.3)
   if (resolvedEntity)                    add('>?resolved_ref', 0.85)
   if (hasCritical)                       add('!critical', 1.0)
@@ -651,6 +651,14 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false, curre
   }
 
   if (continuity >= 0.20) return [...buildCapsuleContext(sid), ...buildAnchorContext(sid)]
+
+  const fallbackMsgs = clean.slice(-2)
+  if (fallbackMsgs.length >= 1) {
+    return fallbackMsgs.map(h => ({
+      role: h.role,
+      content: h.role === 'assistant' ? compressAssistantMessage(h.content) : compressUserMessage(h.content)
+    }))
+  }
   return buildFragmentContext(sid, history)
 }
 
