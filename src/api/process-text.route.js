@@ -393,12 +393,12 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity,
   const hasCausal     = /لماذا|why|warum|pourquoi/i.test(cleanedText)
   const hasDeepIntent = /بالتفصيل|detailed|full|complete|شامل/i.test(cleanedText)
   const hasCritical   = /critical|قاتل|خطير|urgent|عاجل/i.test(cleanedText)
-  const hasFollowup   = continuity > 0.45 && novel < 0.55 && (prevItem?.score ?? 0) > 0.28
+  const hasFollowup   = continuity > 0.42 && (prevItem?.score ?? 0) > 0.26
 
   const weighted = []
   const add = (sig, w) => weighted.push({ text: sig, w })
 
-  if (continuity > 0.65 && coher > 0.50) add('>#continuity', continuity + coher)
+  if (continuity > 0.55) add('>#continuity', continuity + coher)
   if (prevItem?.score > 0.30 && hasFollowup) add('>#followup', prevItem.score + 0.3)
   if (resolvedEntity)                    add('>?resolved_ref', 0.85)
   if (hasCritical)                       add('!critical', 1.0)
@@ -450,7 +450,8 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   if (stateHint) parts.push(stateHint)
   if (codeHint) parts.push(codeHint)
   if (frontendContext && capsuleEvalResult?.score >= 0.50) parts.push(`[memory]\n${frontendContext.slice(0, 300)}`)
-  if (prevItem?.text && prevItem?.score > 0.30) parts.push(`[previously] ${prevItem.text.slice(0, 120)}`)
+  const previousText = prevItem?.text || lastTopicText || null
+  if (previousText) parts.push(`[previously] ${previousText.slice(0, 120)}`)
   if (vaultHit?.compressed && vaultHit?.score >= 0.55) {
     const prevText = prevItem?.text ?? ''
     if (!prevText || vaultHit.compressed.slice(0, 50) !== prevText.slice(0, 50))
