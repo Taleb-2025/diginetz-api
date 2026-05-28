@@ -433,7 +433,7 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity)
   if (hasDeepIntent)             signals.push('>>depth')
   if (intent > 0.55 && exec < 0.40 && !hasFailure) signals.push('>analyze')
   if (novel > 0.70)              signals.push('>explore')
-  if (ground < 0.25)             signals.push('?ambiguous')
+  if (state.candidateCount < 1 && ground < 0.25 && continuity < 0.20) signals.push('?ambiguous')
 
   if (state.driftCount >= 2 && dom !== 'general') {
     signals.push('::drift=>' + (DOMAIN_KEYWORDS[dom] ?? dom))
@@ -483,14 +483,19 @@ function buildStateHint(phase, continuity) {
   return null
 }
 
-function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals }) {
+function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem }) {
   const parts = []
   if (fieldSignals) parts.push(fieldSignals)
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
   if (codeHint) parts.push(codeHint)
   if (frontendContext && capsuleEvalResult?.score >= 0.50) parts.push(`[memory]\n${frontendContext.slice(0, 300)}`)
-  if (vaultHit?.compressed && vaultHit?.score >= 0.55) parts.push(`[recall] ${vaultHit.compressed}`)
+  if (prevItem?.text && prevItem?.score > 0.30) parts.push(`[previously] ${prevItem.text.slice(0, 120)}`)
+  if (vaultHit?.compressed && vaultHit?.score >= 0.55) {
+    const prevText = prevItem?.text ?? ''
+    if (!prevText || vaultHit.compressed.slice(0, 50) !== prevText.slice(0, 50))
+      parts.push(`[recall] ${vaultHit.compressed}`)
+  }
   if (builtSystemHint) parts.push(builtSystemHint)
   const styleMap = { concise: 'أجب بإيجاز.', detailed: 'أجب بتفصيل كامل.', arabic: 'أجب باللغة العربية.', english: 'Reply in English.', german: 'Antworte auf Deutsch.' }
   if (activeStyle && styleMap[activeStyle]) parts.push(styleMap[activeStyle])
@@ -735,7 +740,7 @@ async function continuationCall(currentText, partialReply, systemHint, timeoutMs
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '10.4' })
+  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '10.6' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -833,17 +838,18 @@ router.post('/process-text', async (req, res) => {
       ? 'Analyze this code: identify its purpose, structure, and any issues.' : null
 
     const rawRoute      = engine.routeContext(cleanedText, 5)
-    const routeItems    = Array.isArray(rawRoute) ? rawRoute : (rawRoute?.items ?? [])
-    const vaultHit      = Array.isArray(rawRoute) ? null : (rawRoute?.vaultHit ?? null)
-    const routedContext = enrichRouteContext(routeItems, sid)
+    const routeItems    = rawRoute?.items ?? []
+    const vaultHit      = rawRoute?.vaultHit ?? null
+    const routedContext = routeItems
     const routeConf     = calcRouteConfidence(routedContext)
 
-    const built = build({ ok: true, signals: processed.signals, celfResult: processed.celfResult, passToLLM: processed.passToLLM, routedContext: vaultHit ? { items: routedContext, vaultHit } : routedContext, questionText: cleanedText, questionSimilarity, lastTopicText, activeStyle })
+    const built = build({ ok: true, signals: processed.signals, celfResult: processed.celfResult, passToLLM: processed.passToLLM, routedContext: vaultHit ? { items: routeItems, vaultHit } : routeItems, questionText: cleanedText, questionSimilarity, lastTopicText, activeStyle })
 
     if (built.blocked) return res.status(422).json({ blocked: true, reason: 'semantic_constraint' })
     if (!built.passToLLM && !hasImage) return res.json({ reply: null, skippedLLM: true, reason: 'weak_semantic_field' })
 
-    const standalone = isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlocks)
+    const _fieldContinuity = processed?.celfResult?.field?.continuity ?? 1
+    const standalone = isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlocks) || _fieldContinuity < 0.18
 
     let frontendContext   = null
     let capsuleEvalResult = { score: 0, used: false, reason: 'skipped' }
@@ -879,7 +885,9 @@ router.post('/process-text', async (req, res) => {
     const storedRaw  = matchedCode?.raw ?? null
     const editorMode = !!matchedCode
 
-    const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: (editorMode || fieldShifted) ? null : vaultHit, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals })
+    const _prevItem     = routeItems[0] ?? null
+    const _routedVault  = (editorMode || fieldShifted) ? null : vaultHit
+    const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem })
 
     if (needsRawCode && !storedRaw && !codeBlocks.length) {
       return res.json({
