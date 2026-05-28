@@ -451,8 +451,9 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   if (codeHint) parts.push(codeHint)
   if (frontendContext && capsuleEvalResult?.score >= 0.50) parts.push(`[memory]\n${frontendContext.slice(0, 300)}`)
   const previousText = prevItem?.text ?? lastTopicText ?? null
-  if (previousText) parts.push(`[previously] ${previousText.slice(0, 120)}`)
-  if (vaultHit?.compressed && vaultHit?.score >= 0.55) {
+  const systemHasPrev = (builtSystemHint ?? '').includes('[previously]')
+  if (previousText && !systemHasPrev) parts.push(`[previously] ${previousText.slice(0, 120)}`)
+  if (vaultHit?.compressed && vaultHit?.score >= 0.55 && !systemHasPrev) {
     const vComp = vaultHit.compressed.slice(0, 50)
     const pText = previousText?.slice(0, 50) ?? ''
     if (vComp !== pText) parts.push(`[recall] ${vaultHit.compressed}`)
@@ -809,8 +810,7 @@ router.post('/process-text', async (req, res) => {
     if (built.blocked) return res.status(422).json({ blocked: true, reason: 'semantic_constraint' })
     if (!built.passToLLM && !hasImage) return res.json({ reply: null, skippedLLM: true, reason: 'weak_semantic_field' })
 
-    const _fieldContinuity = processed?.celfResult?.field?.continuity ?? 1
-    const standalone = isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlocks) || _fieldContinuity < 0.18
+    const standalone = isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlocks)
 
     let frontendContext   = null
     let capsuleEvalResult = { score: 0, used: false, reason: 'skipped' }
