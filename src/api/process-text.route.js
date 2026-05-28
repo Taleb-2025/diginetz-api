@@ -272,7 +272,54 @@ function isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlock
   return false
 }
 
-const _semanticState = new Map()
+const _semanticState  = new Map()
+const _entityTracker  = new Map()
+
+function updateEntityTracker(sid, text, codeBlocks) {
+  const tracker = _entityTracker.get(sid) ?? { entity: null, type: null, t: 0 }
+  const ENTITY_PATTERNS = [
+    [/(?:function|دالة)\s+(\w+)/i,          'function'],
+    [/(?:class|كلاس)\s+(\w+)/i,             'class'],
+    [/(?:router|route)\s*\.\s*\w+\(['"]([^'"]+)['"]/i, 'route'],
+    [/(?:const|let|var)\s+(\w+)\s*=/,       'variable'],
+    [/(?:middleware|وسيط)\s+(\w+)/i,        'middleware'],
+    [/(?:endpoint|api)\s*[:\s]+([/\w-]+)/i, 'endpoint'],
+  ]
+  for (const [pat, type] of ENTITY_PATTERNS) {
+    const m = pat.exec(text)
+    if (m?.[1]) {
+      tracker.entity = m[1]
+      tracker.type   = type
+      tracker.t      = Date.now()
+      break
+    }
+  }
+  if (codeBlocks.length > 0) {
+    for (const [pat, type] of ENTITY_PATTERNS) {
+      const m = pat.exec(codeBlocks[0])
+      if (m?.[1]) {
+        tracker.entity = m[1]
+        tracker.type   = type
+        tracker.t      = Date.now()
+        break
+      }
+    }
+  }
+  _entityTracker.set(sid, tracker)
+  return tracker
+}
+
+function resolveAmbiguity(cleanedText, sid) {
+  const PRONOUN_PATTERN = /(هو|هي|هذا|ذلك|it|this|that|he|she|they)/i
+  if (!PRONOUN_PATTERN.test(cleanedText)) return cleanedText
+  const tracker = _entityTracker.get(sid)
+  if (!tracker?.entity) return cleanedText
+  const age = (Date.now() - tracker.t) / 1000 / 60
+  if (age > 30) return cleanedText
+  return cleanedText + ` [ref: ${tracker.entity} (${tracker.type})]`
+}
+
+
 
 function getSemanticState(sid) {
   if (!_semanticState.has(sid)) {
@@ -688,7 +735,7 @@ async function continuationCall(currentText, partialReply, systemHint, timeoutMs
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '10.3' })
+  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '10.4' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -769,6 +816,7 @@ router.post('/process-text', async (req, res) => {
     }
 
     const wordCount       = cleanedText.trim().split(/\s+/).length
+    const entityRef       = updateEntityTracker(sid, cleanedText, codeBlocks)
     const noveltyPressure = processed.celfResult.field?.noveltyPressure ?? 0
 
     const historyHasCode  = (history ?? []).some(h => h.role === 'user' && detectCodeBlocks(h.content).length > 0)
@@ -861,10 +909,12 @@ router.post('/process-text', async (req, res) => {
     const recCode  = recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30
       ? recoveredCode.slice(0, 8000) : null
 
+    const resolvedText = hasImage ? cleanedText : resolveAmbiguity(cleanedText, sid)
+
     const messages = [
       ...(recCode && !editorMode ? [{ role: 'user', content: recCode }] : []),
       ...historyMessages,
-      { role: 'user', content: hasImage ? userContent : cleanedText }
+      { role: 'user', content: hasImage ? userContent : resolvedText }
     ]
 
     const _tldr = messages.length > 6
@@ -948,7 +998,7 @@ router.post('/process-text', async (req, res) => {
 
     return res.json({
       reply, celfVault: vaultToSave, observer: observerBox,
-      debug: { messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, editorMode, sessionActive, hasStoredContexts, matchedCodeId: matchedCode?.id ?? null, recoveredCodeInjected: !!recCode, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
+      debug: { messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, editorMode, sessionActive, hasStoredContexts, matchedCodeId: matchedCode?.id ?? null, recoveredCodeInjected: !!recCode, entityRef: entityRef?.entity ?? null, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, totalTokens: inputTokensTotal + outputTokensTotal, costUSD, maxTokens, routeConfidence: Math.round(routeConf * 1000) / 1000, vaultHit: vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null, model, inlineCode: codeBlocks.length > 0, payloadSize, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, styleTtlRemaining: styleStore.get(sid)?.ttl ?? 0, noiseRemoved, truncated: hasText && text.length > MAX_INPUT_CHARS, feedbackApplied, feedbackCoherence }
     })
 
@@ -980,6 +1030,7 @@ router.delete('/session/:id', (req, res) => {
   processingLock.delete(req.params.id)
   _semanticState.delete(req.params.id)
   _fieldHistory.delete(req.params.id)
+  _entityTracker.delete(req.params.id)
   rawCodeStore.delete(req.params.id)
   codeSessionStore.delete(req.params.id)
   return res.json({ ok: true })
