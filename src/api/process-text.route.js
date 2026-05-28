@@ -443,7 +443,7 @@ function buildStateHint(phase, continuity) {
   return null
 }
 
-function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem }) {
+function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem, lastTopicText }) {
   const parts = []
   if (fieldSignals) parts.push(fieldSignals)
   const stateHint = buildStateHint(phase, continuity)
@@ -850,7 +850,7 @@ router.post('/process-text', async (req, res) => {
 
     const _prevItem     = routeItems[0] ?? null
     const _routedVault  = (editorMode || fieldShifted) ? null : vaultHit
-    const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem })
+    const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null })
 
     if (needsRawCode && !storedRaw && !codeBlocks.length) {
       return res.json({
