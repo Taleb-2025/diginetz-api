@@ -1,55 +1,77 @@
+import express from 'express'
+
+const router = express.Router()
+
+router.get('/process-text', (_req, res) => {
+
+  res.json({
+    ok: true,
+    engine: 'Claude Direct'
+  })
+
+})
+
 router.post('/process-text', async (req, res) => {
 
   try {
 
     const {
       text = '',
-      sessionId = 'default',
       history = []
     } = req.body
 
-    if (!text || !text.trim()) {
+    if (!text.trim()) {
+
       return res.status(400).json({
         error: 'missing_text'
       })
+
     }
 
     const messages = [
+
       ...history,
+
       {
         role: 'user',
         content: text
       }
+
     ]
 
     const response = await fetch(
       'https://api.anthropic.com/v1/messages',
       {
+
         method: 'POST',
 
         headers: {
+
           'Content-Type': 'application/json',
-          'x-api-key': process.env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01'
+
+          'x-api-key':
+            process.env.ANTHROPIC_API_KEY,
+
+          'anthropic-version':
+            '2023-06-01'
+
         },
 
         body: JSON.stringify({
 
-          model: 'claude-haiku-4-5-20251001',
+          model:
+            'claude-haiku-4-5-20251001',
 
           max_tokens: 2048,
 
           messages
 
         })
+
       }
     )
 
     const data = await response.json()
-
-    console.log(
-      JSON.stringify(data, null, 2)
-    )
 
     if (!response.ok) {
 
@@ -60,11 +82,13 @@ router.post('/process-text', async (req, res) => {
         detail:
           data?.error?.message ||
           'unknown_error'
+
       })
+
     }
 
     const reply =
-      data?.content
+      data.content
         ?.filter(x => x.type === 'text')
         ?.map(x => x.text)
         ?.join('\n')
@@ -72,12 +96,7 @@ router.post('/process-text', async (req, res) => {
 
     return res.json({
 
-      reply,
-
-      model:
-        'claude-haiku-4-5-20251001',
-
-      usage: data?.usage || null
+      reply
 
     })
 
@@ -90,6 +109,11 @@ router.post('/process-text', async (req, res) => {
       error: 'server_error',
 
       detail: err.message
+
     })
+
   }
+
 })
+
+export default router
