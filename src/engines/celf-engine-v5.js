@@ -426,6 +426,8 @@ export class CELF_Engine_AI_V5 {
     const resonance    = this.field?.resonance ?? 0
     const currentPhase = this.state?.phase ?? 'warmup'
     for (const [, cap] of this.vault) {
+      const msgAge = this.state.t - (cap.t ?? 0)
+      if (msgAge < 4) continue
       const sim       = this._cosine(vector, cap.vector ?? new Float32Array(0))
       const samePhase = cap.phase === currentPhase
       const minCosine = samePhase ? 0.12 : 0.18
