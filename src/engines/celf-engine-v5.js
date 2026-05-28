@@ -160,7 +160,9 @@ export class CELF_Engine_AI_V5 {
     const lexical = this._clamp01(unique.size / Math.max(words.length, 1))
     const length  = this._clamp01(text.length / 2000)
 
-    const vector    = this.semanticVector(text, h1, h2, h3)
+    const _steering  = this._buildSteering(text)
+    const _enriched  = _steering ? _steering + ' ' + text : text
+    const vector     = this.semanticVector(_enriched, h1, h2, h3)
     const intensity = this._clamp01(
       length * 0.20 + lexical * 0.20 + code * 0.15 +
       command * 0.15 + error * 0.15 + data * 0.10 + question * 0.05
@@ -207,7 +209,33 @@ export class CELF_Engine_AI_V5 {
       h3 = Math.abs(hh3 >>> 0)
     }
 
-    const SYNONYMS = {
+    const CONCEPT_MAP = {
+      websocket: '@realtime_transport', socket: '@realtime_transport', ws: '@realtime_transport',
+      fix: '@repair_intent', debug: '@repair_intent', repair: '@repair_intent',
+      refactor: '@repair_intent', patch: '@repair_intent', hotfix: '@repair_intent',
+      error: '@failure', bug: '@failure', exception: '@failure', crash: '@failure',
+      fault: '@failure', failure: '@failure', خطأ: '@failure', مشكلة: '@failure',
+      cache: '@memory_layer', redis: '@memory_layer', buffer: '@memory_layer',
+      queue: '@memory_layer', memo: '@memory_layer',
+      auth: '@identity_layer', jwt: '@identity_layer', token: '@identity_layer',
+      oauth: '@identity_layer', session: '@identity_layer', login: '@identity_layer',
+      database: '@data_store', db: '@data_store', postgres: '@data_store',
+      mysql: '@data_store', mongodb: '@data_store', sqlite: '@data_store',
+      redis_db: '@data_store', sql: '@data_store',
+      deploy: '@infra_layer', docker: '@infra_layer', kubernetes: '@infra_layer',
+      nginx: '@infra_layer', railway: '@infra_layer', cloud: '@infra_layer',
+      api: '@interface_layer', route: '@interface_layer', endpoint: '@interface_layer',
+      router: '@interface_layer', middleware: '@interface_layer', handler: '@interface_layer',
+      analyze: '@analysis_intent', review: '@analysis_intent', audit: '@analysis_intent',
+      inspect: '@analysis_intent', تحليل: '@analysis_intent', حلل: '@analysis_intent',
+      create: '@build_intent', build: '@build_intent', generate: '@build_intent',
+      implement: '@build_intent', write: '@build_intent', أنشئ: '@build_intent',
+      اكتب: '@build_intent',
+      test: '@verify_intent', spec: '@verify_intent', jest: '@verify_intent',
+      assert: '@verify_intent', mock: '@verify_intent',
+    }
+
+        const SYNONYMS = {
       'أصلح':'fix','إصلاح':'fix','اصلح':'fix',
       'عدّل':'edit','عدل':'edit','تعديل':'edit','تعديلات':'edit',
       'حلل':'analyze','تحليل':'analyze','analyze':'analyze',
@@ -266,13 +294,16 @@ export class CELF_Engine_AI_V5 {
 
     for (let i = 0; i < tokens.length; i++) {
       const tok        = tokens[i]
-      const normalized = SYNONYMS[tok.toLowerCase()] || tok
+      const tokLower   = tok.toLowerCase()
+      const concept    = CONCEPT_MAP[tokLower]
+      const normalized = concept ?? SYNONYMS[tokLower] ?? tok
       const posW = 1.0 / Math.sqrt(i + 1)
       const idfW = IDF_BOOST.has(tok) || IDF_BOOST.has(normalized) ? 1.8 : 1.0
       const w    = posW * idfW
 
       _place(_hash(normalized), w * 0.20)
-      if (normalized !== tok) _place(_hash(tok), w * 0.07)
+      if (concept)                _place(_hash(concept),    w * 0.30)
+      else if (normalized !== tok) _place(_hash(tok),       w * 0.07)
 
       const nxt  = i + 1 < tokens.length ? (SYNONYMS[tokens[i+1].toLowerCase()] || tokens[i+1]) : null
       const nxt2 = i + 2 < tokens.length ? (SYNONYMS[tokens[i+2].toLowerCase()] || tokens[i+2]) : null
@@ -321,6 +352,44 @@ export class CELF_Engine_AI_V5 {
   }
 
   cosineSimilarity(a, b) { return this._cosine(a, b) }
+  fieldSimilarity(snap1, snap2) {
+    if (!snap1 || !snap2) return 0
+
+    const vecSim = (snap1.vector && snap2.vector)
+      ? this._cosine(snap1.vector, snap2.vector)
+      : this._cosine(
+          this.semanticVector(String(snap1.text ?? '')),
+          this.semanticVector(String(snap2.text ?? ''))
+        )
+
+    const a1 = (snap1.attractors ?? []).map(a => a.i)
+    const a2 = (snap2.attractors ?? []).map(a => a.i)
+    const shared = a1.filter(i => a2.some(j => Math.abs(i - j) < 6)).length
+    const attrSim = shared / Math.max(a1.length, a2.length, 1)
+
+    const sig1 = snap1.field?.signature ?? snap1.signature ?? 0
+    const sig2 = snap2.field?.signature ?? snap2.signature ?? 0
+    const sigDrift = this._clamp01(1 - Math.abs(sig1 - sig2) / this.cycle)
+
+    const delta1 = snap1.delta ?? null
+    const delta2 = snap2.delta ?? null
+    const trajSim = (delta1 && delta2)
+      ? this._cosine(delta1, delta2)
+      : 0
+
+    return this._round4(
+      vecSim   * 0.38 +
+      attrSim  * 0.32 +
+      sigDrift * 0.20 +
+      trajSim  * 0.10
+    )
+  }
+
+  fieldDivergence(snap1, snap2) {
+    return this._round4(1 - this.fieldSimilarity(snap1, snap2))
+  }
+
+
 
   routeContext(query, limit = 5) {
     const text   = typeof query === 'string' ? query : JSON.stringify(query ?? '')
@@ -362,7 +431,7 @@ export class CELF_Engine_AI_V5 {
       const final   = flow * 0.84 + reinf * 0.16
       if (final > bestScore && final > 0.24) {
         bestScore = final
-        best = { compressed: cap.text?.slice(0, 120) ?? '', score: this._round4(final), phiOrbit: this._round4(cap.theta ?? 0), reinforcement: cap.reinforcement ?? 0 }
+        best = { compressed: (cap.compressed ?? cap.text)?.slice(0, 120) ?? '', score: this._round4(final), phiOrbit: this._round4(cap.theta ?? 0), reinforcement: cap.reinforcement ?? 0 }
       }
     }
     return best
@@ -441,7 +510,7 @@ export class CELF_Engine_AI_V5 {
     const id = `cap_${this.state.t}_${checksum.slice(0, 6)}`
     const vector = perturbation?.semantic?.vector ?? this.semanticVector(t)
     this.vault.set(id, {
-      id, text: t.slice(0, 200), checksum, vector,
+      id, text: t.slice(0, 4000), compressed: t.slice(0, 200), checksum, vector,
       phase: this.state.phase, t: this.state.t,
       theta: this._round4(this.field.signature * 1.618033988749895 % this.cycle),
       reinforcement: 0, version: 1
@@ -692,13 +761,22 @@ export class CELF_Engine_AI_V5 {
       .replace(/\s{2,}/g, ' ')
       .trim()
       .slice(0, 200) || text.slice(0, 80)
+    const _anchors = this._buildSteering(text).split(' ').filter(Boolean)
+    const _signals = [
+      this.field.continuity > 0.60 ? '>#' + (this.state.phase ?? 'stable') : null,
+      feedback.magnitude > 0.40    ? '?failure' : null,
+      this.field.noveltyPressure > 0.70 ? '>explore' : null,
+    ].filter(Boolean).slice(0, 3).join(' ')
+
     this.vault.set(id, {
-      id, text: cleanText, checksum, vector: perturb.vector.slice(),
+      id, text: text.slice(0, 4000), compressed: cleanText, checksum, vector: perturb.vector.slice(),
       phase: this.state.phase, t: this.state.t, error: feedback.magnitude,
       theta: this._round4(this.field.signature * 1.618033988749895 % this.cycle),
       reinforcement: 0, version: 1,
       continuity: this.field.continuity, novelty: this.field.noveltyPressure,
-      coherence: this.field.coherence, resonance: this.field.resonance
+      coherence: this.field.coherence, resonance: this.field.resonance,
+      anchors: _anchors,
+      signals: _signals
     })
     this._pruneVault()
   }
@@ -787,7 +865,8 @@ export class CELF_Engine_AI_V5 {
         executionReadiness: this.field.executionReadiness, recallPotential: this.field.recallPotential,
         semanticGrounding: this.field.semanticGrounding, signalType: this.field.signalType
       },
-      signal: { localization: this.field.localization, signalType: this.field.signalType, sourceWeight: this.field.lastSourceWeight ?? 1.0 }
+      signal: { localization: this.field.localization, signalType: this.field.signalType, sourceWeight: this.field.lastSourceWeight ?? 1.0 },
+      delta: this._lastVector.slice()
     }
   }
 
@@ -849,4 +928,21 @@ export class CELF_Engine_AI_V5 {
   _clamp01(v)              { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0 }
   _clampP(v)               { const n = Number(v); return Number.isFinite(n) ? Math.max(this.epsilon, n) : this.epsilon }
   _round4(v)               { return Math.round(Number(v || 0) * 10000) / 10000 }
+
+  _buildSteering(text) {
+    const t = String(text ?? '')
+    const anchors = []
+    if (/websocket|socket|\bws\b|realtime|stream/i.test(t))                    anchors.push('realtime_transport')
+    if (/error|fail|crash|exception|خطأ|مشكلة|bug|fault/i.test(t))             anchors.push('failure')
+    if (/fix|debug|repair|refactor|patch|اصلح|عدل/i.test(t))                   anchors.push('repair_intent')
+    if (/analyze|review|audit|تحليل|حلل/i.test(t))                             anchors.push('analysis_intent')
+    if (/cache|redis|buffer|queue/i.test(t))                                     anchors.push('memory_layer')
+    if (/auth|jwt|token|oauth|session|login/i.test(t))                          anchors.push('identity_layer')
+    if (/database|\bdb\b|postgres|mysql|mongodb|\bsql\b/i.test(t))          anchors.push('data_store')
+    if (/api|route|endpoint|router|middleware|handler/i.test(t))                anchors.push('interface_layer')
+    if (/deploy|docker|kubernetes|nginx|railway|cloud/i.test(t))                anchors.push('infra_layer')
+    if (/create|build|generate|implement|write|أنشئ|اكتب/i.test(t))            anchors.push('build_intent')
+    if (/test|spec|jest|assert|mock/i.test(t))                                  anchors.push('verify_intent')
+    return anchors.slice(0, 3).join(' ')
+  }
 }
