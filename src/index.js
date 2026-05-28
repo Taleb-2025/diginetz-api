@@ -87,9 +87,93 @@ app.use('/api/demo-symbol', demoSymbolRoute)
 
 app.use('/api/field', celfRoute)
 
-// ── CELF AI ───────────────────────────────────────────────────────
+// ── Claude Direct Route ───────────────────────────────────────────
 
-app.use('/celf', processTextRoute)
+app.post('/celf/process-text', async (req, res) => {
+
+  try {
+
+    const {
+
+      text = ''
+
+    } = req.body
+
+    const response = await fetch(
+
+      'https://api.anthropic.com/v1/messages',
+
+      {
+
+        method:'POST',
+
+        headers:{
+
+          'Content-Type':'application/json',
+
+          'x-api-key':
+            process.env.ANTHROPIC_API_KEY,
+
+          'anthropic-version':
+            '2023-06-01'
+
+        },
+
+        body: JSON.stringify({
+
+          model:
+            'claude-sonnet-4-20250514',
+
+          max_tokens:2048,
+
+          messages:[
+
+            {
+
+              role:'user',
+
+              content:text
+
+            }
+
+          ]
+
+        })
+
+      }
+
+    )
+
+    const data =
+      await response.json()
+
+    return res.json({
+
+      reply:
+        data.content?.[0]?.text
+        || 'No reply'
+
+    })
+
+  }
+
+  catch(err) {
+
+    console.error(err)
+
+    return res.status(500).json({
+
+      ok:false,
+
+      error:err.message
+
+    })
+
+  }
+
+})
+
+// ── CELF Monitor فقط ──────────────────────────────────────────────
 
 app.get('/celf/monitor', (_req, res) => {
 
@@ -125,7 +209,7 @@ app.get('/', (_req, res) => {
 
     service: 'DigiNetz TSL Core',
 
-    engine: 'CELF_Engine_AI_V5',
+    engine: 'Claude Direct',
 
     status: 'RUNNING'
 
