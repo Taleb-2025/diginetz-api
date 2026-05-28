@@ -378,7 +378,7 @@ function getTopSignals(weights, topN = 2) {
     .join(' ') || null
 }
 
-function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity) {
+function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity, prevItem, resolvedEntity) {
   const field  = celfResult.field ?? {}
   const exec   = field.executionReadiness ?? 0
   const intent = field.intentPressure    ?? 0
@@ -388,70 +388,30 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity)
 
   const detected = classifyDomain(cleanedText)
   const state    = updateSemanticState(sid, detected)
-  const dom      = state.dominantDomain !== 'general' ? state.dominantDomain : detected
 
   const hasFailure    = /خطأ|error|fail|crash|مشكلة|bug/i.test(cleanedText)
   const hasCausal     = /لماذا|why|warum|pourquoi/i.test(cleanedText)
   const hasDeepIntent = /بالتفصيل|detailed|full|complete|شامل/i.test(cleanedText)
   const hasCritical   = /critical|قاتل|خطير|urgent|عاجل/i.test(cleanedText)
-
-  const DOMAIN_KEYWORDS = {
-    backend:    'backend',
-    frontend:   'frontend',
-    database:   'database',
-    security:   'security',
-    devops:     'devops',
-    debugging:  'debugging',
-    algorithms: 'algorithms',
-    testing:    'testing',
-    code:       'code'
-  }
-
-  const signals = []
-
-  if (dom !== 'general' && dom !== 'emotional') {
-    const kw = DOMAIN_KEYWORDS[dom] ?? dom
-    if (continuity > 0.65 && coher > 0.50) {
-      signals.push('>#' + kw)
-    } else if (exec > 0.60) {
-      signals.push('>' + kw)
-    } else {
-      signals.push('#' + kw)
-    }
-  }
-
-  if (codeBlocks.length > 0 && dom !== 'code') signals.push('#code')
-
-  if (hasFailure && dom !== 'general') {
-    signals.push('?failure::' + (DOMAIN_KEYWORDS[dom] ?? dom))
-  } else if (hasFailure) {
-    signals.push('?failure')
-  }
-
-  if (hasCritical)               signals.push('!critical')
-  if (hasCausal)                 signals.push('?causal')
-  if (hasDeepIntent)             signals.push('>>depth')
-  if (intent > 0.55 && exec < 0.40 && !hasFailure) signals.push('>analyze')
-  if (novel > 0.70)              signals.push('>explore')
-  if (state.candidateCount < 1 && ground < 0.25 && continuity < 0.20) signals.push('?ambiguous')
-
-  if (state.driftCount >= 2 && dom !== 'general') {
-    signals.push('::drift=>' + (DOMAIN_KEYWORDS[dom] ?? dom))
-  }
+  const hasFollowup   = /[?؟]|هل|كيف|لماذا|ماذا|what|how|why|is it|does it/i.test(cleanedText)
 
   const weighted = []
-  for (const sig of signals) {
-    let w = 0.5
-    if (sig.startsWith('>#'))  w = continuity + coher
-    if (sig.startsWith('?failure')) w = 0.95
-    if (sig.startsWith('!'))   w = 1.0
-    if (sig.startsWith('::drift')) w = 0.85
-    if (sig.startsWith('>>')) w = intent + 0.2
-    if (sig.startsWith('#'))  w = 0.6
-    if (sig.startsWith('>') && !sig.startsWith('>#') && !sig.startsWith('>>')) w = exec + 0.2
-    if (sig.startsWith('?') && !sig.startsWith('?failure')) w = 0.4
-    weighted.push({ text: sig, w })
-  }
+  const add = (sig, w) => weighted.push({ text: sig, w })
+
+  if (continuity > 0.65 && coher > 0.50) add('>#continuity', continuity + coher)
+  if (prevItem?.score > 0.30 && hasFollowup) add('>#followup', prevItem.score + 0.3)
+  if (resolvedEntity)                    add('>?resolved_ref', 0.85)
+  if (hasCritical)                       add('!critical', 1.0)
+  if (hasFailure)                        add('?failure', 0.95)
+  if (state.driftCount >= 2)             add('::reset', 0.85)
+  if (hasDeepIntent)                     add('>>depth', intent + 0.2)
+  if (exec > 0.60)                       add('>execute', exec)
+  if (intent > 0.55 && exec < 0.40 && !hasFailure) add('>analyze', intent)
+  if (novel > 0.70)                      add('>explore', novel)
+  if (hasCausal)                         add('?causal', 0.55)
+  if (codeBlocks.length > 0)            add('#code', 0.70)
+  if (state.candidateCount < 1 && ground < 0.25 && continuity < 0.20) add('?ambiguous', 0.40)
+
   const MAX_SIGNALS = 4
   const top = weighted.sort((a, b) => b.w - a.w).slice(0, MAX_SIGNALS).map(s => s.text)
 
@@ -740,7 +700,7 @@ async function continuationCall(currentText, partialReply, systemHint, timeoutMs
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '10.6' })
+  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '10.7' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -861,7 +821,9 @@ router.post('/process-text', async (req, res) => {
 
     const continuity = standalone ? 0 : (built.context?.continuity ?? 0)
 
-    const _fsResult     = buildFieldSignals(sid, processed.celfResult, cleanedText, codeBlocks, continuity)
+    const _prevForSig   = routeItems[0] ?? null
+    const _resolvedEnt  = resolveAmbiguity(cleanedText, sid) !== cleanedText
+    const _fsResult     = buildFieldSignals(sid, processed.celfResult, cleanedText, codeBlocks, continuity, _prevForSig, _resolvedEnt)
     const fieldSignals  = _fsResult.text
     const semanticState = _fsResult.state
     const fieldShifted  = !standalone && questionVector ? detectFieldShift(sid, questionVector, processed.result, engine, continuity) : false
