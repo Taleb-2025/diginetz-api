@@ -378,6 +378,48 @@ function getTopSignals(weights, topN = 2) {
     .join(' ') || null
 }
 
+function _buildContextPath(domain, cleanedText) {
+  const CONTEXT_MAP = {
+    backend:    ['backend', null],
+    frontend:   ['frontend', null],
+    database:   ['database', null],
+    security:   ['backend', 'auth'],
+    devops:     ['infra', null],
+    debugging:  ['debug', null],
+    algorithms: ['analysis', 'algo'],
+    testing:    ['debug', 'test'],
+    code:       ['code', null]
+  }
+  const [layer, sub] = CONTEXT_MAP[domain] ?? [null, null]
+  if (!layer) return null
+
+  const AUTH_RE   = /auth|jwt|token|oauth|session|login/i
+  const CACHE_RE  = /cache|redis|buffer|queue/i
+  const WS_RE     = /websocket|socket|ws|realtime/i
+  const PERF_RE   = /performance|latency|timeout|slow|memory leak/i
+  const FLOW_RE   = /flow|pipeline|middleware|handler/i
+
+  let refined = sub
+  if (AUTH_RE.test(cleanedText))  refined = 'auth'
+  if (CACHE_RE.test(cleanedText)) refined = 'cache'
+  if (WS_RE.test(cleanedText))    refined = 'realtime'
+  if (PERF_RE.test(cleanedText))  refined = 'performance'
+  if (FLOW_RE.test(cleanedText))  refined = 'flow'
+
+  return refined ? `::${layer}/${refined}` : `::${layer}`
+}
+
+function _buildIntentSignal(cleanedText, exec, intent) {
+  if (/اصلح|fix|debug|أصلح|repair/i.test(cleanedText))                     return '@intent.fix'
+  if (/عدل|refactor|تعديل|improve|حسّن/i.test(cleanedText))                return '@intent.refactor'
+  if (/حلل|analyze|review|audit|تحليل/i.test(cleanedText))                 return '@intent.analyze'
+  if (/أنشئ|create|build|generate|اكتب|write/i.test(cleanedText))          return '@intent.build'
+  if (/اشرح|explain|what is|ما هو|كيف يعمل/i.test(cleanedText))            return '@intent.explain'
+  if (exec > 0.65)                                                            return '@intent.execute'
+  if (intent > 0.60)                                                          return '@intent.analyze'
+  return null
+}
+
 function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity, prevItem, resolvedEntity) {
   const field  = celfResult.field ?? {}
   const exec   = field.executionReadiness ?? 0
@@ -386,8 +428,9 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity,
   const coher  = field.semanticCoherence ?? 0
   const ground = field.semanticGrounding ?? 0
 
-  const detected = classifyDomain(cleanedText)
-  const state    = updateSemanticState(sid, detected)
+  const detected     = classifyDomain(cleanedText)
+  const state        = updateSemanticState(sid, detected)
+  const domainStable = state.driftCount === 0 && detected !== 'general'
 
   const hasFailure    = /خطأ|error|fail|crash|مشكلة|bug/i.test(cleanedText)
   const hasCausal     = /لماذا|why|warum|pourquoi/i.test(cleanedText)
@@ -395,21 +438,26 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity,
   const hasCritical   = /critical|قاتل|خطير|urgent|عاجل/i.test(cleanedText)
   const hasFollowup   = (continuity > 0.42 || (prevItem?.score ?? 0) > 0.35) && (prevItem?.score ?? 0) > 0.26
 
+  const contextPath  = domainStable ? _buildContextPath(detected, cleanedText) : null
+  const intentSignal = _buildIntentSignal(cleanedText, exec, intent)
+
   const weighted = []
   const add = (sig, w) => weighted.push({ text: sig, w })
 
   if (continuity > 0.35 || (prevItem && continuity > 0.20)) add('>#continuity', continuity + coher + 0.3)
-  if (prevItem?.score > 0.30 && hasFollowup) add('>#followup', prevItem.score + 0.3)
-  if (resolvedEntity)                    add('>?resolved_ref', 0.85)
-  if (hasCritical)                       add('!critical', 1.0)
-  if (hasFailure)                        add('?failure', 0.95)
-  if (state.driftCount >= 2)             add('::reset', 0.85)
-  if (hasDeepIntent)                     add('>>depth', intent + 0.2)
-  if (exec > 0.60)                       add('>execute', exec)
-  if (intent > 0.55 && exec < 0.40 && !hasFailure) add('>analyze', intent)
-  if (novel > 0.70)                      add('>explore', novel)
-  if (hasCausal)                         add('?causal', 0.55)
-  if (codeBlocks.length > 0)            add('#code', 0.70)
+  if (hasFollowup && prevItem?.score > 0.30)                 add('>#followup', prevItem.score + 0.3)
+  if (contextPath)                                            add(contextPath, domainStable ? 0.80 : 0.50)
+  if (intentSignal)                                          add(intentSignal, 0.75)
+  if (resolvedEntity)                                        add('>?resolved_ref', 0.85)
+  if (hasCritical)                                           add('!critical', 1.0)
+  if (hasFailure)                                            add('?failure', 0.95)
+  if (state.driftCount >= 2)                                 add('::reset', 0.85)
+  if (hasDeepIntent)                                         add('>>depth', intent + 0.2)
+  if (exec > 0.60 && !intentSignal)                         add('>execute', exec)
+  if (intent > 0.55 && exec < 0.40 && !hasFailure)          add('>analyze', intent)
+  if (novel > 0.70 && !hasFollowup)                         add('>explore', novel)
+  if (hasCausal)                                             add('?causal', 0.55)
+  if (codeBlocks.length > 0)                                 add('#code', 0.70)
   if (state.candidateCount < 1 && ground < 0.25 && continuity < 0.20) add('?ambiguous', 0.40)
 
   const MAX_SIGNALS = 4
@@ -710,7 +758,7 @@ async function continuationCall(currentText, partialReply, systemHint, timeoutMs
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '10.7' })
+  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '10.8' })
 })
 
 router.post('/process-text', async (req, res) => {
