@@ -450,9 +450,7 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   if (stateHint) parts.push(stateHint)
   if (codeHint) parts.push(codeHint)
   if (frontendContext && capsuleEvalResult?.score >= 0.50) parts.push(`[memory]\n${frontendContext.slice(0, 300)}`)
-  const previousText = prevItem?.text
-    || (lastTopicText && lastTopicText !== prevItem?.text ? lastTopicText : null)
-    || null
+  const previousText = prevItem?.text ?? lastTopicText ?? null
   if (previousText) parts.push(`[previously] ${previousText.slice(0, 120)}`)
   if (vaultHit?.compressed && vaultHit?.score >= 0.55) {
     const vComp = vaultHit.compressed.slice(0, 50)
