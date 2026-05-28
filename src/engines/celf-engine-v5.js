@@ -105,7 +105,8 @@ export class CELF_Engine_AI_V5 {
     this._metricsCacheTime = -1
 
     if (typeof options === 'number') options = { sourceWeight: options }
-    const sourceWeight = this._clamp01(options.sourceWeight ?? 1.0)
+    const sourceWeight  = this._clamp01(options.sourceWeight ?? 1.0)
+    const isFeedback    = sourceWeight < 0.5
     this.field.lastSourceWeight = sourceWeight
 
     const perturb  = this._perturb(input)
@@ -117,12 +118,12 @@ export class CELF_Engine_AI_V5 {
     this._conserveMass()
     this._updateCellDynamics()
     this._diffuse()
-    this._updateAttractors(perturb)
+    this._updateAttractors(perturb, isFeedback)
     this._applyAttractors()
-    this._updateSemanticField(perturb, feedback)
+    if (!isFeedback) this._updateSemanticField(perturb, feedback)
     this._predict()
 
-    if (feedback.active && feedback.magnitude > this.theta_vault)
+    if (!isFeedback && feedback.active && feedback.magnitude > this.theta_vault)
       this._storeCapsule(input, perturb, feedback)
 
     this._updatePhase()
@@ -397,17 +398,24 @@ export class CELF_Engine_AI_V5 {
     const memory = this.field.semanticMemory
     if (!memory.length) return []
     const items = memory
-      .map(item => ({
-        t: item.t,
-        theta: this._round4(item.theta ?? 0),
-        score: this._round4(this._cosine(vector, item.vector ?? new Float32Array(0))),
-        phase: item.phase
-      }))
+      .map(item => {
+        const rawSim   = this._cosine(vector, item.vector ?? new Float32Array(0))
+        const age      = this.state.t - (item.t ?? 0)
+        const fresh    = Math.max(0, 1 - age / 40)
+        const score    = rawSim * 0.82 + fresh * 0.18
+        return {
+          t: item.t,
+          text: item.text ?? '',
+          theta: this._round4(item.theta ?? 0),
+          score: this._round4(score),
+          phase: item.phase
+        }
+      })
+      .filter(item => item.score > 0.22 && item.text !== text)
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
     const hit = this._retrieveVaultHit(vector)
-    if (hit) return { items, vaultHit: hit }
-    return items
+    return { items, vaultHit: hit ?? null }
   }
 
   _retrieveVaultHit(vector) {
@@ -641,7 +649,7 @@ export class CELF_Engine_AI_V5 {
         this.rings[r][i].p = next[r][i]
   }
 
-  _updateAttractors(perturb) {
+  _updateAttractors(perturb, isFeedback = false) {
     const candidates = []
     for (let r = 0; r < this.ringCount; r++) {
       for (let i = 0; i < this.resolution; i++) {
@@ -660,9 +668,10 @@ export class CELF_Engine_AI_V5 {
       if (!selected.some(a => a.r === c.r && this._circularIndexDist(a.i, c.i) < 6)) selected.push(c)
       if (selected.length >= this.attractorLimit) break
     }
+    const attrScale = isFeedback ? 0.25 : 1.0
     this.state.attractors = selected.map(a => ({
       ...a,
-      stability  : this._clamp01(a.strength),
+      stability  : this._clamp01(a.strength * attrScale),
       orbitTheta : this._containTheta(a.theta + this.state.lastDeltaTheta * this.attractorRate)
     }))
   }
@@ -704,7 +713,8 @@ export class CELF_Engine_AI_V5 {
     const creds = this.state.attractors.map(a => a.emergentCredibility ?? 1)
     this.field.avgCredibility = creds.length ? this._round4(creds.reduce((s, v) => s + v, 0) / creds.length) : 1.0
     this.field.semanticMemory.push({
-      t: this.state.t, theta: this._round4(this.state.lastTheta),
+      t: this.state.t, text: perturb.text,
+      theta: this._round4(this.state.lastTheta),
       vector: perturb.vector.slice(), grounding,
       coherence: this.field.semanticCoherence, novelty: this.field.noveltyPressure,
       phase: this.state.phase, predictionError: feedback.magnitude,
@@ -914,7 +924,7 @@ export class CELF_Engine_AI_V5 {
     if (!n) return 0
     let dot = 0, na = 0, nb = 0
     for (let i = 0; i < n; i++) { dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i] }
-    return (na > 0 && nb > 0) ? this._clamp01(dot / (Math.sqrt(na) * Math.sqrt(nb))) : 0
+    return (na > 0 && nb > 0) ? Math.max(-1, Math.min(1, dot / (Math.sqrt(na) * Math.sqrt(nb)))) : 0
   }
 
   _totalMass() { let s = 0; for (const ring of this.rings) for (const c of ring) s += c.p; return s }
