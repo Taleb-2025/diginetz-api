@@ -275,48 +275,58 @@ function isStandaloneQuestion(cleanedText, wordCount, noveltyPressure, codeBlock
 const _semanticState  = new Map()
 const _entityTracker  = new Map()
 
+const ENTITY_PATTERNS_LIST = [
+  [/(?:function|دالة)\s+(\w+)/gi,          'function'],
+  [/(?:class|كلاس)\s+(\w+)/gi,             'class'],
+  [/(?:router|route)\s*\.\s*\w+\(['"]([\/\w-]+)['"]/gi, 'route'],
+  [/(?:const|let|var)\s+(\w+)\s*=/g,      'variable'],
+  [/(?:middleware|وسيط)\s+(\w+)/gi,        'middleware'],
+  [/(?:endpoint|api)\s*[:\s]+([/\w-]+)/gi, 'endpoint'],
+]
+
+function extractEntities(text) {
+  const found = []
+  for (const [pat, type] of ENTITY_PATTERNS_LIST) {
+    pat.lastIndex = 0
+    let m
+    while ((m = pat.exec(text)) !== null) {
+      if (m[1] && m[1].length > 1) found.push({ name: m[1], type })
+    }
+  }
+  return found
+}
+
 function updateEntityTracker(sid, text, codeBlocks) {
-  const tracker = _entityTracker.get(sid) ?? { entity: null, type: null, t: 0 }
-  const ENTITY_PATTERNS = [
-    [/(?:function|دالة)\s+(\w+)/i,          'function'],
-    [/(?:class|كلاس)\s+(\w+)/i,             'class'],
-    [/(?:router|route)\s*\.\s*\w+\(['"]([^'"]+)['"]/i, 'route'],
-    [/(?:const|let|var)\s+(\w+)\s*=/,       'variable'],
-    [/(?:middleware|وسيط)\s+(\w+)/i,        'middleware'],
-    [/(?:endpoint|api)\s*[:\s]+([/\w-]+)/i, 'endpoint'],
-  ]
-  for (const [pat, type] of ENTITY_PATTERNS) {
-    const m = pat.exec(text)
-    if (m?.[1]) {
-      tracker.entity = m[1]
-      tracker.type   = type
-      tracker.t      = Date.now()
-      break
+  const store = _entityTracker.get(sid) ?? { entities: [], primaryEntity: null }
+  const now   = Date.now()
+  const MAX_ENTITIES = 8
+  const sources = [text, ...codeBlocks]
+  for (const src of sources) {
+    for (const { name, type } of extractEntities(src)) {
+      const existing = store.entities.find(e => e.name === name)
+      if (existing) { existing.t = now; existing.count = (existing.count ?? 1) + 1 }
+      else store.entities.push({ name, type, t: now, count: 1 })
     }
   }
-  if (codeBlocks.length > 0) {
-    for (const [pat, type] of ENTITY_PATTERNS) {
-      const m = pat.exec(codeBlocks[0])
-      if (m?.[1]) {
-        tracker.entity = m[1]
-        tracker.type   = type
-        tracker.t      = Date.now()
-        break
-      }
-    }
-  }
-  _entityTracker.set(sid, tracker)
-  return tracker
+  store.entities.sort((a, b) => b.t - a.t || b.count - a.count)
+  if (store.entities.length > MAX_ENTITIES) store.entities = store.entities.slice(0, MAX_ENTITIES)
+  store.primaryEntity = store.entities[0] ?? null
+  _entityTracker.set(sid, store)
+  return store
 }
 
 function resolveAmbiguity(cleanedText, sid) {
   const PRONOUN_PATTERN = /(?:^|[\s،.!?])(هو|هي|هذا|ذلك|it|this|that|he|she|they)(?:[\s،.!?]|$)/i
   if (!PRONOUN_PATTERN.test(cleanedText)) return cleanedText
-  const tracker = _entityTracker.get(sid)
-  if (!tracker?.entity) return cleanedText
-  const age = (Date.now() - tracker.t) / 1000 / 60
+  const store = _entityTracker.get(sid)
+  if (!store?.primaryEntity) return cleanedText
+  const age = (Date.now() - store.primaryEntity.t) / 1000 / 60
   if (age > 30) return cleanedText
-  return cleanedText + ` [ref: ${tracker.entity} (${tracker.type})]`
+  const refs = store.entities
+    .slice(0, 3)
+    .map(e => `${e.name}(${e.type})`)
+    .join(', ')
+  return cleanedText + ` [ref: ${refs}]`
 }
 
 
@@ -449,7 +459,7 @@ async function generateSessionSummary(sid, history, engine) {
   return { text: text.slice(0,200), decisions, generatedAt: Date.now() }
 }
 
-function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity, prevItem, resolvedEntity) {
+function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity, prevItem, resolvedEntity, editorMode = false, activeSummary = null) {
   const field  = celfResult.field ?? {}
   const exec   = field.executionReadiness ?? 0
   const intent = field.intentPressure    ?? 0
@@ -487,6 +497,8 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity,
   if (novel > 0.70 && !hasFollowup)                         add('>explore', novel)
   if (hasCausal)                                             add('?causal', 0.55)
   if (codeBlocks.length > 0)                                 add('#code', 0.70)
+  if (editorMode)                                            add('#code_recall', 0.90)
+  if (activeSummary?.decisions?.length > 0 && continuity > 0.30) add('>#project_continuation', 0.92)
   if (state.candidateCount < 1 && ground < 0.25 && continuity < 0.20) add('?ambiguous', 0.40)
 
   const MAX_SIGNALS = 4
@@ -948,7 +960,7 @@ router.post('/process-text', async (req, res) => {
 
     const _prevForSig   = routeItems[0] ?? null
     const _resolvedEnt  = resolveAmbiguity(cleanedText, sid) !== cleanedText
-    const _fsResult     = buildFieldSignals(sid, processed.celfResult, cleanedText, codeBlocks, continuity, _prevForSig, _resolvedEnt)
+    const _fsResult     = buildFieldSignals(sid, processed.celfResult, cleanedText, codeBlocks, continuity, _prevForSig, _resolvedEnt, editorMode, activeSummary)
     const fieldSignals  = _fsResult.text
     const semanticState = _fsResult.state
     const fieldShifted  = !standalone && questionVector ? detectFieldShift(sid, questionVector, processed.result, engine, continuity) : false
@@ -1104,7 +1116,7 @@ router.post('/process-text', async (req, res) => {
 
     return res.json({ newSummary: newSummary ?? null,
       reply, celfVault: vaultToSave, observer: observerBox,
-      debug: { messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, editorMode, sessionActive, hasStoredContexts, matchedCodeId: matchedCode?.id ?? null, recoveredCodeInjected: !!recCode, entityRef: entityRef?.entity ?? null, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
+      debug: { systemHint: systemHint ?? null, messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, editorMode, sessionActive, hasStoredContexts, matchedCodeId: matchedCode?.id ?? null, recoveredCodeInjected: !!recCode, entityRef: entityRef?.primaryEntity?.name ?? null, entityCount: (entityRef?.entities ?? []).length, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, totalTokens: inputTokensTotal + outputTokensTotal, costUSD, maxTokens, routeConfidence: Math.round(routeConf * 1000) / 1000, vaultHit: vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null, model, inlineCode: codeBlocks.length > 0, payloadSize, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, styleTtlRemaining: styleStore.get(sid)?.ttl ?? 0, noiseRemoved, truncated: hasText && text.length > MAX_INPUT_CHARS, feedbackApplied, feedbackCoherence }
     })
 
