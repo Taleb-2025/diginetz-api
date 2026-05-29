@@ -960,6 +960,9 @@ router.post('/process-text', async (req, res) => {
 
     const _prevForSig   = routeItems[0] ?? null
     const _resolvedEnt  = resolveAmbiguity(cleanedText, sid) !== cleanedText
+    const editorMode = !!matchedCode
+    const storedSummaryCtx = sessionSummaryStore.get(sid) ?? null
+    const activeSummary     = storedSummaryCtx ?? (sessionSummary ? { text: sessionSummary.text, decisions: sessionSummary.decisions ?? [] } : null)
     const _fsResult     = buildFieldSignals(sid, processed.celfResult, cleanedText, codeBlocks, continuity, _prevForSig, _resolvedEnt, editorMode, activeSummary)
     const fieldSignals  = _fsResult.text
     const semanticState = _fsResult.state
@@ -982,12 +985,9 @@ router.post('/process-text', async (req, res) => {
     const userContent = hasImage ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: cleanedText }] : [])] : cleanedText
 
     const storedRaw  = matchedCode?.raw ?? null
-    const editorMode = !!matchedCode
 
     const _prevItem     = routeItems[0] ?? null
     const _routedVault  = (editorMode || fieldShifted) ? null : vaultHit
-    const storedSummaryCtx = sessionSummaryStore.get(sid) ?? null
-    const activeSummary     = storedSummaryCtx ?? (sessionSummary ? { text: sessionSummary.text, decisions: sessionSummary.decisions ?? [] } : null)
     const filteredHistory = filterStyleInstructions(history)
     const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [] })
 
