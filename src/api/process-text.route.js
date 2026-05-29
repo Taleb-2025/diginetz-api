@@ -220,7 +220,7 @@ function compressAssistantMessage(content) {
 }
 
 function compressUserMessage(content) {
-  if (typeof content !== 'string') return content.slice(0, 400)
+  if (typeof content !== 'string') return ''
   const hasCode = /```[\s\S]*?```/.test(content) || /export\s+class\s+\w+/.test(content) || /function\s+\w+\s*\(/.test(content)
   if (!hasCode) return content.slice(0, 400)
   const withoutCode = content.replace(/```[\s\S]*?```/g, '[code attached]').replace(/export\s+(class|function|const|default)\s+[\s\S]{0,50}/g, '[code attached]').replace(/\s{2,}/g, ' ').trim()
@@ -310,7 +310,7 @@ function updateEntityTracker(sid, text, codeBlocks) {
 }
 
 function resolveAmbiguity(cleanedText, sid) {
-  const PRONOUN_PATTERN = /(هو|هي|هذا|ذلك|it|this|that|he|she|they)/i
+  const PRONOUN_PATTERN = /(?:^|[\s،.!?])(هو|هي|هذا|ذلك|it|this|that|he|she|they)(?:[\s،.!?]|$)/i
   if (!PRONOUN_PATTERN.test(cleanedText)) return cleanedText
   const tracker = _entityTracker.get(sid)
   if (!tracker?.entity) return cleanedText
@@ -420,6 +420,35 @@ function _buildIntentSignal(cleanedText, exec, intent) {
   return null
 }
 
+const SUMMARY_INTERVAL = 8
+
+async function generateSessionSummary(sid, history, engine) {
+  if (!history || history.length < 4) return null
+  const recent = history.slice(-16)
+  const compressed = recent
+    .filter(h => h.role === 'user')
+    .map(h => h.content.replace(/```[\s\S]*?```/g,'').trim().slice(0,120))
+    .filter(Boolean)
+    .join(' | ')
+  if (!compressed) return null
+
+  const DECISION_PATTERNS = [
+    /قررنا|اخترنا|سنستخدم|decided|we.ll use|using/i,
+    /لا نريد|لن نستخدم|avoid|don.t use|instead of/i
+  ]
+  const decisions = recent
+    .filter(h => h.role === 'user' && DECISION_PATTERNS.some(p => p.test(h.content)))
+    .map(h => h.content.replace(/```[\s\S]*?```/g,'').trim().slice(0,80))
+    .slice(0,3)
+
+  const domain  = classifyDomain(compressed)
+  const symbols = compressed.match(/[a-zA-Z][a-zA-Z0-9]{2,}/g) ?? []
+  const topSyms = [...new Set(symbols)].slice(0,5).join(', ')
+
+  const text = `[${domain}] ${topSyms || 'general'} — ${compressed.slice(0,150)}`
+  return { text: text.slice(0,200), decisions, generatedAt: Date.now() }
+}
+
 function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity, prevItem, resolvedEntity) {
   const field  = celfResult.field ?? {}
   const exec   = field.executionReadiness ?? 0
@@ -491,8 +520,14 @@ function buildStateHint(phase, continuity) {
   return null
 }
 
-function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem, lastTopicText }) {
+function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem, lastTopicText, sessionSummary }) {
   const parts = []
+  if (sessionSummary?.text) {
+    const decStr = sessionSummary.decisions?.length
+      ? '\n[decisions] ' + sessionSummary.decisions.slice(0,3).map(d=>d.slice(0,60)).join(' | ')
+      : ''
+    parts.push('[summary] ' + sessionSummary.text + decStr)
+  }
   if (fieldSignals) parts.push(fieldSignals)
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
@@ -516,8 +551,9 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   return { miniContext, tokenEstimate: Math.ceil((miniContext?.length ?? 0) / 4), layers: { state: !!stateHint, code: !!codeHint, memory: !!(frontendContext && capsuleEvalResult?.score >= 0.35), vault: !!(vaultHit?.score >= 0.45), context: !!builtSystemHint, style: !!activeStyle } }
 }
 
-const rawCodeStore     = new Map()
-const codeSessionStore = new Map()
+const rawCodeStore      = new Map()
+const codeSessionStore  = new Map()
+const sessionSummaryStore = new Map()
 
 function extractSymbols(raw) {
   const symbols = []
@@ -768,11 +804,11 @@ async function continuationCall(currentText, partialReply, systemHint, timeoutMs
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '10.8' })
+  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', llm: 'Claude Haiku 4.5', version: '10.9' })
 })
 
 router.post('/process-text', async (req, res) => {
-  const { text = '', sessionId, history = [], image = null, imageMimeType = 'image/jpeg', savedCode = null, capsuleContext = null, recoveredCode = null } = req.body
+  const { text = '', sessionId, history = [], image = null, imageMimeType = 'image/jpeg', savedCode = null, capsuleContext = null, recoveredCode = null, sessionSummary = null } = req.body
 
   const hasText  = typeof text  === 'string' && text.trim().length > 0
   const hasImage = typeof image === 'string' && image.length > 0
@@ -848,6 +884,15 @@ router.post('/process-text', async (req, res) => {
       if (cs?.active) { cs.ttl--; if (cs.ttl <= 0) cs.active = false }
     }
 
+    if (!rawCodeStore.has(sid) && recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30) {
+      storeCodeContext(sid, [recoveredCode], engine, tValue)
+      codeSessionStore.set(sid, { active: true, ttl: 6 })
+    }
+
+    if (!sessionSummaryStore.has(sid) && sessionSummary?.text) {
+      sessionSummaryStore.set(sid, { text: sessionSummary.text, decisions: sessionSummary.decisions ?? [], generatedAt: sessionSummary.generatedAt ?? Date.now() })
+    }
+
     const wordCount       = cleanedText.trim().split(/\s+/).length
     const entityRef       = updateEntityTracker(sid, cleanedText, codeBlocks)
     const noveltyPressure = processed.celfResult.field?.noveltyPressure ?? 0
@@ -916,7 +961,9 @@ router.post('/process-text', async (req, res) => {
 
     const _prevItem     = routeItems[0] ?? null
     const _routedVault  = (editorMode || fieldShifted) ? null : vaultHit
-    const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null })
+    const storedSummaryCtx = sessionSummaryStore.get(sid) ?? null
+    const activeSummary     = storedSummaryCtx ?? (sessionSummary ? { text: sessionSummary.text, decisions: sessionSummary.decisions ?? [] } : null)
+    const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary })
 
     if (needsRawCode && !storedRaw && !codeBlocks.length) {
       return res.json({
@@ -1009,6 +1056,15 @@ router.post('/process-text', async (req, res) => {
       if (observerBox) { storeCapsule(sid, observerBox, lastTopicText, tValue); updateAnchors(sid, lastTopicText, questionSimilarity ?? 0.5) }
     }
 
+    const msgCountAfter = (history?.length ?? 0) + 1
+    let newSummary = null
+    if (msgCountAfter > 0 && msgCountAfter % SUMMARY_INTERVAL === 0) {
+      try {
+        newSummary = await generateSessionSummary(sid, [...(history??[]), {role:'assistant',content:reply??''}], engine)
+        if (newSummary) sessionSummaryStore.set(sid, newSummary)
+      } catch {}
+    }
+
     if (reply && needsRawCode) {
       const replyBlocks = detectCodeBlocks(reply)
       if (replyBlocks.length > 0 && replyBlocks[0].length > 200) {
@@ -1033,7 +1089,7 @@ router.post('/process-text', async (req, res) => {
 
     const vaultToSave = [...getEngine(sid).vault.values()].slice(-20).map(c => ({ id: c.id, vector: Array.from(c.vector ?? []), text: c.text?.slice(0, 200) ?? '', phase: c.phase ?? 'warmup', error: c.error ?? 0, theta: c.theta ?? 0, reinforcement: c.reinforcement ?? 0 }))
 
-    return res.json({
+    return res.json({ newSummary: newSummary ?? null,
       reply, celfVault: vaultToSave, observer: observerBox,
       debug: { messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, editorMode, sessionActive, hasStoredContexts, matchedCodeId: matchedCode?.id ?? null, recoveredCodeInjected: !!recCode, entityRef: entityRef?.entity ?? null, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, totalTokens: inputTokensTotal + outputTokensTotal, costUSD, maxTokens, routeConfidence: Math.round(routeConf * 1000) / 1000, vaultHit: vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null, model, inlineCode: codeBlocks.length > 0, payloadSize, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, styleTtlRemaining: styleStore.get(sid)?.ttl ?? 0, noiseRemoved, truncated: hasText && text.length > MAX_INPUT_CHARS, feedbackApplied, feedbackCoherence }
@@ -1070,6 +1126,9 @@ router.delete('/session/:id', (req, res) => {
   _entityTracker.delete(req.params.id)
   rawCodeStore.delete(req.params.id)
   codeSessionStore.delete(req.params.id)
+  capsuleMemory.delete(req.params.id)
+  anchorMemory.delete(req.params.id)
+  sessionSummaryStore.delete(req.params.id)
   return res.json({ ok: true })
 })
 
