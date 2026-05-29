@@ -520,7 +520,19 @@ function buildStateHint(phase, continuity) {
   return null
 }
 
-function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem, lastTopicText, sessionSummary }) {
+function findPrevAnswer(filteredHistory, prevItem, lastTopicText) {
+  const key = (prevItem?.text ?? lastTopicText ?? '').trim()
+  if (!key || key.length < 5) return null
+  const idx = filteredHistory.findIndex(h =>
+    h.role === 'user' && h.content.includes(key.slice(0, 40))
+  )
+  const ans = idx >= 0 ? filteredHistory[idx + 1] : null
+  return ans?.role === 'assistant'
+    ? ans.content.replace(/```[\s\S]*?```/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 120)
+    : null
+}
+
+function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem, lastTopicText, sessionSummary, filteredHistory }) {
   const parts = []
   if (sessionSummary?.text) {
     const decStr = sessionSummary.decisions?.length
@@ -533,9 +545,10 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   if (stateHint) parts.push(stateHint)
   if (codeHint) parts.push(codeHint)
   if (frontendContext && capsuleEvalResult?.score >= 0.50) parts.push(`[memory]\n${frontendContext.slice(0, 300)}`)
-  const _prevRaw     = prevItem?.text ?? lastTopicText ?? null
+  const prevAnswerText = findPrevAnswer(filteredHistory ?? [], prevItem, lastTopicText)
+  const _prevRaw = prevAnswerText ?? prevItem?.text ?? lastTopicText ?? null
   const previousText = _prevRaw
-    ? _prevRaw.replace(/```[\s\S]*?```/g, '').replace(/<[^>]{1,200}>/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 80)
+    ? _prevRaw.replace(/```[\s\S]*?```/g, '').replace(/<[^>]{1,200}>/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 120)
     : null
   const systemHasPrev = (builtSystemHint ?? '').includes('[previously]')
   if (previousText && !systemHasPrev) parts.push(`[previously] ${previousText}`)
@@ -963,7 +976,7 @@ router.post('/process-text', async (req, res) => {
     const _routedVault  = (editorMode || fieldShifted) ? null : vaultHit
     const storedSummaryCtx = sessionSummaryStore.get(sid) ?? null
     const activeSummary     = storedSummaryCtx ?? (sessionSummary ? { text: sessionSummary.text, decisions: sessionSummary.decisions ?? [] } : null)
-    const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary })
+    const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [] })
 
     if (needsRawCode && !storedRaw && !codeBlocks.length) {
       return res.json({
