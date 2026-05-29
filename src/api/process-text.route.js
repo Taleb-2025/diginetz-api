@@ -988,6 +988,7 @@ router.post('/process-text', async (req, res) => {
     const _routedVault  = (editorMode || fieldShifted) ? null : vaultHit
     const storedSummaryCtx = sessionSummaryStore.get(sid) ?? null
     const activeSummary     = storedSummaryCtx ?? (sessionSummary ? { text: sessionSummary.text, decisions: sessionSummary.decisions ?? [] } : null)
+    const filteredHistory = filterStyleInstructions(history)
     const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [] })
 
     if (needsRawCode && !storedRaw && !codeBlocks.length) {
@@ -999,7 +1000,6 @@ router.post('/process-text', async (req, res) => {
       })
     }
 
-    const filteredHistory = filterStyleInstructions(history)
     const currentDomain   = semanticState?.dominantDomain ?? classifyDomain(cleanedText)
 
     let historyMessages
