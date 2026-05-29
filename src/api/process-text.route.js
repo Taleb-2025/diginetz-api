@@ -435,12 +435,28 @@ const SUMMARY_INTERVAL = 8
 async function generateSessionSummary(sid, history, engine) {
   if (!history || history.length < 4) return null
   const recent = history.slice(-16)
-  const compressed = recent
-    .filter(h => h.role === 'user')
-    .map(h => h.content.replace(/```[\s\S]*?```/g,'').trim().slice(0,120))
+
+  const assistantReplies = recent
+    .filter(h => h.role === 'assistant')
+    .map(h => h.content.replace(/```[\s\S]*?```/g,'').replace(/\s{2,}/g,' ').trim().slice(0,120))
     .filter(Boolean)
-    .join(' | ')
-  if (!compressed) return null
+
+  const userTopics = recent
+    .filter(h => h.role === 'user')
+    .map(h => h.content.replace(/```[\s\S]*?```/g,'').trim())
+    .filter(Boolean)
+
+  const domain   = classifyDomain(userTopics.join(' '))
+  const codeWork = recent.some(h => h.role === 'user' && /```|function|class|const|let|var/.test(h.content))
+  const symbols  = (userTopics.join(' ') + ' ' + assistantReplies.join(' ')).match(/[a-zA-Z][a-zA-Z0-9]{2,}/g) ?? []
+  const topSyms  = [...new Set(symbols)].slice(0, 6).join(', ')
+
+  const mainTopic = assistantReplies[0]?.slice(0, 100)
+    ?? userTopics[0]?.slice(0, 80)
+    ?? 'general conversation'
+
+  const codeNote = codeWork ? ' (with code)' : ''
+  const text = `${domain}${codeNote}: ${topSyms || 'general'} — ${mainTopic}`
 
   const DECISION_PATTERNS = [
     /قررنا|اخترنا|سنستخدم|decided|we.ll use|using/i,
@@ -449,14 +465,9 @@ async function generateSessionSummary(sid, history, engine) {
   const decisions = recent
     .filter(h => h.role === 'user' && DECISION_PATTERNS.some(p => p.test(h.content)))
     .map(h => h.content.replace(/```[\s\S]*?```/g,'').trim().slice(0,80))
-    .slice(0,3)
+    .slice(0, 3)
 
-  const domain  = classifyDomain(compressed)
-  const symbols = compressed.match(/[a-zA-Z][a-zA-Z0-9]{2,}/g) ?? []
-  const topSyms = [...new Set(symbols)].slice(0,5).join(', ')
-
-  const text = `[${domain}] ${topSyms || 'general'} — ${compressed.slice(0,150)}`
-  return { text: text.slice(0,200), decisions, generatedAt: Date.now() }
+  return { text: text.slice(0, 200), decisions, generatedAt: Date.now() }
 }
 
 function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity, prevItem, resolvedEntity, editorMode = false, activeSummary = null) {
@@ -571,7 +582,9 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   }
   if (builtSystemHint) parts.push(builtSystemHint)
   const styleMap = { concise: 'أجب بإيجاز.', detailed: 'أجب بتفصيل كامل.', arabic: 'أجب باللغة العربية.', english: 'Reply in English.', german: 'Antworte auf Deutsch.' }
-  if (activeStyle && styleMap[activeStyle]) parts.push(styleMap[activeStyle])
+  const styleHint = activeStyle && styleMap[activeStyle] ? styleMap[activeStyle] : null
+  const miniSoFar = parts.join('\n')
+  if (styleHint && !miniSoFar.includes(styleHint)) parts.push(styleHint)
   const miniContext = parts.filter(Boolean).join('\n').trim() || null
   return { miniContext, tokenEstimate: Math.ceil((miniContext?.length ?? 0) / 4), layers: { state: !!stateHint, code: !!codeHint, memory: !!(frontendContext && capsuleEvalResult?.score >= 0.35), vault: !!(vaultHit?.score >= 0.45), context: !!builtSystemHint, style: !!activeStyle } }
 }
