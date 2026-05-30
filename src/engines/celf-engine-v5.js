@@ -139,7 +139,7 @@ export class CELF_Engine_AI_V5 {
     const text = typeof input === 'string' ? input : JSON.stringify(input ?? '')
     let h1 = 2166136261, h2 = 16777619, h3 = 374761393
     for (let i = 0; i < text.length; i++) {
-      const c = text.charCodeAt(i)
+      const c = String(text ?? '').charCodeAt(i)
       h1 ^= c; h1 = Math.imul(h1, 16777619)
       h2  = Math.imul(h2 ^ c, 2246822519)
       h3  = Math.imul(h3 + c, 3266489917)
@@ -200,7 +200,7 @@ export class CELF_Engine_AI_V5 {
     if (!h1) {
       let hh1 = 2166136261, hh2 = 16777619, hh3 = 374761393
       for (let i = 0; i < raw.length; i++) {
-        const c = raw.charCodeAt(i)
+        const c = String(raw ?? '').charCodeAt(i)
         hh1 ^= c; hh1 = Math.imul(hh1, 16777619)
         hh2  = Math.imul(hh2 ^ c, 2246822519)
         hh3  = Math.imul(hh3 + c, 3266489917)
@@ -278,7 +278,7 @@ export class CELF_Engine_AI_V5 {
 
     const _hash = (s) => {
       let fh = 2166136261
-      for (let i = 0; i < s.length; i++) { fh ^= s.charCodeAt(i); fh = Math.imul(fh, 16777619) }
+      const _s = String(s ?? ''); for (let i = 0; i < _s.length; i++) { fh ^= _s.charCodeAt(i); fh = Math.imul(fh, 16777619) }
       return Math.abs(fh >>> 0)
     }
 
@@ -508,7 +508,7 @@ export class CELF_Engine_AI_V5 {
     const t = String(text ?? '')
     if (t.length < 10) return null
     let cs = 2166136261
-    for (let i = 0; i < t.length; i++) { cs ^= t.charCodeAt(i); cs = Math.imul(cs, 16777619) }
+    const _tc = String(t ?? ''); for (let i = 0; i < _tc.length; i++) { cs ^= _tc.charCodeAt(i); cs = Math.imul(cs, 16777619) }
     const checksum = Math.abs(cs >>> 0).toString(16)
     for (const [id, cap] of this.vault) {
       if (cap.checksum === checksum) {
@@ -752,7 +752,7 @@ export class CELF_Engine_AI_V5 {
     const text = String(input ?? '')
     if (text.length < 10) return
     let cs = 2166136261
-    for (let i = 0; i < text.length; i++) { cs ^= text.charCodeAt(i); cs = Math.imul(cs, 16777619) }
+    const _txt = String(text ?? ''); for (let i = 0; i < _txt.length; i++) { cs ^= _txt.charCodeAt(i); cs = Math.imul(cs, 16777619) }
     const checksum = Math.abs(cs >>> 0).toString(16)
     for (const [, cap] of this.vault) {
       if (cap.checksum === checksum) {
