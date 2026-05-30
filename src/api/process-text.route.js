@@ -556,7 +556,7 @@ function findPrevAnswer(filteredHistory, prevItem, lastTopicText) {
     : null
 }
 
-function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem, lastTopicText, sessionSummary, filteredHistory }) {
+function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem, lastTopicText, sessionSummary, filteredHistory, editorMode, wantsFullFile }) {
   const parts = []
   if (sessionSummary?.text) {
     const decStr = sessionSummary.decisions?.length
@@ -564,13 +564,14 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
       : ''
     parts.push('[summary] ' + sessionSummary.text + decStr)
   }
+  if (editorMode && wantsFullFile) parts.push('[output: full_file] Return the complete modified file only. No explanations before or after.')
   if (fieldSignals) parts.push(fieldSignals)
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
   if (codeHint) parts.push(codeHint)
   if (frontendContext && capsuleEvalResult?.score >= 0.50) parts.push(`[memory]\n${frontendContext.slice(0, 300)}`)
   const prevAnswerText = findPrevAnswer(filteredHistory ?? [], prevItem, lastTopicText)
-  const _prevRaw = prevAnswerText ?? prevItem?.text ?? lastTopicText ?? null
+  const _prevRaw = prevAnswerText ?? null
   const previousText = _prevRaw
     ? _prevRaw.replace(/```[\s\S]*?```/g, '').replace(/<[^>]{1,200}>/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 120)
     : null
@@ -1017,7 +1018,10 @@ router.post('/process-text', async (req, res) => {
     const _prevItem     = routeItems[0] ?? null
     const _routedVault  = (editorMode || fieldShifted) ? null : vaultHit
     const filteredHistory = filterStyleInstructions(history)
-    const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: built.systemHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [] })
+    const _wantsFullFile   = /(ملف|الكود|html|الصفحة).*(كامل|نهائي)|اعطني الكود الكامل|أعطني الكود الكامل|أعد كتابة الملف|complete file|full html/i.test(cleanedText)
+    const _cleanedBuiltHint = (built.systemHint ?? '').replace(/\[previously\][^\n]*/g, '').replace(/\n{2,}/g, '\n').trim() || null
+
+    const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: _cleanedBuiltHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [], editorMode, wantsFullFile: _wantsFullFile })
 
     if (needsRawCode && !storedRaw && !codeBlocks.length) {
       return res.json({
@@ -1063,7 +1067,8 @@ router.post('/process-text', async (req, res) => {
 
     const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
     const remaining     = Math.max(1000, 180000 - inputEstimate)
-    const maxTokens     = codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
+    const _fullFileRequest = editorMode && _wantsFullFile
+    const maxTokens     = _fullFileRequest ? 6000 : codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
 
     let payloadSize = 0
     try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large', detail: e.message }) }
