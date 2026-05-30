@@ -945,14 +945,13 @@ router.post('/process-text', async (req, res) => {
     if (hasStoredContexts && !codeSessionStore.has(sid)) {
       codeSessionStore.set(sid, { active: true, ttl: 6 })
     }
-    const EDITOR_INTENT    = /اصلح|اصلحه|عدل|عدله|أضف|أنشئ|حسّن|اكتب|نقاط ضعف|review|fix|edit|refactor|analyze|تحليل|تعديل|debug|improve|add|write|create|update|generate/i
+    const EDITOR_INTENT    = /اصلح|أصلح|اصلحه|أصلحه|عدل|عدله|أضف|أنشئ|اعطني|أعطني|اعرض|أعرض|أرني|حسّن|اكتب|نقاط ضعف|review|fix|edit|refactor|analyze|تحليل|تعديل|debug|improve|add|write|create|update|generate|show|give/i
     const isEditorIntent   = EDITOR_INTENT.test(cleanedText)
     const _stateForForce   = _semanticState.get(sid)
-    const _detectedDomain  = classifyDomain(cleanedText)
-    const forceEditor      = hasStoredContexts && isEditorIntent && (_stateForForce?.driftCount ?? 0) < 2 && !['emotional','general'].includes(_detectedDomain)
+    const forceEditor      = hasStoredContexts && isEditorIntent && (_stateForForce?.driftCount ?? 0) < 2
 
-    const _isGeneral       = ['general','emotional'].includes(classifyDomain(cleanedText))
-    const matchedCode      = hasStoredContexts && questionVector && !(_isGeneral && !isEditorIntent)
+    const _codeReference   = /كود|code|الكود|script|html|function|السابق|الأخير|برنامج/i.test(cleanedText)
+    const matchedCode      = hasStoredContexts && questionVector && (isEditorIntent || _codeReference)
       ? retrieveRelevantCode(questionVector, cleanedText, sid, tValue)
       : null
 
