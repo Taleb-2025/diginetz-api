@@ -581,6 +581,7 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
         .replace(/#{1,6}\s*/g, '')
         .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')
         .replace(/[\u{1F300}-\u{1FFFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}]|[0-9]\u{FE0F}\u{20E3}/gu, '')
+        .replace(/^[-•*]\s+/gm, '')
         .replace(/\s{2,}/g, ' ')
         .trim()
         .slice(0, 120)
