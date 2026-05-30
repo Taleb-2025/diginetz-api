@@ -567,7 +567,7 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   if (editorMode && wantsFullFile) parts.push('[output: full_file] Return the complete modified file only. No explanations before or after.')
   const _hasAnalyze = (fieldSignals||'').includes('@intent.analyze')
   const _hasDepth   = (fieldSignals||'').includes('>>depth')
-  if (_hasAnalyze && !_hasDepth) parts.push('[style: brief_analysis] List ONLY the 3 most critical issues. One sentence each. NO code examples. NO tables. NO headers. Plain text only.')
+  if (_hasAnalyze && !_hasDepth && !editorMode && !wantsFullFile) parts.push('[task: triage] Flag only the 3 blocking issues. Plain text. No fixes.')
   if (fieldSignals) parts.push(fieldSignals)
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
@@ -1012,7 +1012,7 @@ router.post('/process-text', async (req, res) => {
 
     const _inputWords = wordCount
     const _noMarkdown = codeBlocks.length === 0 ? ' No markdown unless necessary. No bullet points. No bold text.' : ''
-    const _briefAnalysis = (fieldSignals||'').includes('@intent.analyze') && !(fieldSignals||'').includes('>>depth')
+    const _briefAnalysis = (fieldSignals||'').includes('@intent.analyze') && !(fieldSignals||'').includes('>>depth') && !editorMode && !_wantsFullFile
     const conciseHint = _briefAnalysis ? 'Be brief. Plain text only. Do not provide code examples.' : codeBlocks.length > 0 ? 'Be thorough with code examples.' : _inputWords <= 5 ? 'Be concise and complete.' + _noMarkdown : _inputWords <= 15 ? 'Answer fully but without repetition.' + _noMarkdown : 'Be clear and complete.' + _noMarkdown
 
     const prevCodeFailed = hasCodeContext && (history ?? []).some(h =>
