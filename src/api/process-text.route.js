@@ -940,11 +940,19 @@ router.post('/process-text', async (req, res) => {
     const codeSession      = codeSessionStore.get(sid)
     const sessionActive    = codeSession?.active && codeSession?.ttl > 0
     const hasStoredContexts = (rawCodeStore.get(sid) ?? []).length > 0
+    const EDITOR_INTENT    = /اصلح|اصلحه|عدل|عدله|أضف|أنشئ|حسّن|اكتب|نقاط ضعف|review|fix|edit|refactor|analyze|تحليل|تعديل|debug|improve|add|write|create|update|generate/i
+    const isEditorIntent   = EDITOR_INTENT.test(cleanedText)
+    const forceEditor      = sessionActive && isEditorIntent && hasStoredContexts
+
     const matchedCode      = hasStoredContexts && questionVector
       ? retrieveRelevantCode(questionVector, cleanedText, sid, tValue)
       : null
-    const needsRawCode     = !!matchedCode
-    const EDITOR_INTENT    = /اصلح|اصلحه|عدل|عدله|نقاط ضعف|أخطاء قاتلة|review|fix|edit|refactor|analyze|تحليل|تعديل|debug|improve|حسّن/i
+
+    const effectiveMatch   = matchedCode ?? (forceEditor
+      ? (rawCodeStore.get(sid) ?? [])[0] ?? null
+      : null)
+
+    const needsRawCode     = !!effectiveMatch
     const _codeOnlyMsg     = codeBlocks.length > 0 && wordCount <= 4
       ? 'Analyze this code: identify its purpose, structure, and any issues.' : null
 
@@ -973,7 +981,7 @@ router.post('/process-text', async (req, res) => {
 
     const _prevForSig   = routeItems[0] ?? null
     const _resolvedEnt  = resolveAmbiguity(cleanedText, sid) !== cleanedText
-    const editorMode = !!matchedCode
+    const editorMode = !!effectiveMatch
     const storedSummaryCtx = sessionSummaryStore.get(sid) ?? null
     const activeSummary     = storedSummaryCtx ?? (sessionSummary ? { text: sessionSummary.text, decisions: sessionSummary.decisions ?? [] } : null)
     const _fsResult     = buildFieldSignals(sid, processed.celfResult, cleanedText, codeBlocks, continuity, _prevForSig, _resolvedEnt, editorMode, activeSummary)
@@ -997,7 +1005,7 @@ router.post('/process-text', async (req, res) => {
     
     const userContent = hasImage ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: cleanedText }] : [])] : cleanedText
 
-    const storedRaw  = matchedCode?.raw ?? null
+    const storedRaw  = effectiveMatch?.raw ?? null
 
     const _prevItem     = routeItems[0] ?? null
     const _routedVault  = (editorMode || fieldShifted) ? null : vaultHit
@@ -1129,7 +1137,7 @@ router.post('/process-text', async (req, res) => {
 
     return res.json({ newSummary: newSummary ?? null,
       reply, celfVault: vaultToSave, observer: observerBox,
-      debug: { systemHint: systemHint ?? null, messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, editorMode, sessionActive, hasStoredContexts, matchedCodeId: matchedCode?.id ?? null, recoveredCodeInjected: !!recCode, entityRef: entityRef?.primaryEntity?.name ?? null, entityCount: (entityRef?.entities ?? []).length, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
+      debug: { systemHint: systemHint ?? null, messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, editorMode, sessionActive, hasStoredContexts, matchedCodeId: effectiveMatch?.id ?? null, forcedEditor: forceEditor, recoveredCodeInjected: !!recCode, entityRef: entityRef?.primaryEntity?.name ?? null, entityCount: (entityRef?.entities ?? []).length, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, totalTokens: inputTokensTotal + outputTokensTotal, costUSD, maxTokens, routeConfidence: Math.round(routeConf * 1000) / 1000, vaultHit: vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null, model, inlineCode: codeBlocks.length > 0, payloadSize, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, styleTtlRemaining: styleStore.get(sid)?.ttl ?? 0, noiseRemoved, truncated: hasText && text.length > MAX_INPUT_CHARS, feedbackApplied, feedbackCoherence }
     })
 
