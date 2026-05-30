@@ -571,9 +571,16 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   if (codeHint) parts.push(codeHint)
   if (frontendContext && capsuleEvalResult?.score >= 0.50) parts.push(`[memory]\n${frontendContext.slice(0, 300)}`)
   const prevAnswerText = findPrevAnswer(filteredHistory ?? [], prevItem, lastTopicText)
-  const _prevRaw = prevAnswerText ?? null
-  const previousText = _prevRaw
-    ? _prevRaw.replace(/```[\s\S]*?```/g, '').replace(/<[^>]{1,200}>/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 120)
+  const previousText = prevAnswerText
+    ? prevAnswerText
+        .replace(/```[\s\S]*?```/g, '')
+        .replace(/<[^>]{1,200}>/g, '')
+        .replace(/#{1,6}\s*/g, '')
+        .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')
+        .replace(/[\u{1F300}-\u{1FFFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}]|[0-9]\u{FE0F}\u{20E3}/gu, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim()
+        .slice(0, 120)
     : null
   const systemHasPrev = (builtSystemHint ?? '').includes('[previously]')
   if (previousText && !systemHasPrev) parts.push(`[previously] ${previousText}`)
