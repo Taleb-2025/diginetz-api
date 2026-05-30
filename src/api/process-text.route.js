@@ -957,7 +957,7 @@ router.post('/process-text', async (req, res) => {
     if (hasStoredContexts && !codeSessionStore.has(sid)) {
       codeSessionStore.set(sid, { active: true, ttl: 6 })
     }
-    const EDITOR_INTENT    = /اصلح|أصلح|اصلحه|أصلحه|عدل|عدله|أضف|أنشئ|اعطني|أعطني|اعرض|أعرض|أرني|حسّن|اكتب|تعديل|debug|improve|add|write|create|update|generate|show|give|fix|edit|refactor/i
+    const EDITOR_INTENT    = /اصلح|أصلح|اصلحه|أصلحه|عدل|عدله|أضف|أنشئ|اعطني|أعطني|اعرض|أعرض|أرني|حسّن|اكتب|تعديل|لديك|عندك|الأصلي|السابق|القديم|debug|improve|add|write|create|update|generate|show|give|fix|edit|refactor|original|previous/i
     const isEditorIntent   = EDITOR_INTENT.test(cleanedText)
     const _stateForForce   = _semanticState.get(sid)
     const forceEditor      = hasStoredContexts && isEditorIntent && (_stateForForce?.driftCount ?? 0) < 2
