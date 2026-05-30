@@ -424,7 +424,7 @@ function _buildIntentSignal(cleanedText, exec, intent) {
   if (/اصلح|fix|debug|أصلح|repair/i.test(cleanedText))                     return '@intent.fix'
   if (/عدل|refactor|تعديل|improve|حسّن/i.test(cleanedText))                return '@intent.refactor'
   if (/حلل|analyze|review|audit|تحليل|نقاط.ضعف|weakness|issues|problems/i.test(cleanedText)) return '@intent.analyze'
-  if (/أنشئ|create|build|generate|اكتب|write/i.test(cleanedText))          return '@intent.build'
+  if (/أنشئ|أضف|create|build|generate|add|اكتب|write/i.test(cleanedText))  return '@intent.build'
   if (/اشرح|explain|what is|ما هو|كيف يعمل/i.test(cleanedText))            return '@intent.explain'
   if (exec > 0.65)                                                            return '@intent.execute'
   if (intent > 0.60)                                                          return '@intent.analyze'
@@ -772,13 +772,13 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false, curre
   if (continuity >= 0.70) {
     const raw  = domainFiltered.slice(-4)
     const msgs = withFallback(raw, 2, clean.slice(-4))
-    if (msgs.length < 2) return []
+    if (msgs.length < 1) return []
     return msgs.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) }))
   }
 
   if (continuity >= 0.40) {
     const raw        = domainFiltered.slice(-4)
-    const msgs       = withFallback(raw, 2, clean.slice(-4))
+    const msgs       = withFallback(raw, 4, clean.slice(-6))
     const compressed = msgs.length >= 1 ? msgs.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) })) : []
     return [...compressed, ...buildCapsuleContext(sid)]
   }
@@ -951,7 +951,8 @@ router.post('/process-text', async (req, res) => {
     const _detectedDomain  = classifyDomain(cleanedText)
     const forceEditor      = hasStoredContexts && isEditorIntent && (_stateForForce?.driftCount ?? 0) < 2 && !['emotional','general'].includes(_detectedDomain)
 
-    const matchedCode      = hasStoredContexts && questionVector
+    const _isGeneral       = ['general','emotional'].includes(classifyDomain(cleanedText))
+    const matchedCode      = hasStoredContexts && questionVector && !(_isGeneral && !isEditorIntent)
       ? retrieveRelevantCode(questionVector, cleanedText, sid, tValue)
       : null
 
