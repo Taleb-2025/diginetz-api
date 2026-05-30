@@ -927,6 +927,10 @@ router.post('/process-text', async (req, res) => {
       codeSessionStore.set(sid, { active: true, ttl: 6 })
     }
 
+    if (hasStoredContexts && !codeSessionStore.has(sid)) {
+      codeSessionStore.set(sid, { active: true, ttl: 6 })
+    }
+
     if (!sessionSummaryStore.has(sid) && sessionSummary?.text) {
       sessionSummaryStore.set(sid, { text: sessionSummary.text, decisions: sessionSummary.decisions ?? [], generatedAt: sessionSummary.generatedAt ?? Date.now() })
     }
@@ -942,7 +946,7 @@ router.post('/process-text', async (req, res) => {
     const hasStoredContexts = (rawCodeStore.get(sid) ?? []).length > 0
     const EDITOR_INTENT    = /اصلح|اصلحه|عدل|عدله|أضف|أنشئ|حسّن|اكتب|نقاط ضعف|review|fix|edit|refactor|analyze|تحليل|تعديل|debug|improve|add|write|create|update|generate/i
     const isEditorIntent   = EDITOR_INTENT.test(cleanedText)
-    const forceEditor      = sessionActive && isEditorIntent && hasStoredContexts
+    const forceEditor      = hasStoredContexts && isEditorIntent
 
     const matchedCode      = hasStoredContexts && questionVector
       ? retrieveRelevantCode(questionVector, cleanedText, sid, tValue)
