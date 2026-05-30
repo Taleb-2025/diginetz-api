@@ -565,6 +565,9 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
     parts.push('[summary] ' + sessionSummary.text + decStr)
   }
   if (editorMode && wantsFullFile) parts.push('[output: full_file] Return the complete modified file only. No explanations before or after.')
+  const _hasAnalyze = (fieldSignals||'').includes('@intent.analyze')
+  const _hasDepth   = (fieldSignals||'').includes('>>depth')
+  if (_hasAnalyze && !_hasDepth) parts.push('[style: brief_analysis] أذكر أهم 3 نقاط فقط. سطرين لكل نقطة. بدون عناوين أو رموز.')
   if (fieldSignals) parts.push(fieldSignals)
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
