@@ -67,13 +67,14 @@ function jaccardSimilarity(textA, textB) {
 
 function detectCodeBlocks(text) {
   const blocks = []
-  const fenced = /```(?:js|javascript|ts|typescript|jsx|tsx)?\s*\n([\s\S]*?)```/gi
+  const fenced = /```(?:[a-zA-Z0-9_+-]*)?(?: |\n)([\s\S]*?)```/gi
   let match
   while ((match = fenced.exec(text)) !== null) { const code = match[1].trim(); if (code.length > 30) blocks.push(code) }
   if (blocks.length === 0) {
     const codeSignals = [
       /^(import|export|const|let|var|function|class|async)\s/m,
-      /=>\s*\{/, /\bthis\.\w+\s*=/, /^\s{2,}(const|let|var|return|if|for)\s/m
+      /=>\s*\{/, /\bthis\.\w+\s*=/, /^\s{2,}(const|let|var|return|if|for)\s/m,
+      /<(!DOCTYPE|html|head|body|div|script)/i
     ]
     if (codeSignals.filter(p => p.test(text)).length >= 2 && text.length > 50 && text.length < 20000) blocks.push(text)
   }
@@ -897,7 +898,7 @@ router.post('/process-text', async (req, res) => {
     const lastTopicText = textMap?.get(tValue - 1)?.text ?? prevUserMsg?.content?.split(/\s+/).slice(0, 8).join(' ') ?? null
 
     const structIndex = indexStore?.get(sid) ?? null
-    const codeBlocks  = detectCodeBlocks(cleanedText)
+    const codeBlocks  = detectCodeBlocks(text || cleanedText)
     let   codeHint    = null
 
     if (codeBlocks.length > 0 && structIndex) {
