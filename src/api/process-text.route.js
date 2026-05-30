@@ -567,7 +567,7 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   if (editorMode && wantsFullFile) parts.push('[output: full_file] Return the complete modified file only. No explanations before or after.')
   const _hasAnalyze = (fieldSignals||'').includes('@intent.analyze')
   const _hasDepth   = (fieldSignals||'').includes('>>depth')
-  if (_hasAnalyze && !_hasDepth && !editorMode && !wantsFullFile) parts.push('[task: triage] Flag only the 3 blocking issues. Plain text. No fixes.')
+  if (_hasAnalyze && !_hasDepth && !wantsFullFile) parts.push('[task: triage] Flag only the 3 blocking issues. Plain text. No fixes.')
   if (fieldSignals) parts.push(fieldSignals)
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
@@ -1012,8 +1012,6 @@ router.post('/process-text', async (req, res) => {
 
     const _inputWords = wordCount
     const _noMarkdown = codeBlocks.length === 0 ? ' No markdown unless necessary. No bullet points. No bold text.' : ''
-    const _briefAnalysis = (fieldSignals||'').includes('@intent.analyze') && !(fieldSignals||'').includes('>>depth') && !editorMode && !_wantsFullFile
-    const conciseHint = _briefAnalysis ? 'Be brief. Plain text only. Do not provide code examples.' : codeBlocks.length > 0 ? 'Be thorough with code examples.' : _inputWords <= 5 ? 'Be concise and complete.' + _noMarkdown : _inputWords <= 15 ? 'Answer fully but without repetition.' + _noMarkdown : 'Be clear and complete.' + _noMarkdown
 
     const prevCodeFailed = hasCodeContext && (history ?? []).some(h =>
       h.role === 'user' &&
@@ -1029,8 +1027,10 @@ router.post('/process-text', async (req, res) => {
 
     const _prevItem     = routeItems[0] ?? null
     const _routedVault  = (editorMode || fieldShifted) ? null : vaultHit
-    const filteredHistory = filterStyleInstructions(history)
     const _wantsFullFile   = /(ملف|الكود|html|الصفحة).*(كامل|نهائي)|اعطني الكود الكامل|أعطني الكود الكامل|أعد كتابة الملف|complete file|full html/i.test(cleanedText)
+    const _briefAnalysis = (fieldSignals||'').includes('@intent.analyze') && !(fieldSignals||'').includes('>>depth') && !_wantsFullFile
+    const conciseHint = _briefAnalysis ? 'Be brief. Plain text only. Do not provide code examples.' : codeBlocks.length > 0 ? 'Be thorough with code examples.' : _inputWords <= 5 ? 'Be concise and complete.' + _noMarkdown : _inputWords <= 15 ? 'Answer fully but without repetition.' + _noMarkdown : 'Be clear and complete.' + _noMarkdown
+    const filteredHistory = filterStyleInstructions(history)
     const _cleanedBuiltHint = (built.systemHint ?? '').replace(/\[previously\][^\n]*/g, '').replace(/\n{2,}/g, '\n').trim() || null
 
     const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: _cleanedBuiltHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [], editorMode, wantsFullFile: _wantsFullFile })
