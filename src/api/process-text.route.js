@@ -927,9 +927,6 @@ router.post('/process-text', async (req, res) => {
       codeSessionStore.set(sid, { active: true, ttl: 6 })
     }
 
-    if (hasStoredContexts && !codeSessionStore.has(sid)) {
-      codeSessionStore.set(sid, { active: true, ttl: 6 })
-    }
 
     if (!sessionSummaryStore.has(sid) && sessionSummary?.text) {
       sessionSummaryStore.set(sid, { text: sessionSummary.text, decisions: sessionSummary.decisions ?? [], generatedAt: sessionSummary.generatedAt ?? Date.now() })
@@ -944,6 +941,9 @@ router.post('/process-text', async (req, res) => {
     const codeSession      = codeSessionStore.get(sid)
     const sessionActive    = codeSession?.active && codeSession?.ttl > 0
     const hasStoredContexts = (rawCodeStore.get(sid) ?? []).length > 0
+    if (hasStoredContexts && !codeSessionStore.has(sid)) {
+      codeSessionStore.set(sid, { active: true, ttl: 6 })
+    }
     const EDITOR_INTENT    = /اصلح|اصلحه|عدل|عدله|أضف|أنشئ|حسّن|اكتب|نقاط ضعف|review|fix|edit|refactor|analyze|تحليل|تعديل|debug|improve|add|write|create|update|generate/i
     const isEditorIntent   = EDITOR_INTENT.test(cleanedText)
     const forceEditor      = hasStoredContexts && isEditorIntent
