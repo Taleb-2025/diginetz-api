@@ -567,7 +567,7 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   if (editorMode && wantsFullFile) parts.push('[output: full_file] Return the complete modified file only. No explanations before or after.')
   const _hasAnalyze = (fieldSignals||'').includes('@intent.analyze')
   const _hasDepth   = (fieldSignals||'').includes('>>depth')
-  if (_hasAnalyze && !_hasDepth) parts.push('[style: brief_analysis] أذكر أهم 3 نقاط فقط. سطرين لكل نقطة. بدون عناوين أو رموز.')
+  if (_hasAnalyze && !_hasDepth) parts.push('[style: brief_analysis] List ONLY the 3 most critical issues. One sentence each. NO code examples. NO tables. NO headers. Plain text only.')
   if (fieldSignals) parts.push(fieldSignals)
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
@@ -866,7 +866,8 @@ router.post('/process-text', async (req, res) => {
   if (!hasText && !hasImage) return res.status(400).json({ error: 'missing_input' })
   if (hasImage && image.length > 5_000_000) return res.status(413).json({ error: 'image_too_large' })
 
-  const sid = sessionId || 'default'
+  if (!sessionId) return res.status(400).json({ error: 'missing_session_id' })
+  const sid = sessionId
   if (processingLock.has(sid)) return res.status(429).json({ error: 'request_in_progress', retry: true })
   processingLock.add(sid)
 
@@ -1011,7 +1012,8 @@ router.post('/process-text', async (req, res) => {
 
     const _inputWords = wordCount
     const _noMarkdown = codeBlocks.length === 0 ? ' No markdown unless necessary. No bullet points. No bold text.' : ''
-    const conciseHint = codeBlocks.length > 0 ? 'Be thorough with code examples.' : _inputWords <= 5 ? 'Be concise and complete.' + _noMarkdown : _inputWords <= 15 ? 'Answer fully but without repetition.' + _noMarkdown : 'Be clear and complete.' + _noMarkdown
+    const _briefAnalysis = (fieldSignals||'').includes('@intent.analyze') && !(fieldSignals||'').includes('>>depth')
+    const conciseHint = _briefAnalysis ? 'Be brief. Plain text only. Do not provide code examples.' : codeBlocks.length > 0 ? 'Be thorough with code examples.' : _inputWords <= 5 ? 'Be concise and complete.' + _noMarkdown : _inputWords <= 15 ? 'Answer fully but without repetition.' + _noMarkdown : 'Be clear and complete.' + _noMarkdown
 
     const prevCodeFailed = hasCodeContext && (history ?? []).some(h =>
       h.role === 'user' &&
@@ -1078,7 +1080,7 @@ router.post('/process-text', async (req, res) => {
     const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
     const remaining     = Math.max(1000, 180000 - inputEstimate)
     const _fullFileRequest = editorMode && _wantsFullFile
-    const maxTokens     = _fullFileRequest ? 6000 : codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
+    const maxTokens     = _briefAnalysis ? 700 : _fullFileRequest ? 6000 : codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
 
     let payloadSize = 0
     try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large', detail: e.message }) }
@@ -1099,7 +1101,7 @@ router.post('/process-text', async (req, res) => {
       outputTokensTotal = claudeData?.usage?.output_tokens ?? 0
 
       const MAX_CONTINUATIONS = 2; let continuationCount = 0
-      while (reply && isTruncated(claudeData) && continuationCount < MAX_CONTINUATIONS) {
+      while (reply && !_briefAnalysis && isTruncated(claudeData) && continuationCount < MAX_CONTINUATIONS) {
         continuationCount++
         if (outputTokensTotal >= 4096) break
         const contData = await continuationCall(cleanedText, reply, systemHint, 30000, model)
