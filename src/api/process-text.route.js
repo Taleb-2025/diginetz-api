@@ -423,7 +423,7 @@ function _buildContextPath(domain, cleanedText) {
 function _buildIntentSignal(cleanedText, exec, intent) {
   if (/اصلح|fix|debug|أصلح|repair/i.test(cleanedText))                     return '@intent.fix'
   if (/عدل|refactor|تعديل|improve|حسّن/i.test(cleanedText))                return '@intent.refactor'
-  if (/حلل|analyze|review|audit|تحليل/i.test(cleanedText))                 return '@intent.analyze'
+  if (/حلل|analyze|review|audit|تحليل|نقاط.ضعف|weakness|issues|problems/i.test(cleanedText)) return '@intent.analyze'
   if (/أنشئ|create|build|generate|اكتب|write/i.test(cleanedText))          return '@intent.build'
   if (/اشرح|explain|what is|ما هو|كيف يعمل/i.test(cleanedText))            return '@intent.explain'
   if (exec > 0.65)                                                            return '@intent.execute'
@@ -777,9 +777,9 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false, curre
   }
 
   if (continuity >= 0.40) {
-    const raw        = domainFiltered.slice(-2)
-    const msgs       = withFallback(raw, 2, clean.slice(-2))
-    const compressed = msgs.length >= 2 ? msgs.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) })) : []
+    const raw        = domainFiltered.slice(-4)
+    const msgs       = withFallback(raw, 2, clean.slice(-4))
+    const compressed = msgs.length >= 1 ? msgs.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) })) : []
     return [...compressed, ...buildCapsuleContext(sid)]
   }
 
@@ -948,7 +948,8 @@ router.post('/process-text', async (req, res) => {
     const EDITOR_INTENT    = /اصلح|اصلحه|عدل|عدله|أضف|أنشئ|حسّن|اكتب|نقاط ضعف|review|fix|edit|refactor|analyze|تحليل|تعديل|debug|improve|add|write|create|update|generate/i
     const isEditorIntent   = EDITOR_INTENT.test(cleanedText)
     const _stateForForce   = _semanticState.get(sid)
-    const forceEditor      = hasStoredContexts && isEditorIntent && (_stateForForce?.driftCount ?? 0) < 2
+    const _detectedDomain  = classifyDomain(cleanedText)
+    const forceEditor      = hasStoredContexts && isEditorIntent && (_stateForForce?.driftCount ?? 0) < 2 && !['emotional','general'].includes(_detectedDomain)
 
     const matchedCode      = hasStoredContexts && questionVector
       ? retrieveRelevantCode(questionVector, cleanedText, sid, tValue)
