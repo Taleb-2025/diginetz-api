@@ -513,7 +513,7 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity,
   if (activeSummary?.decisions?.length > 0 && continuity > 0.30) add('>#project_continuation', 0.92)
   if (state.candidateCount < 1 && ground < 0.25 && continuity < 0.20) add('?ambiguous', 0.40)
 
-  const MAX_SIGNALS = 4
+  const MAX_SIGNALS = 5
   const top = weighted.sort((a, b) => b.w - a.w).slice(0, MAX_SIGNALS).map(s => s.text)
 
   return { text: top.length ? top.join(' ') : null, state }
@@ -785,7 +785,7 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false, curre
 
   if (continuity >= 0.20) return [...buildCapsuleContext(sid), ...buildAnchorContext(sid)]
 
-  const fallbackMsgs = clean.slice(-2)
+  const fallbackMsgs = clean.slice(-4)
   if (fallbackMsgs.length >= 1) {
     return fallbackMsgs.map(h => ({
       role: h.role,
@@ -947,7 +947,8 @@ router.post('/process-text', async (req, res) => {
     }
     const EDITOR_INTENT    = /اصلح|اصلحه|عدل|عدله|أضف|أنشئ|حسّن|اكتب|نقاط ضعف|review|fix|edit|refactor|analyze|تحليل|تعديل|debug|improve|add|write|create|update|generate/i
     const isEditorIntent   = EDITOR_INTENT.test(cleanedText)
-    const forceEditor      = hasStoredContexts && isEditorIntent
+    const _stateForForce   = _semanticState.get(sid)
+    const forceEditor      = hasStoredContexts && isEditorIntent && (_stateForForce?.driftCount ?? 0) < 2
 
     const matchedCode      = hasStoredContexts && questionVector
       ? retrieveRelevantCode(questionVector, cleanedText, sid, tValue)
