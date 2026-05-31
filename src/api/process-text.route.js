@@ -564,6 +564,7 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
       : ''
     parts.push('[summary] ' + sessionSummary.text + decStr)
   }
+  if (sessionSummary?.text && !wantsFullFile) parts.push('[session resumed]')
   if (editorMode && wantsFullFile) parts.push('[output: full_file] Return the complete modified file only. No explanations before or after.')
   const _hasAnalyze = (fieldSignals||'').includes('@intent.analyze')
   const _hasDepth   = (fieldSignals||'').includes('>>depth')
@@ -602,9 +603,43 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   return { miniContext, tokenEstimate: Math.ceil((miniContext?.length ?? 0) / 4), layers: { state: !!stateHint, code: !!codeHint, memory: !!(frontendContext && capsuleEvalResult?.score >= 0.35), vault: !!(vaultHit?.score >= 0.45), context: !!builtSystemHint, style: !!activeStyle } }
 }
 
-const rawCodeStore      = new Map()
-const codeSessionStore  = new Map()
+const rawCodeStore        = new Map()
+const codeSessionStore    = new Map()
 const sessionSummaryStore = new Map()
+const resumeBootstrapped  = new Set()
+
+const SMART_FLOWS = {
+  fix_flow:     [
+    { goal: 'إصلاح المشاكل الأمنية',      instruction: 'Fix all security issues (XSS, injection). Use DOM API instead of innerHTML. Return ONLY the complete modified file.' },
+    { goal: 'إضافة التحقق من المدخلات',   instruction: 'Add full input validation (negative values, empty fields, type checks). Return ONLY the complete modified file.' },
+    { goal: 'إضافة حفظ واسترجاع البيانات', instruction: 'Add localStorage save and load with error handling. Return ONLY the complete modified file.' }
+  ],
+  refactor_flow: [
+    { goal: 'تحسين البنية والتنظيم',       instruction: 'Refactor code structure, improve naming, remove duplication. Return ONLY the complete modified file.' },
+    { goal: 'تحسين الأداء',                instruction: 'Optimize performance bottlenecks. Return ONLY the complete modified file.' }
+  ],
+  build_flow: [
+    { goal: 'بناء الهيكل الأساسي',         instruction: 'Implement the core structure and main functions. Return ONLY the complete file.' },
+    { goal: 'إضافة الوظائف الرئيسية',      instruction: 'Add all main functionality. Return ONLY the complete file.' }
+  ]
+}
+
+function chooseSmartFlow(fieldSignals) {
+  if ((fieldSignals||'').includes('@intent.refactor')) return 'refactor_flow'
+  if ((fieldSignals||'').includes('@intent.build'))    return 'build_flow'
+  return 'fix_flow'
+}
+
+function calcPhaseConfidence(reply, observerBox) {
+  const obsConf = observerBox?.diagnostics?.confidence
+  if (obsConf === 'high')   return 0.88
+  if (obsConf === 'medium') return 0.72
+  if (obsConf === 'low')    return 0.42
+  if (!reply)               return 0.30
+  const hasCode    = /```[\s\S]{100,}```/.test(reply) || /<!DOCTYPE|<html/i.test(reply)
+  const hasUnclear = /unclear|unable|cannot|لا أستطيع|غير واضح/i.test(reply)
+  return hasUnclear ? 0.40 : hasCode ? 0.78 : 0.62
+}
 
 function extractSymbols(raw) {
   const symbols = []
@@ -859,7 +894,7 @@ router.get('/process-text', (_req, res) => {
 })
 
 router.post('/process-text', async (req, res) => {
-  const { text = '', sessionId, history = [], image = null, imageMimeType = 'image/jpeg', savedCode = null, capsuleContext = null, recoveredCode = null, sessionSummary = null } = req.body
+  const { text = '', sessionId, history = [], image = null, imageMimeType = 'image/jpeg', savedCode = null, capsuleContext = null, recoveredCode = null, sessionSummary = null, sfPhase = null, sfFlowType = null, sfPrevCode = null, sfMaxPhases = 3 } = req.body
 
   const hasText  = typeof text  === 'string' && text.trim().length > 0
   const hasImage = typeof image === 'string' && image.length > 0
@@ -945,6 +980,19 @@ router.post('/process-text', async (req, res) => {
     if (!sessionSummaryStore.has(sid) && sessionSummary?.text) {
       sessionSummaryStore.set(sid, { text: sessionSummary.text, decisions: sessionSummary.decisions ?? [], generatedAt: sessionSummary.generatedAt ?? Date.now() })
     }
+    if (!resumeBootstrapped.has(sid) && (sessionSummary?.text || recoveredCode)) {
+      const resumeText = [
+        sessionSummary?.text ? `[session resumed summary] ${sessionSummary.text}` : null,
+        recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30
+          ? `[session resumed code] ${compressCodeSemantics(recoveredCode, extractSymbols(recoveredCode))}`
+          : null
+      ].filter(Boolean).join('\n')
+      if (resumeText.trim()) {
+        try { engine.process(resumeText, { sourceWeight: 0.65 }) } catch {}
+      }
+      resumeBootstrapped.add(sid)
+    }
+
 
     const wordCount       = cleanedText.trim().split(/\s+/).length
     const entityRef       = updateEntityTracker(sid, cleanedText, codeBlocks)
@@ -1026,10 +1074,17 @@ router.post('/process-text', async (req, res) => {
 
     const storedRaw  = effectiveMatch?.raw ?? null
 
+    // Smart Flow phase injection
+    const _sfPhase      = Number.isInteger(sfPhase) && sfPhase >= 0 && sfPhase < 10 ? sfPhase : null
+    const _sfDef        = _sfPhase !== null ? (SMART_FLOWS[sfFlowType ?? chooseSmartFlow(fieldSignals ?? '')] ?? SMART_FLOWS.fix_flow)[_sfPhase] : null
+    const _isSfPhase    = _sfPhase !== null && !!_sfDef
+    const _sfActiveCode = sfPrevCode || (recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30 ? recoveredCode : null) || storedRaw || null
+    if (_isSfPhase && !_sfActiveCode) return res.status(400).json({ error: 'missing_code_for_smart_flow', phase: _sfPhase })
+
     const _prevItem     = routeItems[0] ?? null
     const _routedVault  = (editorMode || fieldShifted) ? null : vaultHit
     const _wantsFullFile   = /(ملف|الكود|html|الصفحة).*(كامل|نهائي)|اعطني الكود الكامل|أعطني الكود الكامل|أعد كتابة الملف|complete file|full html/i.test(cleanedText)
-    const _briefAnalysis = (fieldSignals||'').includes('@intent.analyze') && !(fieldSignals||'').includes('>>depth') && !_wantsFullFile
+    const _briefAnalysis = !_isSfPhase && (fieldSignals||'').includes('@intent.analyze') && !(fieldSignals||'').includes('>>depth') && !_wantsFullFile
     const conciseHint = _briefAnalysis ? 'Be brief. Plain text only. Do not provide code examples.' : codeBlocks.length > 0 ? 'Be thorough with code examples.' : _inputWords <= 5 ? 'Be concise and complete.' + _noMarkdown : _inputWords <= 15 ? 'Answer fully but without repetition.' + _noMarkdown : 'Be clear and complete.' + _noMarkdown
     const filteredHistory = filterStyleInstructions(history)
     const _cleanedBuiltHint = (built.systemHint ?? '').replace(/\[previously\][^\n]*/g, '').replace(/\n{2,}/g, '\n').trim() || null
@@ -1049,7 +1104,9 @@ router.post('/process-text', async (req, res) => {
 
     let historyMessages
 
-    if (editorMode) {
+    if (_isSfPhase && _sfActiveCode) {
+      historyMessages = [{ role: 'user', content: _sfActiveCode }]
+    } else if (editorMode) {
       const lastAssistantPatch = [...filteredHistory].reverse().find(h => h.role === 'assistant' && detectCodeBlocks(h.content).length > 0)
       const rawMsg    = storedRaw ? { role: 'user', content: storedRaw } : null
       const patchMsg  = lastAssistantPatch ? { role: 'assistant', content: lastAssistantPatch.content.slice(0, 1200) } : null
@@ -1060,7 +1117,8 @@ router.post('/process-text', async (req, res) => {
       historyMessages = buildHistoryLayer(filteredHistory, effectiveContinuity, sid, false, currentDomain)
     }
 
-    const recCode  = recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30
+    const recCode  = _isSfPhase ? null : (recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30
+      ? recoveredCode.slice(0, 8000) : null)
       ? recoveredCode.slice(0, 8000) : null
 
     const resolvedText = hasImage ? cleanedText : resolveAmbiguity(cleanedText, sid)
@@ -1075,13 +1133,16 @@ router.post('/process-text', async (req, res) => {
       ? 'Be direct. Avoid restating context already known.'
       : null
 
-    const systemHint = [miniCtxResult.miniContext, _codeOnlyMsg, _reflective, _tldr, conciseHint].filter(Boolean).join('\n') || null
+    const _sfInstruction = _isSfPhase ? `[smart_flow phase ${_sfPhase+1}/${sfMaxPhases}] Goal: ${_sfDef.goal}\n${_sfDef.instruction}` : null
+    const systemHint = _sfInstruction
+      ? [_sfInstruction, conciseHint].filter(Boolean).join('\n')
+      : [miniCtxResult.miniContext, _codeOnlyMsg, _reflective, _tldr, conciseHint].filter(Boolean).join('\n') || null
 
 
     const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
     const remaining     = Math.max(1000, 180000 - inputEstimate)
     const _fullFileRequest = editorMode && _wantsFullFile
-    const maxTokens     = _briefAnalysis ? 700 : _fullFileRequest ? Math.min(8000, Math.max(3000, Math.floor(remaining * 0.50))) : codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
+    const maxTokens     = _isSfPhase ? Math.min(8000, Math.max(4000, Math.floor(remaining * 0.50))) : _briefAnalysis ? 700 : _fullFileRequest ? Math.min(8000, Math.max(3000, Math.floor(remaining * 0.50))) : codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
 
     let payloadSize = 0
     try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large', detail: e.message }) }
@@ -1102,7 +1163,7 @@ router.post('/process-text', async (req, res) => {
       outputTokensTotal = claudeData?.usage?.output_tokens ?? 0
 
       const MAX_CONTINUATIONS = 2; let continuationCount = 0
-      while (reply && !_briefAnalysis && isTruncated(claudeData) && continuationCount < MAX_CONTINUATIONS) {
+      while (reply && !_briefAnalysis && !_isSfPhase && isTruncated(claudeData) && continuationCount < MAX_CONTINUATIONS) {
         continuationCount++
         if (outputTokensTotal >= 4096) break
         const contData = await continuationCall(cleanedText, reply, systemHint, 30000, model)
@@ -1136,7 +1197,7 @@ router.post('/process-text', async (req, res) => {
       } catch {}
     }
 
-    if (reply && needsRawCode) {
+    if (reply && (needsRawCode || _isSfPhase)) {
       const replyBlocks = detectCodeBlocks(reply)
       if (replyBlocks.length > 0 && replyBlocks[0].length > 200) {
         storeCodeContext(sid, replyBlocks, engine, tValue + 0.9)
@@ -1160,7 +1221,15 @@ router.post('/process-text', async (req, res) => {
 
     const vaultToSave = [...getEngine(sid).vault.values()].slice(-20).map(c => ({ id: c.id, vector: Array.from(c.vector ?? []), text: c.text?.slice(0, 200) ?? '', phase: c.phase ?? 'warmup', error: c.error ?? 0, theta: c.theta ?? 0, reinforcement: c.reinforcement ?? 0 }))
 
-    return res.json({ newSummary: newSummary ?? null,
+    const _sfConf    = _isSfPhase ? calcPhaseConfidence(reply, observerBox) : null
+    const _sfDecision = _sfConf !== null ? (_sfConf >= 0.70 ? 'continue' : _sfConf >= 0.50 ? 'review' : 'stop') : null
+    const smartFlowMeta = _isSfPhase ? {
+      phase: _sfPhase, goal: _sfDef?.goal ?? '', confidence: _sfConf,
+      decision: _sfDecision, stopReason: _sfDecision === 'stop' ? 'low_confidence' : null,
+      flowType: sfFlowType ?? chooseSmartFlow(fieldSignals ?? ''), maxPhases: sfMaxPhases
+    } : null
+
+    return res.json({ newSummary: newSummary ?? null, smartFlowMeta,
       reply, celfVault: vaultToSave, observer: observerBox,
       debug: { systemHint: systemHint ?? null, messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, editorMode, sessionActive, hasStoredContexts, matchedCodeId: effectiveMatch?.id ?? null, forcedEditor: forceEditor, recoveredCodeInjected: !!recCode, entityRef: entityRef?.primaryEntity?.name ?? null, entityCount: (entityRef?.entities ?? []).length, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, totalTokens: inputTokensTotal + outputTokensTotal, costUSD, maxTokens, routeConfidence: Math.round(routeConf * 1000) / 1000, vaultHit: vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null, model, inlineCode: codeBlocks.length > 0, payloadSize, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, styleTtlRemaining: styleStore.get(sid)?.ttl ?? 0, noiseRemoved, truncated: hasText && text.length > MAX_INPUT_CHARS, feedbackApplied, feedbackCoherence }
@@ -1197,6 +1266,7 @@ router.delete('/session/:id', (req, res) => {
   _entityTracker.delete(req.params.id)
   rawCodeStore.delete(req.params.id)
   codeSessionStore.delete(req.params.id)
+  resumeBootstrapped.delete(req.params.id)
   capsuleMemory.delete(req.params.id)
   anchorMemory.delete(req.params.id)
   sessionSummaryStore.delete(req.params.id)
