@@ -956,28 +956,47 @@ router.post('/process-text', async (req, res) => {
         ]
       }
       const phases = FLOWS[_ft] || FLOWS.fix_flow
-      const pTemplate = phases.map(p => `{"goal":"${p.goal}","summary":"brief summary of what was changed","confidence":0.85}`).join(',')
-      const pInstructions = phases.map((p,i) => `Phase ${i+1} - ${p.goal}: ${p.instruction}`).join('\n')
-      const prompt = `Apply ALL improvements below to the code. Return ONLY a valid JSON object — no markdown, no backticks, no explanation outside JSON.
-
-Format:
-{"phases":[${pTemplate}],"finalCode":"COMPLETE_MODIFIED_FILE_HERE"}
+      const pTemplate = phases.map(p => `{"goal":"${p.goal}","summary":"brief summary","confidence":0.85,"decision":"continue"}`).join(',')
+      const pInstructions = phases.map((p,i) => `${i+1}. ${p.goal}: ${p.instruction}`).join('\n')
+      const prompt = `Apply ALL improvements below to the code. Return your response in EXACTLY this format:
+---ANALYSIS---
+{"phases":[${pTemplate}]}
+---CODE---
+[complete modified file here, no markdown, no backticks]
 
 Instructions:
 ${pInstructions}
 
-Set confidence 0.65–0.95 per phase based on completeness. finalCode must be the full working file.
+Set confidence 0.70–0.95 per phase. The ---CODE--- section must be the complete working file.
 
 Code to improve:
 ${_rawCode.slice(0, 10000)}`
-      const sfRes  = await fetchClaude(buildClaudeBody('claude-haiku-4-5-20251001', 8000, 'Return ONLY valid JSON. No markdown. No extra text.', [{ role: 'user', content: prompt }]))
+      const sfRes  = await fetchClaude(buildClaudeBody('claude-haiku-4-5-20251001', 8000, 'Follow the format exactly: ---ANALYSIS--- then JSON then ---CODE--- then the complete file.', [{ role: 'user', content: prompt }]))
       const sfData = await sfRes.json()
       const rawTxt = sfData?.content?.[0]?.text?.trim() || ''
+
+      // parsing عبر delimiter — الكود لا يُغلَّف في JSON
       let parsed = null
-      try { parsed = JSON.parse(rawTxt) } catch {
-        const m = rawTxt.match(/\{[\s\S]*\}/)
-        if (m) try { parsed = JSON.parse(m[0]) } catch {}
+      const _delimCode = rawTxt.indexOf('---CODE---')
+      const _delimAnal = rawTxt.indexOf('---ANALYSIS---')
+      if (_delimCode > -1) {
+        const _analysisSection = _delimAnal > -1 ? rawTxt.slice(_delimAnal + 14, _delimCode) : rawTxt.slice(0, _delimCode)
+        const _codeSection     = rawTxt.slice(_delimCode + 10).trim()
+        try {
+          const _jsonMatch = _analysisSection.match(/\{[\s\S]*\}/)
+          const _phases = _jsonMatch ? JSON.parse(_jsonMatch[0]) : null
+          if (_phases?.phases && _codeSection.length > 100) {
+            parsed = { phases: _phases.phases, finalCode: _codeSection }
+          }
+        } catch {}
       }
+      // fallback: pure JSON
+      if (!parsed) {
+        try { const _j=JSON.parse(rawTxt); if(_j?.phases&&_j?.finalCode) parsed=_j } catch {
+          const m=rawTxt.match(/\{[\s\S]*\}/); if(m) try{ const _j=JSON.parse(m[0]); if(_j?.phases&&_j?.finalCode) parsed=_j }catch{}
+        }
+      }
+
       processingLock.delete(sid)
       if (!parsed?.phases || !parsed?.finalCode) return res.status(500).json({ error: 'parse_failed' })
 
