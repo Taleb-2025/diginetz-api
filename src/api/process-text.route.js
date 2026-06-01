@@ -710,9 +710,9 @@ function retrieveRelevantCode(questionVector, questionText, sid, currentMsgIndex
   let best = null, bestScore = 0
   const qLower = questionText.toLowerCase()
   for (const ctx of contexts) {
-    const codeSim    = questionVector ? engine_cosine(questionVector, ctx.codeVector)    : 0
-    const summarySim = questionVector ? engine_cosine(questionVector, ctx.summaryVector) : 0
-    const symbolBoost = ctx.symbols.filter(s => qLower.includes(s)).length * 0.12
+    const codeSim    = questionVector && ctx.codeVector    ? engine_cosine(questionVector, ctx.codeVector)    : 0
+    const summarySim = questionVector && ctx.summaryVector ? engine_cosine(questionVector, ctx.summaryVector) : 0
+    const symbolBoost = (ctx.symbols ?? []).filter(s => qLower.includes(s)).length * 0.12
     const msgAge      = Math.max(0, currentMsgIndex - ctx.msgIndex)
     const freshness   = Math.max(0, 1 - msgAge / 20)
     const rawScore    = codeSim * 0.55 + summarySim * 0.30 + Math.min(0.30, symbolBoost) * 0.15
@@ -916,13 +916,22 @@ router.post('/process-text', async (req, res) => {
     // ═══ sfSingleCall: معالجة واحدة للمراحل الثلاث ═══
     if (sfSingleCall) {
       const _rawCode = sfPrevCode || recoveredCode || null
-      if (!_rawCode) { processingLock.delete(sid); return res.status(400).json({ error: 'missing_code' }) }
+      if (!_rawCode) { return res.status(400).json({ error: 'missing_code' }) }
       const _ft = sfFlowType || 'fix_flow'
+
+      // ════ حماية الحجم: > 14000 حرف → يرفض sfSingleCall الكامل ════
+      const SMART_FLOW_INPUT_LIMIT = 14000
+      if (_rawCode.length > SMART_FLOW_INPUT_LIMIT && _ft !== 'targeted_fix') {
+        return res.status(413).json({
+          error: 'code_too_large_for_smart_flow',
+          message: 'الكود كبير جداً. استخدم Targeted Fix وحدد المشكلة المحددة.'
+        })
+      }
 
       // ════ TARGETED FIX (قاعدة الحماية 3: لا smart flow كامل) ════
       if (_ft === 'targeted_fix' && Array.isArray(sfTargetedIssues) && sfTargetedIssues.length > 0) {
         const _issuesList = sfTargetedIssues.join('\n')
-        const _tPrompt = `Fix ONLY these specific issues in the code below. Do NOT change anything else. Return ONLY the complete fixed file.\n\nIssues to fix:\n${_issuesList}\n\nCode:\n${_rawCode.slice(0,10000)}`
+        const _tPrompt = `Fix ONLY these specific issues in the code below. Do NOT change anything else. Return ONLY the complete fixed file.\n\nIssues to fix:\n${_issuesList}\n\nCode:\n${_rawCode.slice(0,14000)}`
         let tfCode = ''
         try {
           const _tfRes  = await fetchClaude(buildClaudeBody('claude-haiku-4-5-20251001', 7000, 'Return ONLY the complete modified file. No explanation.', [{ role:'user', content:_tPrompt }]))
@@ -930,13 +939,8 @@ router.post('/process-text', async (req, res) => {
           tfCode = _tfData?.content?.[0]?.text?.trim() || ''
         } catch {}
         if (tfCode.length > 100) {
-          try {
-            const _sfContexts = rawCodeStore.get(sid) || []
-            _sfContexts.push({ raw:tfCode, hash:tfCode.slice(0,32), lang:'html', vector:[], storedAt:Date.now(), msgIndex:_sfContexts.length })
-            rawCodeStore.set(sid, _sfContexts)
-          } catch {}
+          try { storeCodeContext(sid, [tfCode], getEngine(sid), Date.now()) } catch {}
         }
-        processingLock.delete(sid)
         return res.json({ sfFinalCode: tfCode || null, sfTargetedFix: true, isSingleCall: true })
       }
 
@@ -970,7 +974,7 @@ ${pInstructions}
 Set confidence 0.70–0.95 per phase. The ---CODE--- section must be the complete working file.
 
 Code to improve:
-${_rawCode.slice(0, 10000)}`
+${_rawCode.slice(0, 14000)}`
       const sfRes  = await fetchClaude(buildClaudeBody('claude-haiku-4-5-20251001', 8000, 'Follow the format exactly: ---ANALYSIS--- then JSON then ---CODE--- then the complete file.', [{ role: 'user', content: prompt }]))
       const sfData = await sfRes.json()
       const rawTxt = sfData?.content?.[0]?.text?.trim() || ''
@@ -997,7 +1001,6 @@ ${_rawCode.slice(0, 10000)}`
         }
       }
 
-      processingLock.delete(sid)
       if (!parsed?.phases || !parsed?.finalCode) return res.status(500).json({ error: 'parse_failed' })
 
       // ════ TRUNCATION DETECTION + COMPLETION ════
@@ -1034,13 +1037,7 @@ ${_rawCode.slice(0, 10000)}`
 
       // ① حفظ في rawCodeStore فقط إذا verdict = ok (قاعدة الحماية 2)
       if (sfVerify.verdict === 'ok') {
-        try {
-          const _sfEngine = getEngine(sid)
-          const _sfVec = _sfEngine ? Array.from(_sfEngine.semanticVector(parsed.finalCode.slice(0,2000))) : []
-          const _sfContexts = rawCodeStore.get(sid) || []
-          _sfContexts.push({ raw: parsed.finalCode, hash: parsed.finalCode.slice(0,32), lang:'html', vector:_sfVec, storedAt:Date.now(), msgIndex:_sfContexts.length })
-          rawCodeStore.set(sid, _sfContexts)
-        } catch {}
+        try { storeCodeContext(sid, [parsed.finalCode], getEngine(sid), Date.now()) } catch {}
       }
 
       return res.json({ sfPhases: parsed.phases, sfFinalCode: parsed.finalCode, sfVerify, isSingleCall: true })
@@ -1256,9 +1253,9 @@ ${_rawCode.slice(0, 10000)}`
       historyMessages = buildHistoryLayer(filteredHistory, effectiveContinuity, sid, false, currentDomain)
     }
 
-    const recCode  = _isSfPhase ? null : (recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30
-      ? recoveredCode.slice(0, 8000) : null)
-      ? recoveredCode.slice(0, 8000) : null
+    const RECOVERED_CODE_LIMIT = 14000
+    const recCode  = !_isSfPhase && typeof recoveredCode === 'string' && recoveredCode.length > 30
+      ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT) : null
 
     const resolvedText = hasImage ? cleanedText : resolveAmbiguity(cleanedText, sid)
 
