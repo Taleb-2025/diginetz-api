@@ -490,7 +490,8 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity,
   const hasFollowup   = (continuity > 0.42 || (prevItem?.score ?? 0) > 0.35) && (prevItem?.score ?? 0) > 0.26
 
   const contextPath  = domainStable ? _buildContextPath(detected, cleanedText) : null
-  const intentSignal = _buildIntentSignal(cleanedText, exec, intent)
+  const _questionOnly  = cleanedText.replace(/```[\s\S]*?```/g,'').replace(/<[^>]{1,200}>/g,'').trim().slice(0,300)
+  const intentSignal = _buildIntentSignal(_questionOnly || cleanedText, exec, intent)
 
   const weighted = []
   const add = (sig, w) => weighted.push({ text: sig, w })
