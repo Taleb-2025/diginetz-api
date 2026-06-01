@@ -1017,7 +1017,7 @@ router.post('/process-text', async (req, res) => {
       : null
 
     const effectiveMatch   = matchedCode ?? (forceEditor
-      ? (rawCodeStore.get(sid) ?? [])[0] ?? null
+      ? (rawCodeStore.get(sid) ?? []).at(-1) ?? null
       : null)
 
     const needsRawCode     = !!effectiveMatch
