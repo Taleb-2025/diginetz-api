@@ -569,7 +569,7 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   if (editorMode && wantsFullFile) parts.push('[output: full_file] Return the complete modified file only. No explanations before or after.')
   const _hasAnalyze = (fieldSignals||'').includes('@intent.analyze')
   const _hasDepth   = (fieldSignals||'').includes('>>depth')
-  if (_hasAnalyze && !_hasDepth && !wantsFullFile) {
+  if (_hasAnalyze && !_hasDepth && !wantsFullFile && !editorMode) {
     const _hasArabic = /[\u0600-\u06FF]/.test(builtSystemHint || '')
     const _lang = _hasArabic ? 'Respond in Arabic.' : 'Respond in the same language as the user.'
     parts.push(`[task: analysis] ${_lang} Provide a brief code analysis with:\n1. What this code does (1-2 sentences).\n2. Strengths (2-3 brief points).\n3. Critical issues (3 max): for each — issue name, why it is a problem, suggested fix.\nPlain text only. No code blocks. Concise.`)
@@ -1011,12 +1011,21 @@ ${_rawCode.slice(0, 14000)}`
       }
       if (_isTruncated(parsed.finalCode)) {
         try {
-          const _tail = parsed.finalCode.slice(-600)
-          const _compPrompt = `The following code was truncated. Continue from exactly where it ends. Return ONLY the continuation, no repetition of what came before.\n\nTruncated ending:\n...${_tail}`
-          const _cRes  = await fetchClaude(buildClaudeBody('claude-haiku-4-5-20251001', 4000, 'Return ONLY the code continuation. Start immediately after the truncation point.', [{ role:'user', content:_compPrompt }]))
+          const _tail = parsed.finalCode.slice(-1500)
+          const _compPrompt = `You were generating a complete modified HTML file. The output was cut off mid-code.\n\nThe file ended at:\n...${_tail}\n\nContinue EXACTLY from where it was cut. Do NOT repeat any previous code.\nThe completed file must end with: </script>\n</body>\n</html>`
+          const _cRes  = await fetchClaude(buildClaudeBody('claude-haiku-4-5-20251001', 5000, 'Continue the truncated code exactly. End with </script></body></html>.', [{ role:'user', content:_compPrompt }]))
           const _cData = await _cRes.json()
           const _cont  = _cData?.content?.[0]?.text?.trim() || ''
-          if (_cont.length > 20) parsed.finalCode = parsed.finalCode + '\n' + _cont
+          if (_cont.length > 20) {
+            parsed.finalCode = parsed.finalCode + '\n' + _cont
+            // تحقق إذا ما زال مقطوعاً بعد الإكمال
+            if (_isTruncated(parsed.finalCode)) {
+              // أضف إغلاق صريح إذا لم يُغلَق
+              if (!parsed.finalCode.trim().endsWith('</html>')) {
+                parsed.finalCode += '\n</script>\n</body>\n</html>'
+              }
+            }
+          }
         } catch {}
       }
 
@@ -1220,7 +1229,7 @@ ${_rawCode.slice(0, 14000)}`
     const _prevItem     = routeItems[0] ?? null
     const _routedVault  = (editorMode || fieldShifted) ? null : vaultHit
     const _wantsFullFile   = /(ملف|الكود|html|الصفحة).*(كامل|نهائي)|اعطني الكود الكامل|أعطني الكود الكامل|أعد كتابة الملف|complete file|full html/i.test(cleanedText)
-    const _briefAnalysis = !_isSfPhase && (fieldSignals||'').includes('@intent.analyze') && !(fieldSignals||'').includes('>>depth') && !_wantsFullFile
+    const _briefAnalysis = !_isSfPhase && !editorMode && (fieldSignals||'').includes('@intent.analyze') && !(fieldSignals||'').includes('>>depth') && !_wantsFullFile
     const conciseHint = _briefAnalysis ? 'Be concise and structured. Plain text only. No code blocks.' : codeBlocks.length > 0 ? 'Be thorough with code examples.' : _inputWords <= 5 ? 'Be concise and complete.' + _noMarkdown : _inputWords <= 15 ? 'Answer fully but without repetition.' + _noMarkdown : 'Be clear and complete.' + _noMarkdown
     const filteredHistory = filterStyleInstructions(history)
     const _cleanedBuiltHint = (built.systemHint ?? '').replace(/\[previously\][^\n]*/g, '').replace(/\n{2,}/g, '\n').trim() || null
