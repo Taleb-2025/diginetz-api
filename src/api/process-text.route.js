@@ -569,7 +569,7 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   if (editorMode && wantsFullFile) parts.push('[output: full_file] Return the complete modified file only. No explanations before or after.')
   const _hasAnalyze = (fieldSignals||'').includes('@intent.analyze')
   const _hasDepth   = (fieldSignals||'').includes('>>depth')
-  if (_hasAnalyze && !_hasDepth && !wantsFullFile) parts.push('[task: triage] Flag only the 3 blocking issues. Plain text. No fixes.')
+  if (_hasAnalyze && !_hasDepth && !wantsFullFile) parts.push('[task: triage] List the 3 most critical issues. For each: one line for the issue name, one line explaining why it is a problem, one line suggesting the fix. No code blocks. Plain text only.')
   if (fieldSignals) parts.push(fieldSignals)
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
