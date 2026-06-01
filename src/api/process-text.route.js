@@ -1143,7 +1143,7 @@ router.post('/process-text', async (req, res) => {
     const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
     const remaining     = Math.max(1000, 180000 - inputEstimate)
     const _fullFileRequest = editorMode && _wantsFullFile
-    const maxTokens     = _isSfPhase ? Math.min(8000, Math.max(4000, Math.floor(remaining * 0.50))) : _briefAnalysis ? 700 : _fullFileRequest ? Math.min(8000, Math.max(3000, Math.floor(remaining * 0.50))) : codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
+    const maxTokens     = _isSfPhase ? ([5000,6000,7000][_sfPhase] ?? 7000) : _briefAnalysis ? 700 : _fullFileRequest ? Math.min(8000, Math.max(3000, Math.floor(remaining * 0.50))) : codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
 
     let payloadSize = 0
     try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large', detail: e.message }) }
