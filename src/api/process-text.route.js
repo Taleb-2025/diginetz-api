@@ -954,6 +954,16 @@ ${_rawCode.slice(0, 10000)}`
       }
       processingLock.delete(sid)
       if (!parsed?.phases || !parsed?.finalCode) return res.status(500).json({ error: 'parse_failed' })
+
+      // تخزين الكود المعدّل في rawCodeStore للجلسة
+      try {
+        const _sfEngine = getEngine(sid)
+        const _sfVec = _sfEngine ? Array.from(_sfEngine.semanticVector(parsed.finalCode.slice(0,2000))) : []
+        const _sfContexts = rawCodeStore.get(sid) || []
+        _sfContexts.push({ raw: parsed.finalCode, hash: parsed.finalCode.slice(0,32), lang:'html', vector:_sfVec, storedAt:Date.now(), msgIndex:_sfContexts.length })
+        rawCodeStore.set(sid, _sfContexts)
+      } catch {}
+
       return res.json({ sfPhases: parsed.phases, sfFinalCode: parsed.finalCode, isSingleCall: true })
     }
     // ═══════════════════════════════════════════════════
