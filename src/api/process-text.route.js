@@ -895,7 +895,7 @@ router.get('/process-text', (_req, res) => {
 })
 
 router.post('/process-text', async (req, res) => {
-  const { text = '', sessionId, history = [], image = null, imageMimeType = 'image/jpeg', savedCode = null, capsuleContext = null, recoveredCode = null, sessionSummary = null, sfPhase = null, sfFlowType = null, sfPrevCode = null, sfMaxPhases = 3 } = req.body
+  const { text = '', sessionId, history = [], image = null, imageMimeType = 'image/jpeg', savedCode = null, capsuleContext = null, recoveredCode = null, sessionSummary = null, sfPhase = null, sfFlowType = null, sfPrevCode = null, sfMaxPhases = 3, sfSingleCall = false } = req.body
 
   const hasText  = typeof text  === 'string' && text.trim().length > 0
   const hasImage = typeof image === 'string' && image.length > 0
@@ -909,6 +909,55 @@ router.post('/process-text', async (req, res) => {
   processingLock.add(sid)
 
   try {
+    // ═══ sfSingleCall: معالجة واحدة للمراحل الثلاث ═══
+    if (sfSingleCall) {
+      const _rawCode = sfPrevCode || recoveredCode || null
+      if (!_rawCode) { processingLock.delete(sid); return res.status(400).json({ error: 'missing_code' }) }
+      const _ft = sfFlowType || 'fix_flow'
+      const FLOWS = {
+        fix_flow: [
+          { goal: 'إصلاح الثغرات الأمنية',      instruction: 'Fix XSS: replace innerHTML with createElement/textContent. Sanitize all user inputs.' },
+          { goal: 'إضافة التحقق من المدخلات',    instruction: 'Add input validation: reject negative values, empty required fields, invalid types.' },
+          { goal: 'إضافة حفظ البيانات',          instruction: 'Add localStorage save/load with try/catch error handling and success feedback.' }
+        ],
+        refactor_flow: [
+          { goal: 'تحسين البنية',  instruction: 'Refactor code structure for clarity, separation of concerns, and maintainability.' },
+          { goal: 'تحسين الأداء', instruction: 'Optimize performance: reduce redundant DOM queries, debounce events, cache selectors.' }
+        ],
+        build_flow: [
+          { goal: 'بناء الهيكل الأساسي', instruction: 'Build the core HTML/CSS structure with semantic markup and accessible layout.' },
+          { goal: 'إضافة الوظائف',       instruction: 'Add main JavaScript functionality with event handling and data management.' }
+        ]
+      }
+      const phases = FLOWS[_ft] || FLOWS.fix_flow
+      const pTemplate = phases.map(p => `{"goal":"${p.goal}","summary":"brief summary of what was changed","confidence":0.85}`).join(',')
+      const pInstructions = phases.map((p,i) => `Phase ${i+1} - ${p.goal}: ${p.instruction}`).join('\n')
+      const prompt = `Apply ALL improvements below to the code. Return ONLY a valid JSON object — no markdown, no backticks, no explanation outside JSON.
+
+Format:
+{"phases":[${pTemplate}],"finalCode":"COMPLETE_MODIFIED_FILE_HERE"}
+
+Instructions:
+${pInstructions}
+
+Set confidence 0.65–0.95 per phase based on completeness. finalCode must be the full working file.
+
+Code to improve:
+${_rawCode.slice(0, 10000)}`
+      const sfRes  = await fetchClaude(buildClaudeBody('claude-haiku-4-5-20251001', 8000, 'Return ONLY valid JSON. No markdown. No extra text.', [{ role: 'user', content: prompt }]))
+      const sfData = await sfRes.json()
+      const rawTxt = sfData?.content?.[0]?.text?.trim() || ''
+      let parsed = null
+      try { parsed = JSON.parse(rawTxt) } catch {
+        const m = rawTxt.match(/\{[\s\S]*\}/)
+        if (m) try { parsed = JSON.parse(m[0]) } catch {}
+      }
+      processingLock.delete(sid)
+      if (!parsed?.phases || !parsed?.finalCode) return res.status(500).json({ error: 'parse_failed' })
+      return res.json({ sfPhases: parsed.phases, sfFinalCode: parsed.finalCode, isSingleCall: true })
+    }
+    // ═══════════════════════════════════════════════════
+
     const rawText     = hasText && text.length > MAX_INPUT_CHARS ? text.slice(0, MAX_INPUT_CHARS) + '\n\n[... truncated ...]' : text
     const cleanedText  = hasText ? cleanInput(rawText) : rawText
     const noiseRemoved = hasText && cleanedText !== rawText
