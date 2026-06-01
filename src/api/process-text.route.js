@@ -895,7 +895,7 @@ router.get('/process-text', (_req, res) => {
 })
 
 router.post('/process-text', async (req, res) => {
-  const { text = '', sessionId, history = [], image = null, imageMimeType = 'image/jpeg', savedCode = null, capsuleContext = null, recoveredCode = null, sessionSummary = null, sfPhase = null, sfFlowType = null, sfPrevCode = null, sfMaxPhases = 3, sfSingleCall = false } = req.body
+  const { text = '', sessionId, history = [], image = null, imageMimeType = 'image/jpeg', savedCode = null, capsuleContext = null, recoveredCode = null, sessionSummary = null, sfPhase = null, sfFlowType = null, sfPrevCode = null, sfMaxPhases = 3, sfSingleCall = false, sfTargetedIssues = [] } = req.body
 
   const hasText  = typeof text  === 'string' && text.trim().length > 0
   const hasImage = typeof image === 'string' && image.length > 0
@@ -914,6 +914,28 @@ router.post('/process-text', async (req, res) => {
       const _rawCode = sfPrevCode || recoveredCode || null
       if (!_rawCode) { processingLock.delete(sid); return res.status(400).json({ error: 'missing_code' }) }
       const _ft = sfFlowType || 'fix_flow'
+
+      // ════ TARGETED FIX (قاعدة الحماية 3: لا smart flow كامل) ════
+      if (_ft === 'targeted_fix' && Array.isArray(sfTargetedIssues) && sfTargetedIssues.length > 0) {
+        const _issuesList = sfTargetedIssues.join('\n')
+        const _tPrompt = `Fix ONLY these specific issues in the code below. Do NOT change anything else. Return ONLY the complete fixed file.\n\nIssues to fix:\n${_issuesList}\n\nCode:\n${_rawCode.slice(0,10000)}`
+        let tfCode = ''
+        try {
+          const _tfRes  = await fetchClaude(buildClaudeBody('claude-haiku-4-5-20251001', 7000, 'Return ONLY the complete modified file. No explanation.', [{ role:'user', content:_tPrompt }]))
+          const _tfData = await _tfRes.json()
+          tfCode = _tfData?.content?.[0]?.text?.trim() || ''
+        } catch {}
+        if (tfCode.length > 100) {
+          try {
+            const _sfContexts = rawCodeStore.get(sid) || []
+            _sfContexts.push({ raw:tfCode, hash:tfCode.slice(0,32), lang:'html', vector:[], storedAt:Date.now(), msgIndex:_sfContexts.length })
+            rawCodeStore.set(sid, _sfContexts)
+          } catch {}
+        }
+        processingLock.delete(sid)
+        return res.json({ sfFinalCode: tfCode || null, sfTargetedFix: true, isSingleCall: true })
+      }
+
       const FLOWS = {
         fix_flow: [
           { goal: 'إصلاح الثغرات الأمنية',      instruction: 'Fix XSS: replace innerHTML with createElement/textContent. Sanitize all user inputs.' },
@@ -955,16 +977,33 @@ ${_rawCode.slice(0, 10000)}`
       processingLock.delete(sid)
       if (!parsed?.phases || !parsed?.finalCode) return res.status(500).json({ error: 'parse_failed' })
 
-      // تخزين الكود المعدّل في rawCodeStore للجلسة
+      // ════ REVIEW PASS ════ معزول تماماً عن CELF/capsules/memory
+      const _goals = parsed.phases.map((p,i) => `${i+1}. ${p.goal||''}`)
+      const _goalsText = _goals.join('\n')
+      const _verifyPrompt = `You are verifying the final code after an automated fix flow.\nOriginal issues to verify:\n${_goalsText}\nCheck only:\n1. Are the original critical issues fixed?\n2. Is there any syntax/runtime-breaking error?\n3. Did the fix introduce a new major issue?\nReturn JSON only:\n{"verdict":"ok"|"minor_fix"|"major_issue"|"low_confidence","remaining":["..."],"confidence":0.0,"reason":"short reason"}`
+      let sfVerify = { verdict:'low_confidence', remaining:[], confidence:0.5, reason:'verification unavailable' }
       try {
-        const _sfEngine = getEngine(sid)
-        const _sfVec = _sfEngine ? Array.from(_sfEngine.semanticVector(parsed.finalCode.slice(0,2000))) : []
-        const _sfContexts = rawCodeStore.get(sid) || []
-        _sfContexts.push({ raw: parsed.finalCode, hash: parsed.finalCode.slice(0,32), lang:'html', vector:_sfVec, storedAt:Date.now(), msgIndex:_sfContexts.length })
-        rawCodeStore.set(sid, _sfContexts)
+        const _vRes  = await fetchClaude(buildClaudeBody('claude-haiku-4-5-20251001', 800, 'Return ONLY valid JSON. No markdown. No preamble.', [{ role:'user', content: _verifyPrompt + '\n\nCode to verify (first 6000 chars):\n' + parsed.finalCode.slice(0,6000) }]))
+        const _vData = await _vRes.json()
+        const _vText = _vData?.content?.[0]?.text?.trim() || ''
+        try { sfVerify = JSON.parse(_vText) } catch {
+          const _m = _vText.match(/\{[\s\S]*\}/)
+          if (_m) try { sfVerify = JSON.parse(_m[0]) } catch {}
+        }
       } catch {}
 
-      return res.json({ sfPhases: parsed.phases, sfFinalCode: parsed.finalCode, isSingleCall: true })
+      // ① حفظ في rawCodeStore فقط إذا verdict = ok (قاعدة الحماية 2)
+      if (sfVerify.verdict === 'ok') {
+        try {
+          const _sfEngine = getEngine(sid)
+          const _sfVec = _sfEngine ? Array.from(_sfEngine.semanticVector(parsed.finalCode.slice(0,2000))) : []
+          const _sfContexts = rawCodeStore.get(sid) || []
+          _sfContexts.push({ raw: parsed.finalCode, hash: parsed.finalCode.slice(0,32), lang:'html', vector:_sfVec, storedAt:Date.now(), msgIndex:_sfContexts.length })
+          rawCodeStore.set(sid, _sfContexts)
+        } catch {}
+      }
+
+      return res.json({ sfPhases: parsed.phases, sfFinalCode: parsed.finalCode, sfVerify, isSingleCall: true })
     }
     // ═══════════════════════════════════════════════════
 
