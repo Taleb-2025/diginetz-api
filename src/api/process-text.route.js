@@ -569,7 +569,11 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   if (editorMode && wantsFullFile) parts.push('[output: full_file] Return the complete modified file only. No explanations before or after.')
   const _hasAnalyze = (fieldSignals||'').includes('@intent.analyze')
   const _hasDepth   = (fieldSignals||'').includes('>>depth')
-  if (_hasAnalyze && !_hasDepth && !wantsFullFile) parts.push('[task: triage] List the 3 most critical issues. For each: one line for the issue name, one line explaining why it is a problem, one line suggesting the fix. No code blocks. Plain text only.')
+  if (_hasAnalyze && !_hasDepth && !wantsFullFile) {
+    const _hasArabic = /[\u0600-\u06FF]/.test(builtSystemHint || '')
+    const _lang = _hasArabic ? 'Respond in Arabic.' : 'Respond in the same language as the user.'
+    parts.push(`[task: analysis] ${_lang} Provide a brief code analysis with:\n1. What this code does (1-2 sentences).\n2. Strengths (2-3 brief points).\n3. Critical issues (3 max): for each — issue name, why it is a problem, suggested fix.\nPlain text only. No code blocks. Concise.`)
+  }
   if (fieldSignals) parts.push(fieldSignals)
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
@@ -977,6 +981,23 @@ ${_rawCode.slice(0, 10000)}`
       processingLock.delete(sid)
       if (!parsed?.phases || !parsed?.finalCode) return res.status(500).json({ error: 'parse_failed' })
 
+      // ════ TRUNCATION DETECTION + COMPLETION ════
+      const _isTruncated = code => {
+        const t = code.trim()
+        if (/<!DOCTYPE|<html/i.test(t)) return !/<\/html>\s*$/i.test(t)
+        return !(/[}>;]\s*$/.test(t))
+      }
+      if (_isTruncated(parsed.finalCode)) {
+        try {
+          const _tail = parsed.finalCode.slice(-600)
+          const _compPrompt = `The following code was truncated. Continue from exactly where it ends. Return ONLY the continuation, no repetition of what came before.\n\nTruncated ending:\n...${_tail}`
+          const _cRes  = await fetchClaude(buildClaudeBody('claude-haiku-4-5-20251001', 4000, 'Return ONLY the code continuation. Start immediately after the truncation point.', [{ role:'user', content:_compPrompt }]))
+          const _cData = await _cRes.json()
+          const _cont  = _cData?.content?.[0]?.text?.trim() || ''
+          if (_cont.length > 20) parsed.finalCode = parsed.finalCode + '\n' + _cont
+        } catch {}
+      }
+
       // ════ REVIEW PASS ════ معزول تماماً عن CELF/capsules/memory
       const _goals = parsed.phases.map((p,i) => `${i+1}. ${p.goal||''}`)
       const _goalsText = _goals.join('\n')
@@ -1184,7 +1205,7 @@ ${_rawCode.slice(0, 10000)}`
     const _routedVault  = (editorMode || fieldShifted) ? null : vaultHit
     const _wantsFullFile   = /(ملف|الكود|html|الصفحة).*(كامل|نهائي)|اعطني الكود الكامل|أعطني الكود الكامل|أعد كتابة الملف|complete file|full html/i.test(cleanedText)
     const _briefAnalysis = !_isSfPhase && (fieldSignals||'').includes('@intent.analyze') && !(fieldSignals||'').includes('>>depth') && !_wantsFullFile
-    const conciseHint = _briefAnalysis ? 'Be brief. Plain text only. Do not provide code examples.' : codeBlocks.length > 0 ? 'Be thorough with code examples.' : _inputWords <= 5 ? 'Be concise and complete.' + _noMarkdown : _inputWords <= 15 ? 'Answer fully but without repetition.' + _noMarkdown : 'Be clear and complete.' + _noMarkdown
+    const conciseHint = _briefAnalysis ? 'Be concise and structured. Plain text only. No code blocks.' : codeBlocks.length > 0 ? 'Be thorough with code examples.' : _inputWords <= 5 ? 'Be concise and complete.' + _noMarkdown : _inputWords <= 15 ? 'Answer fully but without repetition.' + _noMarkdown : 'Be clear and complete.' + _noMarkdown
     const filteredHistory = filterStyleInstructions(history)
     const _cleanedBuiltHint = (built.systemHint ?? '').replace(/\[previously\][^\n]*/g, '').replace(/\n{2,}/g, '\n').trim() || null
 
@@ -1241,7 +1262,7 @@ ${_rawCode.slice(0, 10000)}`
     const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
     const remaining     = Math.max(1000, 180000 - inputEstimate)
     const _fullFileRequest = editorMode && _wantsFullFile
-    const maxTokens     = _isSfPhase ? ([5000,6000,7000][_sfPhase] ?? 7000) : _briefAnalysis ? 700 : _fullFileRequest ? Math.min(8000, Math.max(3000, Math.floor(remaining * 0.50))) : codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
+    const maxTokens     = _isSfPhase ? ([5000,6000,7000][_sfPhase] ?? 7000) : _briefAnalysis ? 1500 : _fullFileRequest ? Math.min(8000, Math.max(3000, Math.floor(remaining * 0.50))) : codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
 
     let payloadSize = 0
     try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large', detail: e.message }) }
