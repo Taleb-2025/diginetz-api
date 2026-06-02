@@ -635,6 +635,35 @@ function buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, quest
   return s
 }
 
+function buildAnalysisContract(fieldSignals, userIsArabic, opts) {
+  const fs  = String(fieldSignals || '')
+  const wff = opts?.wantsFullFile
+  if (wff) return null
+  const hasAnalyze  = fs.includes('@intent.analyze')
+  const hasExplain  = fs.includes('@intent.explain')
+  const hasFix      = fs.includes('@intent.fix') || fs.includes('@intent.refactor') || fs.includes('@intent.build')
+  const surface     = fs.includes('@depth.surface')
+  const technical   = fs.includes('@depth.technical')
+  const deepIntent  = fs.includes('>>depth')
+  if (deepIntent) return null
+  if (!hasAnalyze && !hasExplain && !hasFix && !surface && !technical) return null
+  const lang = userIsArabic ? '[lang: Arabic]' : '[lang: same_as_user]'
+  if (hasFix) return [lang,'[task: code_modify][depth: technical][audience: developer]','[goal: safe focused change]','[avoid: unrelated redesign]','[shape: change→reason→code]'].join('\n')
+  if (technical)  return [lang,'[task: code_audit][depth: technical][audience: developer]','[goal: security, correctness, performance]','[avoid: broad explanation]','[shape: issue→impact→fix]'].join('\n')
+  if (hasExplain) return [lang,'[task: explain_code][depth: surface][audience: nontechnical user]','[goal: explain visible behavior and limits]','[avoid: function walkthrough]','[shape: what_it_does→how_it_works→practical_note]'].join('\n')
+  return [lang,'[task: code_analysis][depth: surface][audience: practical user]','[goal: usefulness, risks, next action]','[avoid: function walkthrough]','[shape: purpose→value→risks→decision]'].join('\n')
+}
+
+function computeHybridTokens({ surface, technical, modify, codeSize, inputWords, continuity, remaining, ceiling }) {
+  const base = modify ? 2000 : technical ? 1600 : surface ? 900 : 1200
+  const codeMod  = codeSize < 2000 ? 0.8 : codeSize > 6000 ? 1.2 : 1.0
+  const wordMod  = inputWords <= 5 ? 0.7 : inputWords > 15 ? 1.15 : 1.0
+  const contMod  = continuity > 0.7 ? 0.9 : continuity < 0.3 ? 1.1 : 1.0
+  const raw      = Math.round(base * codeMod * wordMod * contMod)
+  const cap      = ceiling ?? Math.min(8000, Math.max(1000, Math.floor(remaining * 0.4)))
+  return Math.min(cap, Math.max(800, raw))
+}
+
 function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem, lastTopicText, sessionSummary, filteredHistory, editorMode, wantsFullFile, userIsArabic = false }) {
   const parts = []
   if (sessionSummary?.text) {
@@ -645,22 +674,8 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   }
   if (sessionSummary?.text && !wantsFullFile) parts.push('[session resumed]')
   if (editorMode && wantsFullFile) parts.push('[output: full_file] Return the complete modified file only. No explanations before or after.')
-  const _hasAnalyze      = (fieldSignals||'').includes('@intent.analyze')
-  const _hasExplain      = (fieldSignals||'').includes('@intent.explain')
-  const _hasDeepIntent   = (fieldSignals||'').includes('>>depth')
-  const _surfaceDepth    = (fieldSignals||'').includes('@depth.surface')
-  const _technicalDepth  = (fieldSignals||'').includes('@depth.technical')
-  const _hasAnalysisMode = _hasAnalyze || _hasExplain || _surfaceDepth || _technicalDepth
-  if (_hasAnalysisMode && !_hasDeepIntent && !wantsFullFile && !editorMode) {
-    const _hasArabic = userIsArabic
-    const _lang = _hasArabic ? 'Respond in Arabic.' : 'Respond in the same language as the user.'
-    const roleHint = _technicalDepth
-      ? `[role: technical reviewer]\n[audience: developer]\n[goal: audit security, correctness, performance, maintainability, and give actionable fixes]\n[response shape: purpose → critical issues → why they matter → concrete fixes]`
-      : _surfaceDepth
-        ? `[role: friendly analyst]\n[audience: someone who uses this, not necessarily the person who built it]\n[goal: explain practical value, visible behavior, risks in plain language, and clear next action]\n[response shape: what it does → who it helps → main risks → should the user use/fix it?]`
-        : `[role: product-aware code analyst]\n[audience: practical decision maker]\n[goal: explain impact, risk, and next action without unnecessary internals]`
-    parts.push(`[task: analysis]\n${_lang}\n${roleHint}`)
-  }
+  const contract = buildAnalysisContract(fieldSignals, userIsArabic, { wantsFullFile })
+  if (contract) parts.push(contract)
   if (userIsArabic) parts.push('Respond in Arabic.')
   if (fieldSignals) parts.push(fieldSignals)
   const stateHint = buildStateHint(phase, continuity)
@@ -1308,17 +1323,14 @@ ${_rawCode.slice(0, 14000)}`
     const _routedVault  = (editorMode || fieldShifted) ? null : vaultHit
     const _wantsFullFile   = /(ملف|الكود|html|الصفحة).*(كامل|نهائي)|اعطني الكود الكامل|أعطني الكود الكامل|أعد كتابة الملف|complete file|full html/i.test(cleanedText)
     const _hasAnalysisSignal  = (fieldSignals||'').includes('@intent.analyze') || (fieldSignals||'').includes('@intent.explain') || (fieldSignals||'').includes('@depth.surface') || (fieldSignals||'').includes('@depth.technical')
-    const _briefAnalysis     = !_isSfPhase && !editorMode && _hasAnalysisSignal && !(fieldSignals||'').includes('>>depth') && !_wantsFullFile
+    const _questionOnlyText   = cleanedText.replace(/```[\s\S]*?```/g,'').trim().slice(0,400)
+    const _hasModifyIntent    = /اصلح|أصلح|عدل|عدّل|حسّن|اكتب|أعد كتابة|fix|edit|refactor|rewrite|modify|update/i.test(_questionOnlyText)
+    const _analysisOnly       = _hasAnalysisSignal && !_hasModifyIntent && !_wantsFullFile
+    const _briefAnalysis      = !_isSfPhase && _analysisOnly && !(fieldSignals||'').includes('>>depth')
     const _surfaceDepthHint   = (fieldSignals||'').includes('@depth.surface')
     const _technicalDepthHint = (fieldSignals||'').includes('@depth.technical')
-    const _hasArabicHint      = /[\u0600-\u06FF]/.test(cleanedText || '')
-    const roleBasedHint = _technicalDepthHint
-      ? 'Explain as a senior developer reviewing code. Focus on security, correctness, performance, and concrete fixes. Short code snippets allowed only to clarify a fix.'
-      : _surfaceDepthHint
-        ? (_hasArabicHint ? 'اشرح كمطوّر يشرح لمدير منتج. ركّز على الغرض، قيمة المستخدم، المخاطر الواضحة، وأفضل قرار قابل للتنفيذ.' : 'Explain as a developer talking to a product manager. Focus on purpose, user value, visible risks, and the best next decision.')
-        : 'Explain clearly for the user\'s apparent role. Focus on practical impact, risk, and next action.'
     const conciseHint = _briefAnalysis
-      ? roleBasedHint
+      ? 'Follow the contract. Be concise.'
       : codeBlocks.length > 0
         ? 'Be thorough with code examples.'
         : _inputWords <= 5
@@ -1330,7 +1342,8 @@ ${_rawCode.slice(0, 14000)}`
     const _cleanedBuiltHint = (built.systemHint ?? '').replace(/\[previously\][^\n]*/g, '').replace(/\n{2,}/g, '\n').trim() || null
 
     const userIsArabic    = /[\u0600-\u06FF]/.test(cleanedText || '')
-    const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: _cleanedBuiltHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [], editorMode, wantsFullFile: _wantsFullFile, userIsArabic })
+    const promptEditorMode = editorMode && !_analysisOnly
+    const miniCtxResult = buildMiniContext({ engine, frontendContext: promptEditorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: _cleanedBuiltHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [], editorMode: promptEditorMode, wantsFullFile: _wantsFullFile, userIsArabic })
 
     if (needsRawCode && !storedRaw && !codeBlocks.length) {
       return res.json({
@@ -1382,7 +1395,12 @@ ${_rawCode.slice(0, 14000)}`
     const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
     const remaining     = Math.max(1000, 180000 - inputEstimate)
     const _fullFileRequest = editorMode && _wantsFullFile
-    const maxTokens     = _isSfPhase ? ([5000,6000,7000][_sfPhase] ?? 7000) : _briefAnalysis ? 1500 : _fullFileRequest ? Math.min(8000, Math.max(3000, Math.floor(remaining * 0.50))) : codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
+    const _codeSize      = (storedRaw?.length ?? codeBlocks.join('').length)
+    const maxTokens     = _isSfPhase
+      ? ([5000,6000,7000][_sfPhase] ?? 7000)
+      : _briefAnalysis
+        ? computeHybridTokens({ surface:_surfaceDepthHint, technical:_technicalDepthHint, modify:false, codeSize:_codeSize, inputWords:_inputWords, continuity:effectiveContinuity, remaining, ceiling: _technicalDepthHint ? 2500 : 1400 })
+        : _fullFileRequest ? Math.min(8000, Math.max(3000, Math.floor(remaining * 0.50))) : codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
 
     let payloadSize = 0
     try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large', detail: e.message }) }
