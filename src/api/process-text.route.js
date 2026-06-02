@@ -676,7 +676,7 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   if (editorMode && wantsFullFile) parts.push('[output: full_file] Return the complete modified file only. No explanations before or after.')
   const contract = buildAnalysisContract(fieldSignals, userIsArabic, { wantsFullFile })
   if (contract) parts.push(contract)
-  if (userIsArabic) parts.push('Respond in Arabic.')
+  if (userIsArabic && !contract) parts.push('Respond in Arabic.')
   if (fieldSignals) parts.push(fieldSignals)
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
