@@ -76,7 +76,7 @@ function detectCodeBlocks(text) {
       /=>\s*\{/, /\bthis\.\w+\s*=/, /^\s{2,}(const|let|var|return|if|for)\s/m,
       /<(!DOCTYPE|html|head|body|div|script)/i
     ]
-    if (codeSignals.filter(p => p.test(text)).length >= 2 && text.length > 50 && text.length < 20000) blocks.push(text)
+    if (codeSignals.filter(p => p.test(text)).length >= 2 && text.length > 50 && text.length < MAX_INPUT_CHARS) blocks.push(text)
   }
   return blocks
 }
@@ -420,6 +420,32 @@ function _buildContextPath(domain, cleanedText) {
   return refined ? `::${layer}/${refined}` : `::${layer}`
 }
 
+function _extractRequestOnly(text) {
+  return String(text ?? '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .split('\n')
+    .filter(line => {
+      const l = line.trim()
+      if (!l) return false
+      if (/^\s*(import|export|const|let|var|function|class|async|await|return|if|for|while|try|catch|router\.|app\.|<\/?|{|}|\)|;)/i.test(l)) return false
+      if (/[{}<>;]/.test(l) && !/[\u0600-\u06FF]|what|why|how|explain|analy/i.test(l)) return false
+      return true
+    })
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 500)
+}
+
+function detectExplanationDepth(text) {
+  const q = _extractRequestOnly(text).toLowerCase()
+  const technical = /xss|csrf|injection|sql injection|security|vulnerability|audit|performance|latency|memory leak|runtime|syntax|bug|error|crash|sanitize|validation|auth|jwt|token|cors|ثغرة|ثغرات|أمني|حماية|اختراق|تدقيق|أداء|خطأ|قاتل|critical|نقاط ضعف/i
+  const surface   = /حلل|اشرح|شرح|ما هذا|ما هو|ماهو|ماذا يفعل|فهمني|explain|what is|what does|analyze this|describe/i
+  if (technical.test(q)) return { signal: '@depth.technical', label: 'technical', weight: 0.95 }
+  if (surface.test(q))   return { signal: '@depth.surface',   label: 'surface',   weight: 0.88 }
+  return null
+}
+
 function _buildIntentSignal(cleanedText, exec, intent) {
   if (/اصلح|fix|debug|أصلح|repair/i.test(cleanedText))                     return '@intent.fix'
   if (/عدل|refactor|تعديل|improve|حسّن/i.test(cleanedText))                return '@intent.refactor'
@@ -500,6 +526,8 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity,
   if (hasFollowup && prevItem?.score > 0.30)                 add('>#followup', prevItem.score + 0.3)
   if (contextPath)                                            add(contextPath, domainStable ? 0.80 : 0.50)
   if (intentSignal)                                          add(intentSignal, 0.75)
+  const depthSignal = detectExplanationDepth(_questionOnly || cleanedText)
+  if (depthSignal?.signal)                                   add(depthSignal.signal, depthSignal.weight)
   if (resolvedEntity)                                        add('>?resolved_ref', 0.85)
   if (hasCritical)                                           add('!critical', 1.0)
   if (hasFailure)                                            add('?failure', 0.95)
@@ -514,7 +542,7 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity,
   if (activeSummary?.decisions?.length > 0 && continuity > 0.30) add('>#project_continuation', 0.92)
   if (state.candidateCount < 1 && ground < 0.25 && continuity < 0.20) add('?ambiguous', 0.40)
 
-  const MAX_SIGNALS = 5
+  const MAX_SIGNALS = 7
   const top = weighted.sort((a, b) => b.w - a.w).slice(0, MAX_SIGNALS).map(s => s.text)
 
   return { text: top.length ? top.join(' ') : null, state }
@@ -557,7 +585,7 @@ function findPrevAnswer(filteredHistory, prevItem, lastTopicText) {
     : null
 }
 
-function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem, lastTopicText, sessionSummary, filteredHistory, editorMode, wantsFullFile }) {
+function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem, lastTopicText, sessionSummary, filteredHistory, editorMode, wantsFullFile, userIsArabic = false }) {
   const parts = []
   if (sessionSummary?.text) {
     const decStr = sessionSummary.decisions?.length
@@ -567,12 +595,21 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   }
   if (sessionSummary?.text && !wantsFullFile) parts.push('[session resumed]')
   if (editorMode && wantsFullFile) parts.push('[output: full_file] Return the complete modified file only. No explanations before or after.')
-  const _hasAnalyze = (fieldSignals||'').includes('@intent.analyze')
-  const _hasDepth   = (fieldSignals||'').includes('>>depth')
-  if (_hasAnalyze && !_hasDepth && !wantsFullFile && !editorMode) {
-    const _hasArabic = /[\u0600-\u06FF]/.test(builtSystemHint || '')
+  const _hasAnalyze      = (fieldSignals||'').includes('@intent.analyze')
+  const _hasExplain      = (fieldSignals||'').includes('@intent.explain')
+  const _hasDeepIntent   = (fieldSignals||'').includes('>>depth')
+  const _surfaceDepth    = (fieldSignals||'').includes('@depth.surface')
+  const _technicalDepth  = (fieldSignals||'').includes('@depth.technical')
+  const _hasAnalysisMode = _hasAnalyze || _hasExplain || _surfaceDepth || _technicalDepth
+  if (_hasAnalysisMode && !_hasDeepIntent && !wantsFullFile && !editorMode) {
+    const _hasArabic = userIsArabic
     const _lang = _hasArabic ? 'Respond in Arabic.' : 'Respond in the same language as the user.'
-    parts.push(`[task: analysis] ${_lang} Provide a brief code analysis with:\n1. What this code does (1-2 sentences).\n2. Strengths (2-3 brief points).\n3. Critical issues (3 max): for each — issue name, why it is a problem, suggested fix.\nPlain text only. No code blocks. Concise.`)
+    const roleHint = _technicalDepth
+      ? `[role: technical reviewer]\n[audience: developer]\n[goal: audit security, correctness, performance, maintainability, and give actionable fixes]\n[response shape: purpose → critical issues → why they matter → concrete fixes]`
+      : _surfaceDepth
+        ? `[role: friendly analyst]\n[audience: someone who uses this, not necessarily the person who built it]\n[goal: explain practical value, visible behavior, risks in plain language, and clear next action]\n[response shape: what it does → who it helps → main risks → should the user use/fix it?]`
+        : `[role: product-aware code analyst]\n[audience: practical decision maker]\n[goal: explain impact, risk, and next action without unnecessary internals]`
+    parts.push(`[task: analysis]\n${_lang}\n${roleHint}`)
   }
   if (fieldSignals) parts.push(fieldSignals)
   const stateHint = buildStateHint(phase, continuity)
@@ -1229,12 +1266,30 @@ ${_rawCode.slice(0, 14000)}`
     const _prevItem     = routeItems[0] ?? null
     const _routedVault  = (editorMode || fieldShifted) ? null : vaultHit
     const _wantsFullFile   = /(ملف|الكود|html|الصفحة).*(كامل|نهائي)|اعطني الكود الكامل|أعطني الكود الكامل|أعد كتابة الملف|complete file|full html/i.test(cleanedText)
-    const _briefAnalysis = !_isSfPhase && !editorMode && (fieldSignals||'').includes('@intent.analyze') && !(fieldSignals||'').includes('>>depth') && !_wantsFullFile
-    const conciseHint = _briefAnalysis ? 'Be concise and structured. Plain text only. No code blocks.' : codeBlocks.length > 0 ? 'Be thorough with code examples.' : _inputWords <= 5 ? 'Be concise and complete.' + _noMarkdown : _inputWords <= 15 ? 'Answer fully but without repetition.' + _noMarkdown : 'Be clear and complete.' + _noMarkdown
+    const _hasAnalysisSignal  = (fieldSignals||'').includes('@intent.analyze') || (fieldSignals||'').includes('@intent.explain') || (fieldSignals||'').includes('@depth.surface') || (fieldSignals||'').includes('@depth.technical')
+    const _briefAnalysis     = !_isSfPhase && !editorMode && _hasAnalysisSignal && !(fieldSignals||'').includes('>>depth') && !_wantsFullFile
+    const _surfaceDepthHint   = (fieldSignals||'').includes('@depth.surface')
+    const _technicalDepthHint = (fieldSignals||'').includes('@depth.technical')
+    const _hasArabicHint      = /[\u0600-\u06FF]/.test(cleanedText || '')
+    const roleBasedHint = _technicalDepthHint
+      ? 'Explain as a senior developer reviewing code. Focus on security, correctness, performance, and concrete fixes. Short code snippets allowed only to clarify a fix.'
+      : _surfaceDepthHint
+        ? (_hasArabicHint ? 'اشرح كمطوّر يشرح لمدير منتج. ركّز على الغرض، قيمة المستخدم، المخاطر الواضحة، وأفضل قرار قابل للتنفيذ.' : 'Explain as a developer talking to a product manager. Focus on purpose, user value, visible risks, and the best next decision.')
+        : 'Explain clearly for the user\'s apparent role. Focus on practical impact, risk, and next action.'
+    const conciseHint = _briefAnalysis
+      ? roleBasedHint
+      : codeBlocks.length > 0
+        ? 'Be thorough with code examples.'
+        : _inputWords <= 5
+          ? 'Be concise and complete.' + _noMarkdown
+          : _inputWords <= 15
+            ? 'Answer fully but without repetition.' + _noMarkdown
+            : 'Be clear and complete.' + _noMarkdown
     const filteredHistory = filterStyleInstructions(history)
     const _cleanedBuiltHint = (built.systemHint ?? '').replace(/\[previously\][^\n]*/g, '').replace(/\n{2,}/g, '\n').trim() || null
 
-    const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: _cleanedBuiltHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [], editorMode, wantsFullFile: _wantsFullFile })
+    const userIsArabic    = /[\u0600-\u06FF]/.test(cleanedText || '')
+    const miniCtxResult = buildMiniContext({ engine, frontendContext: editorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: _cleanedBuiltHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [], editorMode, wantsFullFile: _wantsFullFile, userIsArabic })
 
     if (needsRawCode && !storedRaw && !codeBlocks.length) {
       return res.json({
