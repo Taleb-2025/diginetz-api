@@ -330,8 +330,6 @@ function resolveAmbiguity(cleanedText, sid) {
   return cleanedText + ` [ref: ${refs}]`
 }
 
-
-
 function getSemanticState(sid) {
   if (!_semanticState.has(sid)) {
     _semanticState.set(sid, {
@@ -587,7 +585,7 @@ function findPrevAnswer(filteredHistory, prevItem, lastTopicText) {
 
 function buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, questionSimilarity, userIsArabic }) {
   const fs = fieldSignals || ''
-  // حالات لا نقترح فيها
+
   if (fs.includes('?ambiguous') || fs.includes('::reset') || fs.includes('?failure')) return null
   if (!reply || reply.length < 80) return null
   if ((routeConf ?? 0) < 0.60) return null
@@ -663,6 +661,7 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
         : `[role: product-aware code analyst]\n[audience: practical decision maker]\n[goal: explain impact, risk, and next action without unnecessary internals]`
     parts.push(`[task: analysis]\n${_lang}\n${roleHint}`)
   }
+  if (userIsArabic) parts.push('Respond in Arabic.')
   if (fieldSignals) parts.push(fieldSignals)
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
@@ -1002,13 +1001,12 @@ router.post('/process-text', async (req, res) => {
   processingLock.add(sid)
 
   try {
-    // ═══ sfSingleCall: معالجة واحدة للمراحل الثلاث ═══
+
     if (sfSingleCall) {
       const _rawCode = sfPrevCode || recoveredCode || null
       if (!_rawCode) { return res.status(400).json({ error: 'missing_code' }) }
       const _ft = sfFlowType || 'fix_flow'
 
-      // ════ حماية الحجم: > 14000 حرف → يرفض sfSingleCall الكامل ════
       const SMART_FLOW_INPUT_LIMIT = 14000
       if (_rawCode.length > SMART_FLOW_INPUT_LIMIT && _ft !== 'targeted_fix') {
         return res.status(413).json({
@@ -1017,7 +1015,6 @@ router.post('/process-text', async (req, res) => {
         })
       }
 
-      // ════ TARGETED FIX (قاعدة الحماية 3: لا smart flow كامل) ════
       if (_ft === 'targeted_fix' && Array.isArray(sfTargetedIssues) && sfTargetedIssues.length > 0) {
         const _issuesList = sfTargetedIssues.join('\n')
         const _tPrompt = `Fix ONLY these specific issues in the code below. Do NOT change anything else. Return ONLY the complete fixed file.\n\nIssues to fix:\n${_issuesList}\n\nCode:\n${_rawCode.slice(0,14000)}`
@@ -1068,7 +1065,6 @@ ${_rawCode.slice(0, 14000)}`
       const sfData = await sfRes.json()
       const rawTxt = sfData?.content?.[0]?.text?.trim() || ''
 
-      // parsing عبر delimiter — الكود لا يُغلَّف في JSON
       let parsed = null
       const _delimCode = rawTxt.indexOf('---CODE---')
       const _delimAnal = rawTxt.indexOf('---ANALYSIS---')
@@ -1083,7 +1079,7 @@ ${_rawCode.slice(0, 14000)}`
           }
         } catch {}
       }
-      // fallback: pure JSON
+
       if (!parsed) {
         try { const _j=JSON.parse(rawTxt); if(_j?.phases&&_j?.finalCode) parsed=_j } catch {
           const m=rawTxt.match(/\{[\s\S]*\}/); if(m) try{ const _j=JSON.parse(m[0]); if(_j?.phases&&_j?.finalCode) parsed=_j }catch{}
@@ -1092,7 +1088,6 @@ ${_rawCode.slice(0, 14000)}`
 
       if (!parsed?.phases || !parsed?.finalCode) return res.status(500).json({ error: 'parse_failed' })
 
-      // ════ TRUNCATION DETECTION + COMPLETION ════
       const _isTruncated = code => {
         const t = code.trim()
         if (/<!DOCTYPE|<html/i.test(t)) return !/<\/html>\s*$/i.test(t)
@@ -1107,9 +1102,9 @@ ${_rawCode.slice(0, 14000)}`
           const _cont  = _cData?.content?.[0]?.text?.trim() || ''
           if (_cont.length > 20) {
             parsed.finalCode = parsed.finalCode + '\n' + _cont
-            // تحقق إذا ما زال مقطوعاً بعد الإكمال
+
             if (_isTruncated(parsed.finalCode)) {
-              // أضف إغلاق صريح إذا لم يُغلَق
+
               if (!parsed.finalCode.trim().endsWith('</html>')) {
                 parsed.finalCode += '\n</script>\n</body>\n</html>'
               }
@@ -1118,7 +1113,6 @@ ${_rawCode.slice(0, 14000)}`
         } catch {}
       }
 
-      // ════ REVIEW PASS ════ معزول تماماً عن CELF/capsules/memory
       const _goals = parsed.phases.map((p,i) => `${i+1}. ${p.goal||''}`)
       const _goalsText = _goals.join('\n')
       const _verifyPrompt = `You are verifying the final code after an automated fix flow.\nOriginal issues to verify:\n${_goalsText}\nCheck only:\n1. Are the original critical issues fixed?\n2. Is there any syntax/runtime-breaking error?\n3. Did the fix introduce a new major issue?\nReturn JSON only:\n{"verdict":"ok"|"minor_fix"|"major_issue"|"low_confidence","remaining":["..."],"confidence":0.0,"reason":"short reason"}`
@@ -1133,14 +1127,12 @@ ${_rawCode.slice(0, 14000)}`
         }
       } catch {}
 
-      // ① حفظ في rawCodeStore فقط إذا verdict = ok (قاعدة الحماية 2)
       if (sfVerify.verdict === 'ok') {
         try { storeCodeContext(sid, [parsed.finalCode], getEngine(sid), Date.now()) } catch {}
       }
 
       return res.json({ sfPhases: parsed.phases, sfFinalCode: parsed.finalCode, sfVerify, isSingleCall: true })
     }
-    // ═══════════════════════════════════════════════════
 
     const rawText     = hasText && text.length > MAX_INPUT_CHARS ? text.slice(0, MAX_INPUT_CHARS) + '\n\n[... truncated ...]' : text
     const cleanedText  = hasText ? cleanInput(rawText) : rawText
@@ -1210,7 +1202,6 @@ ${_rawCode.slice(0, 14000)}`
       codeSessionStore.set(sid, { active: true, ttl: 6 })
     }
 
-
     if (!sessionSummaryStore.has(sid) && sessionSummary?.text) {
       sessionSummaryStore.set(sid, { text: sessionSummary.text, decisions: sessionSummary.decisions ?? [], generatedAt: sessionSummary.generatedAt ?? Date.now() })
     }
@@ -1226,7 +1217,6 @@ ${_rawCode.slice(0, 14000)}`
       }
       resumeBootstrapped.add(sid)
     }
-
 
     const wordCount       = cleanedText.trim().split(/\s+/).length
     const entityRef       = updateEntityTracker(sid, cleanedText, codeBlocks)
@@ -1308,7 +1298,6 @@ ${_rawCode.slice(0, 14000)}`
 
     const storedRaw  = effectiveMatch?.raw ?? null
 
-    // Smart Flow phase injection
     const _sfPhase      = Number.isInteger(sfPhase) && sfPhase >= 0 && sfPhase < 10 ? sfPhase : null
     const _sfDef        = _sfPhase !== null ? (SMART_FLOWS[sfFlowType ?? chooseSmartFlow(fieldSignals ?? '')] ?? SMART_FLOWS.fix_flow)[_sfPhase] : null
     const _isSfPhase    = _sfPhase !== null && !!_sfDef
@@ -1389,7 +1378,6 @@ ${_rawCode.slice(0, 14000)}`
     const systemHint = _sfInstruction
       ? [_sfInstruction, conciseHint].filter(Boolean).join('\n')
       : [miniCtxResult.miniContext, _codeOnlyMsg, _reflective, _tldr, conciseHint].filter(Boolean).join('\n') || null
-
 
     const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
     const remaining     = Math.max(1000, 180000 - inputEstimate)
