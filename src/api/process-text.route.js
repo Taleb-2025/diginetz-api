@@ -445,6 +445,7 @@ function detectExplanationDepth(text) {
 }
 
 function _buildIntentSignal(cleanedText, exec, intent) {
+  if (/راجع.*(أصلح|اصلح|إصلاح)|افحص.*(أصلح|اصلح)|راجع من جديد|تدقيق جديد|re.?audit|audit again|review and fix/i.test(cleanedText)) return '@intent.reaudit'
   if (/اصلح|fix|debug|أصلح|repair/i.test(cleanedText))                     return '@intent.fix'
   if (/عدل|refactor|تعديل|improve|حسّن/i.test(cleanedText))                return '@intent.refactor'
   if (/حلل|analyze|review|audit|تحليل|نقاط.ضعف|weakness|issues|problems/i.test(cleanedText)) return '@intent.analyze'
@@ -635,10 +636,38 @@ function buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, quest
   return s
 }
 
+function extractIssueLedger(reply) {
+  const text = String(reply ?? '')
+  const re = /---CELF_ISSUE_LEDGER---\s*([\s\S]*?)\s*---END_CELF_ISSUE_LEDGER---/i
+  const match = text.match(re)
+  if (!match) return { cleanReply: text, issues: [] }
+  const cleanReply = text.replace(re, '').trim()
+  try {
+    const parsed = JSON.parse(match[1])
+    const issues = Array.isArray(parsed?.issues)
+      ? parsed.issues.slice(0,8).filter(i => i?.id && i?.fix_hint)
+      : []
+    return { cleanReply, issues }
+  } catch { return { cleanReply, issues: [] } }
+}
+
+function buildFixContract({ sid, fingerprint, fieldSignals, userIsArabic }) {
+  const fs = String(fieldSignals || '')
+  if (!fs.includes('@intent.fix')) return null
+  const lang = userIsArabic ? '[lang: Arabic]' : '[lang: same_as_user]'
+  const ledger = getIssueLedger(sid, fingerprint)
+  if (ledger?.issues?.length) {
+    const list = ledger.issues.map(i => `${i.id}: ${i.kind||'issue'} at ${i.location||'?'} — ${i.fix_hint}`).join(' | ')
+    return `${lang}\n[task: code_fix][source: issue_ledger][depth: technical]\n[known_issues: ${list}]\n[goal: fix only listed issues]\n[avoid: redesign, unrelated features, broad rewrite]\n[shape: issue→fix→verified_code]`
+  }
+  return `${lang}\n[task: code_fix][source: fresh_audit_required][depth: technical]\n[goal: inspect current code, fix only concrete blocking issues]\n[avoid: redesign, unrelated features, broad rewrite]\n[shape: issue→fix→verified_code]`
+}
+
 function buildAnalysisContract(fieldSignals, userIsArabic, opts) {
   const fs  = String(fieldSignals || '')
   const wff = opts?.wantsFullFile
   if (wff) return null
+  if (!opts?.hasCodeContext) return null
   const hasAnalyze  = fs.includes('@intent.analyze')
   const hasExplain  = fs.includes('@intent.explain')
   const hasFix      = fs.includes('@intent.fix') || fs.includes('@intent.refactor') || fs.includes('@intent.build')
@@ -649,9 +678,9 @@ function buildAnalysisContract(fieldSignals, userIsArabic, opts) {
   if (!hasAnalyze && !hasExplain && !hasFix && !surface && !technical) return null
   const lang = userIsArabic ? '[lang: Arabic]' : '[lang: same_as_user]'
   if (hasFix) return [lang,'[task: code_modify][depth: technical][audience: developer]','[goal: safe focused change]','[avoid: unrelated redesign]','[shape: change→reason→code]'].join('\n')
-  if (technical)  return [lang,'[task: code_audit][depth: technical][audience: developer]','[goal: security, correctness, performance]','[avoid: broad explanation]','[shape: issue→impact→fix]'].join('\n')
+  if (technical)  return [lang,'[task: code_audit][depth: technical][audience: developer]','[goal: security, correctness, performance]','[avoid: broad explanation]','[shape: issue→impact→fix]'].join('\n') + '\n[ledger: append ---CELF_ISSUE_LEDGER--- json after answer if concrete issues found]\n[issue_schema: {id,severity,kind,location,evidence,fix_hint}]\n[ledger_rule: concrete code issues only, max 8]'
   if (hasExplain) return [lang,'[task: explain_code][depth: surface][audience: nontechnical user]','[goal: explain visible behavior and limits]','[avoid: function walkthrough]','[shape: what_it_does→how_it_works→practical_note]'].join('\n')
-  return [lang,'[task: code_analysis][depth: surface][audience: practical user]','[goal: usefulness, risks, next action]','[avoid: function walkthrough]','[shape: purpose→value→risks→decision]'].join('\n')
+  return [lang,'[task: code_analysis][depth: surface][audience: practical user]','[goal: usefulness, risks, next action]','[avoid: function walkthrough]','[shape: purpose→value→risks→decision]'].join('\n') + '\n[ledger: append ---CELF_ISSUE_LEDGER--- json after answer if concrete issues found]\n[issue_schema: {id,severity,kind,location,evidence,fix_hint}]\n[ledger_rule: concrete code issues only, max 8]'
 }
 
 function computeHybridTokens({ surface, technical, modify, codeSize, inputWords, continuity, remaining, ceiling }) {
@@ -664,7 +693,7 @@ function computeHybridTokens({ surface, technical, modify, codeSize, inputWords,
   return Math.min(cap, Math.max(800, raw))
 }
 
-function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem, lastTopicText, sessionSummary, filteredHistory, editorMode, wantsFullFile, userIsArabic = false }) {
+function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem, lastTopicText, sessionSummary, filteredHistory, editorMode, wantsFullFile, userIsArabic = false, hasFixContract = false, hasCodeContext = false }) {
   const parts = []
   if (sessionSummary?.text) {
     const decStr = sessionSummary.decisions?.length
@@ -674,7 +703,7 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   }
   if (sessionSummary?.text && !wantsFullFile) parts.push('[session resumed]')
   if (editorMode && wantsFullFile) parts.push('[output: full_file] Return the complete modified file only. No explanations before or after.')
-  const contract = buildAnalysisContract(fieldSignals, userIsArabic, { wantsFullFile })
+  const contract = hasFixContract ? null : buildAnalysisContract(fieldSignals, userIsArabic, { wantsFullFile, hasCodeContext })
   if (contract) parts.push(contract)
   if (userIsArabic && !contract) parts.push('Respond in Arabic.')
   if (fieldSignals) parts.push(fieldSignals)
@@ -712,6 +741,23 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
 }
 
 const rawCodeStore        = new Map()
+const issueStore          = new Map()
+const ISSUE_TTL_MS        = 1000 * 60 * 30
+
+function codeFingerprint(raw) {
+  const s = String(raw ?? '').replace(/\s+/g,' ').trim()
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h,16777619) }
+  return Math.abs(h >>> 0).toString(36)
+}
+
+function getIssueLedger(sid, fingerprint) {
+  const e = issueStore.get(sid)
+  if (!e) return null
+  if (e.fingerprint !== fingerprint) return null
+  if (Date.now() - e.createdAt > ISSUE_TTL_MS) { issueStore.delete(sid); return null }
+  return e
+}
 const codeSessionStore    = new Map()
 const sessionSummaryStore = new Map()
 const resumeBootstrapped  = new Set()
@@ -1342,8 +1388,12 @@ ${_rawCode.slice(0, 14000)}`
     const _cleanedBuiltHint = (built.systemHint ?? '').replace(/\[previously\][^\n]*/g, '').replace(/\n{2,}/g, '\n').trim() || null
 
     const userIsArabic    = /[\u0600-\u06FF]/.test(cleanedText || '')
-    const promptEditorMode = editorMode && !_analysisOnly
-    const miniCtxResult = buildMiniContext({ engine, frontendContext: promptEditorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: _cleanedBuiltHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [], editorMode: promptEditorMode, wantsFullFile: _wantsFullFile, userIsArabic })
+    if ((fieldSignals||'').includes('@intent.reaudit')) issueStore.delete(sid)
+    const promptEditorMode  = editorMode && !_analysisOnly
+    const _activeRaw        = storedRaw || codeBlocks.join('\n\n') || ''
+    const _activeFingerprint = codeFingerprint(_activeRaw)
+    const fixContract = buildFixContract({ sid, fingerprint: _activeFingerprint, fieldSignals, userIsArabic })
+    const miniCtxResult = buildMiniContext({ engine, frontendContext: promptEditorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: _cleanedBuiltHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [], editorMode: promptEditorMode, wantsFullFile: _wantsFullFile, userIsArabic, hasFixContract: !!fixContract, hasCodeContext })
 
     if (needsRawCode && !storedRaw && !codeBlocks.length) {
       return res.json({
@@ -1390,7 +1440,7 @@ ${_rawCode.slice(0, 14000)}`
     const _sfInstruction = _isSfPhase ? `[smart_flow phase ${_sfPhase+1}/${sfMaxPhases}] Goal: ${_sfDef.goal}\n${_sfDef.instruction}` : null
     const systemHint = _sfInstruction
       ? [_sfInstruction, conciseHint].filter(Boolean).join('\n')
-      : [miniCtxResult.miniContext, _codeOnlyMsg, _reflective, _tldr, conciseHint].filter(Boolean).join('\n') || null
+      : [fixContract, miniCtxResult.miniContext, _codeOnlyMsg, _reflective, _tldr, conciseHint].filter(Boolean).join('\n') || null
 
     const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
     const remaining     = Math.max(1000, 180000 - inputEstimate)
@@ -1487,6 +1537,13 @@ ${_rawCode.slice(0, 14000)}`
       flowType: sfFlowType ?? chooseSmartFlow(fieldSignals ?? ''), maxPhases: sfMaxPhases
     } : null
 
+    if (reply && _briefAnalysis) {
+      const { cleanReply, issues } = extractIssueLedger(reply)
+      reply = cleanReply
+      if (issues.length > 0 && _activeRaw) {
+        issueStore.set(sid, { fingerprint: _activeFingerprint, issues, createdAt: Date.now(), source: 'analysis' })
+      }
+    }
     const nextSuggestion = buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, questionSimilarity, userIsArabic })
 
     return res.json({ newSummary: newSummary ?? null, smartFlowMeta,
@@ -1525,6 +1582,7 @@ router.delete('/session/:id', (req, res) => {
   _fieldHistory.delete(req.params.id)
   _entityTracker.delete(req.params.id)
   rawCodeStore.delete(req.params.id)
+  issueStore.delete(req.params.id)
   codeSessionStore.delete(req.params.id)
   resumeBootstrapped.delete(req.params.id)
   capsuleMemory.delete(req.params.id)
