@@ -637,18 +637,32 @@ function buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, quest
 }
 
 function extractIssueLedger(reply) {
-  const text = String(reply ?? '')
-  const re = /---CELF_ISSUE_LEDGER---\s*([\s\S]*?)\s*---END_CELF_ISSUE_LEDGER---/i
-  const match = text.match(re)
-  if (!match) return { cleanReply: text, issues: [] }
-  const cleanReply = text.replace(re, '').trim()
-  try {
-    const parsed = JSON.parse(match[1])
-    const issues = Array.isArray(parsed?.issues)
-      ? parsed.issues.slice(0,8).filter(i => i?.id && i?.fix_hint)
-      : []
-    return { cleanReply, issues }
-  } catch { return { cleanReply, issues: [] } }
+  const text   = String(reply || '')
+  const marker = '---CELF_ISSUE_LEDGER---'
+  let cleanReply = text
+  let rawLedger  = null
+  let issues     = []
+  const idx = text.indexOf(marker)
+  if (idx >= 0) {
+    cleanReply = text.slice(0, idx).trim()
+    rawLedger  = text.slice(idx + marker.length)
+      .replace(/---END_CELF_ISSUE_LEDGER---[\s\S]*$/i, '')
+      .trim()
+  } else {
+    const m = text.match(/```json\s*([\s\S]*?"fix_hint"[\s\S]*?)```/i)
+    if (m) { rawLedger = m[1].trim(); cleanReply = text.replace(m[0], '').trim() }
+  }
+  if (rawLedger) {
+    try {
+      const stripped = rawLedger.replace(/^```json/i,'').replace(/```$/i,'').trim()
+      const jm = stripped.match(/(\{[\s\S]*\}|\[[\s\S]*\])/)
+      const parsed = jm ? JSON.parse(jm[0]) : null
+      const arr = Array.isArray(parsed) ? parsed
+        : Array.isArray(parsed?.issues) ? parsed.issues : []
+      issues = arr.filter(i => i && i.id && i.kind && i.fix_hint).slice(0, 8)
+    } catch { issues = [] }
+  }
+  return { cleanReply, issues }
 }
 
 function buildFixContract({ sid, fingerprint, fieldSignals, userIsArabic }) {
@@ -1540,8 +1554,9 @@ ${_rawCode.slice(0, 14000)}`
     if (reply && _briefAnalysis) {
       const { cleanReply, issues } = extractIssueLedger(reply)
       reply = cleanReply
-      if (issues.length > 0 && _activeRaw) {
-        issueStore.set(sid, { fingerprint: _activeFingerprint, issues, createdAt: Date.now(), source: 'analysis' })
+      if (issues.length > 0) {
+        const sourceCode = _activeRaw || codeBlocks.join('\n\n') || (typeof recoveredCode === 'string' ? recoveredCode : '') || ''
+        if (sourceCode) issueStore.set(sid, { domain: 'code', fingerprint: codeFingerprint(sourceCode), issues, createdAt: Date.now() })
       }
     }
     const nextSuggestion = buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, questionSimilarity, userIsArabic })
