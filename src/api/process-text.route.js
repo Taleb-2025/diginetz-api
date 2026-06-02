@@ -585,6 +585,58 @@ function findPrevAnswer(filteredHistory, prevItem, lastTopicText) {
     : null
 }
 
+function buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, questionSimilarity, userIsArabic }) {
+  const fs = fieldSignals || ''
+  // حالات لا نقترح فيها
+  if (fs.includes('?ambiguous') || fs.includes('::reset') || fs.includes('?failure')) return null
+  if (!reply || reply.length < 80) return null
+  if ((routeConf ?? 0) < 0.60) return null
+
+  const isAr      = userIsArabic
+  const hasCode   = fs.includes('#code') || fs.includes('#code_recall')
+  const isAnalyze = fs.includes('@intent.analyze') || fs.includes('@intent.explain')
+  const isSurface = fs.includes('@depth.surface')
+  const isTech    = fs.includes('@depth.technical')
+  const isFix     = fs.includes('@intent.fix')
+  const conf      = routeConf ?? 0.60
+
+  let s = null
+
+  if (isAnalyze && isSurface && hasCode) {
+    s = {
+      mode: 'technical_audit',
+      label: isAr ? 'تدقيق تقني' : 'Technical Audit',
+      text:  isAr ? 'افحص الكود من ناحية الأمان والأداء' : 'Review this code for security and performance issues',
+      confidence: conf
+    }
+  } else if ((isAnalyze || isTech) && hasCode && !isSurface) {
+    s = {
+      mode: 'fix_issues',
+      label: isAr ? 'إصلاح المشاكل' : 'Fix Issues',
+      text:  isAr ? 'أصلح هذه المشاكل في الكود' : 'Fix the issues you found in this code',
+      confidence: conf
+    }
+  } else if (isFix && hasCode) {
+    s = {
+      mode: 'verify_fix',
+      label: isAr ? 'تحقق من الإصلاح' : 'Verify Fix',
+      text:  isAr ? 'حلّل الكود مجدداً وتحقق من اكتمال الإصلاحات' : 'Analyze the code again and verify all fixes are complete',
+      confidence: conf * 0.90
+    }
+  } else if (continuity > 0.50 && (questionSimilarity ?? 0) > 0.55 && hasCode) {
+    s = {
+      mode: 'continue',
+      label: isAr ? 'تعمّق أكثر' : 'Go Deeper',
+      text:  isAr ? 'أعطني تفاصيل أكثر' : 'Give me more details',
+      confidence: conf * 0.85
+    }
+  }
+
+  if (!s || s.confidence < 0.60) return null
+  s.strength = s.confidence < 0.75 ? 'soft' : 'strong'
+  return s
+}
+
 function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem, lastTopicText, sessionSummary, filteredHistory, editorMode, wantsFullFile, userIsArabic = false }) {
   const parts = []
   if (sessionSummary?.text) {
@@ -1429,8 +1481,10 @@ ${_rawCode.slice(0, 14000)}`
       flowType: sfFlowType ?? chooseSmartFlow(fieldSignals ?? ''), maxPhases: sfMaxPhases
     } : null
 
+    const nextSuggestion = buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, questionSimilarity, userIsArabic })
+
     return res.json({ newSummary: newSummary ?? null, smartFlowMeta,
-      reply, celfVault: vaultToSave, observer: observerBox,
+      reply, nextSuggestion: nextSuggestion ?? null, celfVault: vaultToSave, observer: observerBox,
       debug: { systemHint: systemHint ?? null, messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, editorMode, sessionActive, hasStoredContexts, matchedCodeId: effectiveMatch?.id ?? null, forcedEditor: forceEditor, recoveredCodeInjected: !!recCode, entityRef: entityRef?.primaryEntity?.name ?? null, entityCount: (entityRef?.entities ?? []).length, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, totalTokens: inputTokensTotal + outputTokensTotal, costUSD, maxTokens, routeConfidence: Math.round(routeConf * 1000) / 1000, vaultHit: vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null, model, inlineCode: codeBlocks.length > 0, payloadSize, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, styleTtlRemaining: styleStore.get(sid)?.ttl ?? 0, noiseRemoved, truncated: hasText && text.length > MAX_INPUT_CHARS, feedbackApplied, feedbackCoherence }
     })
