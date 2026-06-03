@@ -681,15 +681,15 @@ function computeHybridTokens({ surface, technical, modify, codeSize, inputWords,
   return Math.min(cap, Math.max(800, raw))
 }
 
-function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem, lastTopicText, sessionSummary, filteredHistory, editorMode, wantsFullFile, userIsArabic = false, hasFixContract = false, hasCodeContext = false }) {
+function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem, lastTopicText, sessionSummary, filteredHistory, editorMode, wantsFullFile, userIsArabic = false, hasFixContract = false, hasCodeContext = false, fieldShifted = false }) {
   const parts = []
-  if (sessionSummary?.text) {
+  if (sessionSummary?.text && !fieldShifted) {
     const decStr = sessionSummary.decisions?.length
       ? '\n[decisions] ' + sessionSummary.decisions.slice(0,3).map(d=>d.slice(0,60)).join(' | ')
       : ''
     parts.push('[summary] ' + sessionSummary.text + decStr)
   }
-  if (sessionSummary?.text && !wantsFullFile) parts.push('[session resumed]')
+  if (sessionSummary?.text && !wantsFullFile && !fieldShifted) parts.push('[session resumed]')
   if (editorMode && wantsFullFile) parts.push('[output: full_file] Return the complete modified file only. No explanations before or after.')
   const contract = hasFixContract ? null : buildAnalysisContract(fieldSignals, userIsArabic, { wantsFullFile, hasCodeContext })
   if (contract) parts.push(contract)
@@ -698,7 +698,7 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
   if (codeHint) parts.push(codeHint)
-  if (frontendContext && capsuleEvalResult?.score >= 0.50) parts.push(`[memory]\n${frontendContext.slice(0, 300)}`)
+  if (frontendContext && capsuleEvalResult?.score >= 0.50 && !fieldShifted) parts.push(`[memory]\n${frontendContext.slice(0, 300)}`)
   const prevAnswerText = findPrevAnswer(filteredHistory ?? [], prevItem, lastTopicText)
   const previousText = prevAnswerText
     ? prevAnswerText
@@ -713,7 +713,7 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
         .slice(0, 120)
     : null
   const systemHasPrev = (builtSystemHint ?? '').includes('[previously]')
-  if (previousText && !systemHasPrev) parts.push(`[previously] ${previousText}`)
+  if (previousText && !systemHasPrev && !fieldShifted) parts.push(`[previously] ${previousText}`)
   if (vaultHit?.compressed && vaultHit?.score >= 0.55 && !systemHasPrev) {
     const vComp = vaultHit.compressed.slice(0, 50)
     const pText = previousText?.slice(0, 50) ?? ''
@@ -1365,7 +1365,7 @@ ${_rawCode.slice(0, 14000)}`
     const spCodeContext = codeBlocks.length > 0 || !!effectiveMatch || (fieldSignals||'').includes('#code') || (fieldSignals||'').includes('#code_recall')
     const fixContract = spCodeContext ? buildFixContract({ fieldSignals, userIsArabic }) : null
 
-    const miniCtxResult = buildMiniContext({ engine, frontendContext: promptEditorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: _cleanedBuiltHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [], editorMode: promptEditorMode, wantsFullFile: _wantsFullFile, userIsArabic, hasFixContract: !!fixContract, hasCodeContext: spCodeContext })
+    const miniCtxResult = buildMiniContext({ engine, frontendContext: promptEditorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: _cleanedBuiltHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [], editorMode: promptEditorMode, wantsFullFile: _wantsFullFile, userIsArabic, hasFixContract: !!fixContract, hasCodeContext: spCodeContext, fieldShifted })
 
     if (needsRawCode && !storedRaw && !codeBlocks.length) {
       return res.json({
