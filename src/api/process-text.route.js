@@ -652,6 +652,13 @@ function extractIssueLedger(reply) {
     const m = text.match(/```json\s*([\s\S]*?"fix_hint"[\s\S]*?)```/i)
     if (m) { rawLedger = m[1].trim(); cleanReply = text.replace(m[0], '').trim() }
   }
+  if (!rawLedger) {
+    const m2 = text.match(/(\{[\s\S]*?"fix_hint"[\s\S]*?\}|\[[\s\S]*?"fix_hint"[\s\S]*?\])\s*$/i)
+    if (m2) {
+      rawLedger = m2[1]
+      cleanReply = text.slice(0, text.lastIndexOf(m2[0])).trim()
+    }
+  }
   if (rawLedger) {
     try {
       const stripped = rawLedger.replace(/^```json/i,'').replace(/```$/i,'').trim()
@@ -684,6 +691,7 @@ function buildAnalysisContract(fieldSignals, userIsArabic, opts) {
   if (!opts?.hasCodeContext) return null
   const hasAnalyze  = fs.includes('@intent.analyze')
   const hasExplain  = fs.includes('@intent.explain')
+  const hasReaudit  = fs.includes('@intent.reaudit')
   const hasFix      = fs.includes('@intent.fix') || fs.includes('@intent.refactor') || fs.includes('@intent.build')
   const surface     = fs.includes('@depth.surface')
   const technical   = fs.includes('@depth.technical')
@@ -691,6 +699,7 @@ function buildAnalysisContract(fieldSignals, userIsArabic, opts) {
   if (deepIntent) return null
   if (!hasAnalyze && !hasExplain && !hasFix && !surface && !technical) return null
   const lang = userIsArabic ? '[lang: Arabic]' : '[lang: same_as_user]'
+  if (hasReaudit) return [lang,'[task: code_reaudit][depth: technical][audience: developer]','[goal: audit current code, identify all concrete issues, create fresh issue ledger]','[avoid: repeating previous results]','[shape: issue→impact→fix]'].join('\n') + '\n[ledger: append ---CELF_ISSUE_LEDGER--- json after answer if concrete issues found]\n[issue_schema: {id,severity,kind,location,evidence,fix_hint}]\n[ledger_rule: concrete code issues only, max 8]'
   if (hasFix) return [lang,'[task: code_modify][depth: technical][audience: developer]','[goal: safe focused change]','[avoid: unrelated redesign]','[shape: change→reason→code]'].join('\n')
   if (technical)  return [lang,'[task: code_audit][depth: technical][audience: developer]','[goal: security, correctness, performance]','[avoid: broad explanation]','[shape: issue→impact→fix]'].join('\n') + '\n[ledger: append ---CELF_ISSUE_LEDGER--- json after answer if concrete issues found]\n[issue_schema: {id,severity,kind,location,evidence,fix_hint}]\n[ledger_rule: concrete code issues only, max 8]'
   if (hasExplain) return [lang,'[task: explain_code][depth: surface][audience: nontechnical user]','[goal: explain visible behavior and limits]','[avoid: function walkthrough]','[shape: what_it_does→how_it_works→practical_note]'].join('\n')
@@ -719,7 +728,7 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   if (editorMode && wantsFullFile) parts.push('[output: full_file] Return the complete modified file only. No explanations before or after.')
   const contract = hasFixContract ? null : buildAnalysisContract(fieldSignals, userIsArabic, { wantsFullFile, hasCodeContext })
   if (contract) parts.push(contract)
-  if (userIsArabic && !contract) parts.push('Respond in Arabic.')
+  if (userIsArabic && !contract && !hasFixContract) parts.push('Respond in Arabic.')
   if (fieldSignals) parts.push(fieldSignals)
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
@@ -1406,8 +1415,9 @@ ${_rawCode.slice(0, 14000)}`
     const promptEditorMode  = editorMode && !_analysisOnly
     const _activeRaw        = storedRaw || codeBlocks.join('\n\n') || ''
     const _activeFingerprint = codeFingerprint(_activeRaw)
-    const fixContract = buildFixContract({ sid, fingerprint: _activeFingerprint, fieldSignals, userIsArabic })
-    const miniCtxResult = buildMiniContext({ engine, frontendContext: promptEditorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: _cleanedBuiltHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [], editorMode: promptEditorMode, wantsFullFile: _wantsFullFile, userIsArabic, hasFixContract: !!fixContract, hasCodeContext })
+    const spCodeContext = codeBlocks.length > 0 || !!effectiveMatch || (fieldSignals||'').includes('#code') || (fieldSignals||'').includes('#code_recall')
+    const fixContract = spCodeContext ? buildFixContract({ sid, fingerprint: _activeFingerprint, fieldSignals, userIsArabic }) : null
+    const miniCtxResult = buildMiniContext({ engine, frontendContext: promptEditorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: _cleanedBuiltHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [], editorMode: promptEditorMode, wantsFullFile: _wantsFullFile, userIsArabic, hasFixContract: !!fixContract, hasCodeContext: spCodeContext })
 
     if (needsRawCode && !storedRaw && !codeBlocks.length) {
       return res.json({
@@ -1464,7 +1474,7 @@ ${_rawCode.slice(0, 14000)}`
       ? ([5000,6000,7000][_sfPhase] ?? 7000)
       : _briefAnalysis
         ? computeHybridTokens({ surface:_surfaceDepthHint, technical:_technicalDepthHint, modify:false, codeSize:_codeSize, inputWords:_inputWords, continuity:effectiveContinuity, remaining, ceiling: _technicalDepthHint ? 2500 : 1400 })
-        : _fullFileRequest ? Math.min(8000, Math.max(3000, Math.floor(remaining * 0.50))) : codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
+        : fixContract ? Math.min(6000, Math.max(3000, Math.floor(remaining * 0.45))) : _fullFileRequest ? Math.min(8000, Math.max(3000, Math.floor(remaining * 0.50))) : codeBlocks.length > 0 ? Math.min(4000, Math.max(1000, Math.floor(remaining * 0.4))) : _inputWords <= 5 ? 1000 : _inputWords <= 15 ? 1800 : 2500
 
     let payloadSize = 0
     try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large', detail: e.message }) }
@@ -1494,6 +1504,14 @@ ${_rawCode.slice(0, 14000)}`
         inputTokensTotal  += contData?.usage?.input_tokens  ?? 0
         outputTokensTotal += contData?.usage?.output_tokens ?? 0
         claudeData         = contData
+      }
+      if (reply && _hasAnalysisSignal && spCodeContext && !_isSfPhase) {
+        const { cleanReply, issues } = extractIssueLedger(reply)
+        reply = cleanReply
+        if (issues.length > 0) {
+          const sourceCode = _activeRaw || codeBlocks.join('\n\n') || (typeof recoveredCode === 'string' ? recoveredCode : '') || ''
+          if (sourceCode) issueStore.set(sid, { domain: 'code', fingerprint: codeFingerprint(sourceCode), issues, createdAt: Date.now() })
+        }
       }
     } catch (err) {
       if (err.name === 'AbortError') return res.status(504).json({ error: 'claude_timeout' })
@@ -1551,19 +1569,12 @@ ${_rawCode.slice(0, 14000)}`
       flowType: sfFlowType ?? chooseSmartFlow(fieldSignals ?? ''), maxPhases: sfMaxPhases
     } : null
 
-    if (reply && _briefAnalysis) {
-      const { cleanReply, issues } = extractIssueLedger(reply)
-      reply = cleanReply
-      if (issues.length > 0) {
-        const sourceCode = _activeRaw || codeBlocks.join('\n\n') || (typeof recoveredCode === 'string' ? recoveredCode : '') || ''
-        if (sourceCode) issueStore.set(sid, { domain: 'code', fingerprint: codeFingerprint(sourceCode), issues, createdAt: Date.now() })
-      }
-    }
+
     const nextSuggestion = buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, questionSimilarity, userIsArabic })
 
     return res.json({ newSummary: newSummary ?? null, smartFlowMeta,
       reply, nextSuggestion: nextSuggestion ?? null, celfVault: vaultToSave, observer: observerBox,
-      debug: { systemHint: systemHint ?? null, messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, editorMode, sessionActive, hasStoredContexts, matchedCodeId: effectiveMatch?.id ?? null, forcedEditor: forceEditor, recoveredCodeInjected: !!recCode, entityRef: entityRef?.primaryEntity?.name ?? null, entityCount: (entityRef?.entities ?? []).length, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
+      debug: { systemHint: systemHint ?? null, hasFixContract: !!fixContract, messageCount: messages.length, historyCount: historyMessages.length, continuityTier: continuity >= 0.70 ? 'T1-full' : continuity >= 0.40 ? 'T2-compressed+capsules' : continuity >= 0.20 ? 'T3-capsules+anchors' : 'T4-fragments', capsules: (capsuleMemory.get(sid) ?? []).length, anchors: (anchorMemory.get(sid) ?? []).length, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, lastTopicText, vaultHitUsed: !!vaultHit?.compressed, hasCapsuleCtx: !!frontendContext, feedbackApplied, feedbackCoherence, standalone, needsRawCode, editorMode, sessionActive, hasStoredContexts, matchedCodeId: effectiveMatch?.id ?? null, forcedEditor: forceEditor, recoveredCodeInjected: !!recCode, entityRef: entityRef?.primaryEntity?.name ?? null, entityCount: (entityRef?.entities ?? []).length, historyHasCode, currentDomain, fieldSignals, fieldShifted, dominantDomain: semanticState?.dominantDomain, candidateDomain: semanticState?.candidateDomain, candidateCount: semanticState?.candidateCount, driftCount: semanticState?.driftCount, capsuleEval: { score: capsuleEvalResult.score, used: capsuleEvalResult.used, reason: capsuleEvalResult.reason }, miniContext: { tokenEstimate: miniCtxResult.tokenEstimate, layers: miniCtxResult.layers } },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, totalTokens: inputTokensTotal + outputTokensTotal, costUSD, maxTokens, routeConfidence: Math.round(routeConf * 1000) / 1000, vaultHit: vaultHit ? { score: vaultHit.score, compressed: vaultHit.compressed } : null, model, inlineCode: codeBlocks.length > 0, payloadSize, questionSimilarity: questionSimilarity !== null ? Math.round(questionSimilarity * 100) / 100 : null, activeStyle, styleTtlRemaining: styleStore.get(sid)?.ttl ?? 0, noiseRemoved, truncated: hasText && text.length > MAX_INPUT_CHARS, feedbackApplied, feedbackCoherence }
     })
 
