@@ -445,7 +445,6 @@ function detectExplanationDepth(text) {
 }
 
 function _buildIntentSignal(cleanedText, exec, intent) {
-  if (/راجع.*(أصلح|اصلح|إصلاح)|افحص.*(أصلح|اصلح)|راجع من جديد|تدقيق جديد|re.?audit|audit again|review and fix/i.test(cleanedText)) return '@intent.reaudit'
   if (/اصلح|fix|debug|أصلح|repair/i.test(cleanedText))                     return '@intent.fix'
   if (/عدل|refactor|تعديل|improve|حسّن/i.test(cleanedText))                return '@intent.refactor'
   if (/حلل|analyze|review|audit|تحليل|نقاط.ضعف|weakness|issues|problems/i.test(cleanedText)) return '@intent.analyze'
@@ -636,52 +635,11 @@ function buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, quest
   return s
 }
 
-function extractIssueLedger(reply) {
-  const text   = String(reply || '')
-  const marker = '---CELF_ISSUE_LEDGER---'
-  let cleanReply = text
-  let rawLedger  = null
-  let issues     = []
-  const idx = text.indexOf(marker)
-  if (idx >= 0) {
-    cleanReply = text.slice(0, idx).trim()
-    rawLedger  = text.slice(idx + marker.length)
-      .replace(/---END_CELF_ISSUE_LEDGER---[\s\S]*$/i, '')
-      .trim()
-  } else {
-    const m = text.match(/```json\s*([\s\S]*?"fix_hint"[\s\S]*?)```/i)
-    if (m) { rawLedger = m[1].trim(); cleanReply = text.replace(m[0], '').trim() }
-  }
-  if (!rawLedger) {
-    const m2 = text.match(/(\{[\s\S]*?"fix_hint"[\s\S]*?\}|\[[\s\S]*?"fix_hint"[\s\S]*?\])\s*$/i)
-    if (m2) {
-      rawLedger = m2[1]
-      cleanReply = text.slice(0, text.lastIndexOf(m2[0])).trim()
-    }
-  }
-  if (rawLedger) {
-    try {
-      const stripped = rawLedger.replace(/^```json/i,'').replace(/```$/i,'').trim()
-      const jm = stripped.match(/(\{[\s\S]*\}|\[[\s\S]*\])/)
-      const parsed = jm ? JSON.parse(jm[0]) : null
-      const arr = Array.isArray(parsed) ? parsed
-        : Array.isArray(parsed?.issues) ? parsed.issues : []
-      issues = arr.filter(i => i && i.id && i.kind && i.fix_hint).slice(0, 8)
-    } catch { issues = [] }
-  }
-  return { cleanReply, issues }
-}
-
-function buildFixContract({ sid, fingerprint, fieldSignals, userIsArabic }) {
+function buildFixContract({ fieldSignals, userIsArabic }) {
   const fs = String(fieldSignals || '')
   if (!fs.includes('@intent.fix')) return null
   const lang = userIsArabic ? '[lang: Arabic]' : '[lang: same_as_user]'
-  const ledger = getIssueLedger(sid, fingerprint)
-  if (ledger?.issues?.length) {
-    const list = ledger.issues.map(i => `${i.id}: ${i.kind||'issue'} at ${i.location||'?'} — ${i.fix_hint}`).join(' | ')
-    return `${lang}\n[task: code_fix][source: issue_ledger][depth: technical]\n[known_issues: ${list}]\n[goal: fix only listed issues]\n[avoid: redesign, unrelated features, broad rewrite]\n[shape: issue→fix→verified_code]`
-  }
-  return `${lang}\n[task: code_fix][source: fresh_audit_required][depth: technical]\n[goal: inspect current code, fix only concrete blocking issues]\n[avoid: redesign, unrelated features, broad rewrite]\n[shape: issue→fix→verified_code]`
+  return `${lang}\n[task: code_audit_then_fix][depth: technical][audience: developer]\n[source: raw_code]\n[goal: inspect current raw code, identify and fix concrete issues]\n[avoid: previous analysis, old issues, redesign, unrelated changes]\n[output: complete fixed and verified code]`
 }
 
 function buildAnalysisContract(fieldSignals, userIsArabic, opts) {
@@ -691,7 +649,6 @@ function buildAnalysisContract(fieldSignals, userIsArabic, opts) {
   if (!opts?.hasCodeContext) return null
   const hasAnalyze  = fs.includes('@intent.analyze')
   const hasExplain  = fs.includes('@intent.explain')
-  const hasReaudit  = fs.includes('@intent.reaudit')
   const hasFix      = fs.includes('@intent.fix') || fs.includes('@intent.refactor') || fs.includes('@intent.build')
   const surface     = fs.includes('@depth.surface')
   const technical   = fs.includes('@depth.technical')
@@ -699,11 +656,10 @@ function buildAnalysisContract(fieldSignals, userIsArabic, opts) {
   if (deepIntent) return null
   if (!hasAnalyze && !hasExplain && !hasFix && !surface && !technical) return null
   const lang = userIsArabic ? '[lang: Arabic]' : '[lang: same_as_user]'
-  if (hasReaudit) return [lang,'[task: code_reaudit][depth: technical][audience: developer]','[goal: audit current code, identify all concrete issues, create fresh issue ledger]','[avoid: repeating previous results]','[shape: issue→impact→fix]'].join('\n') + '\n[ledger: append ---CELF_ISSUE_LEDGER--- json after answer if concrete issues found]\n[issue_schema: {id,severity,kind,location,evidence,fix_hint}]\n[ledger_rule: concrete code issues only, max 8]'
   if (hasFix) return [lang,'[task: code_modify][depth: technical][audience: developer]','[goal: safe focused change]','[avoid: unrelated redesign]','[shape: change→reason→code]'].join('\n')
-  if (technical)  return [lang,'[task: code_audit][depth: technical][audience: developer]','[goal: security, correctness, performance]','[avoid: broad explanation]','[shape: issue→impact→fix]'].join('\n') + '\n[ledger: append ---CELF_ISSUE_LEDGER--- json after answer if concrete issues found]\n[issue_schema: {id,severity,kind,location,evidence,fix_hint}]\n[ledger_rule: concrete code issues only, max 8]'
   if (hasExplain) return [lang,'[task: explain_code][depth: surface][audience: nontechnical user]','[goal: explain visible behavior and limits]','[avoid: function walkthrough]','[shape: what_it_does→how_it_works→practical_note]'].join('\n')
-  return [lang,'[task: code_analysis][depth: surface][audience: practical user]','[goal: usefulness, risks, next action]','[avoid: function walkthrough]','[shape: purpose→value→risks→decision]'].join('\n') + '\n[ledger: append ---CELF_ISSUE_LEDGER--- json after answer if concrete issues found]\n[issue_schema: {id,severity,kind,location,evidence,fix_hint}]\n[ledger_rule: concrete code issues only, max 8]'
+
+  return [lang,'[task: code_analysis][depth: surface][audience: practical user]','[goal: explain purpose, risks, and next action briefly]','[avoid: fixing code unless asked]','[shape: purpose→issues→next_step]'].join('\n')
 }
 
 function computeHybridTokens({ surface, technical, modify, codeSize, inputWords, continuity, remaining, ceiling }) {
@@ -764,23 +720,6 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
 }
 
 const rawCodeStore        = new Map()
-const issueStore          = new Map()
-const ISSUE_TTL_MS        = 1000 * 60 * 30
-
-function codeFingerprint(raw) {
-  const s = String(raw ?? '').replace(/\s+/g,' ').trim()
-  let h = 2166136261
-  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h,16777619) }
-  return Math.abs(h >>> 0).toString(36)
-}
-
-function getIssueLedger(sid, fingerprint) {
-  const e = issueStore.get(sid)
-  if (!e) return null
-  if (e.fingerprint !== fingerprint) return null
-  if (Date.now() - e.createdAt > ISSUE_TTL_MS) { issueStore.delete(sid); return null }
-  return e
-}
 const codeSessionStore    = new Map()
 const sessionSummaryStore = new Map()
 const resumeBootstrapped  = new Set()
@@ -1411,12 +1350,12 @@ ${_rawCode.slice(0, 14000)}`
     const _cleanedBuiltHint = (built.systemHint ?? '').replace(/\[previously\][^\n]*/g, '').replace(/\n{2,}/g, '\n').trim() || null
 
     const userIsArabic    = /[\u0600-\u06FF]/.test(cleanedText || '')
-    if ((fieldSignals||'').includes('@intent.reaudit')) issueStore.delete(sid)
     const promptEditorMode  = editorMode && !_analysisOnly
     const _activeRaw        = storedRaw || codeBlocks.join('\n\n') || ''
-    const _activeFingerprint = codeFingerprint(_activeRaw)
+
     const spCodeContext = codeBlocks.length > 0 || !!effectiveMatch || (fieldSignals||'').includes('#code') || (fieldSignals||'').includes('#code_recall')
-    const fixContract = spCodeContext ? buildFixContract({ sid, fingerprint: _activeFingerprint, fieldSignals, userIsArabic }) : null
+    const fixContract = spCodeContext ? buildFixContract({ fieldSignals, userIsArabic }) : null
+
     const miniCtxResult = buildMiniContext({ engine, frontendContext: promptEditorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: _cleanedBuiltHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [], editorMode: promptEditorMode, wantsFullFile: _wantsFullFile, userIsArabic, hasFixContract: !!fixContract, hasCodeContext: spCodeContext })
 
     if (needsRawCode && !storedRaw && !codeBlocks.length) {
@@ -1505,14 +1444,6 @@ ${_rawCode.slice(0, 14000)}`
         outputTokensTotal += contData?.usage?.output_tokens ?? 0
         claudeData         = contData
       }
-      if (reply && _hasAnalysisSignal && spCodeContext && !_isSfPhase) {
-        const { cleanReply, issues } = extractIssueLedger(reply)
-        reply = cleanReply
-        if (issues.length > 0) {
-          const sourceCode = _activeRaw || codeBlocks.join('\n\n') || (typeof recoveredCode === 'string' ? recoveredCode : '') || ''
-          if (sourceCode) issueStore.set(sid, { domain: 'code', fingerprint: codeFingerprint(sourceCode), issues, createdAt: Date.now() })
-        }
-      }
     } catch (err) {
       if (err.name === 'AbortError') return res.status(504).json({ error: 'claude_timeout' })
       throw err
@@ -1569,7 +1500,6 @@ ${_rawCode.slice(0, 14000)}`
       flowType: sfFlowType ?? chooseSmartFlow(fieldSignals ?? ''), maxPhases: sfMaxPhases
     } : null
 
-
     const nextSuggestion = buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, questionSimilarity, userIsArabic })
 
     return res.json({ newSummary: newSummary ?? null, smartFlowMeta,
@@ -1608,7 +1538,6 @@ router.delete('/session/:id', (req, res) => {
   _fieldHistory.delete(req.params.id)
   _entityTracker.delete(req.params.id)
   rawCodeStore.delete(req.params.id)
-  issueStore.delete(req.params.id)
   codeSessionStore.delete(req.params.id)
   resumeBootstrapped.delete(req.params.id)
   capsuleMemory.delete(req.params.id)
