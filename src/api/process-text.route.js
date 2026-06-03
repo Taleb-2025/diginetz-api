@@ -583,54 +583,63 @@ function findPrevAnswer(filteredHistory, prevItem, lastTopicText) {
     : null
 }
 
-function buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, questionSimilarity, userIsArabic }) {
-  const fs = fieldSignals || ''
+function buildSuggestionLabel(mode, cleanedText, userIsArabic) {
+  const q = String(cleanedText || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/ما هو|ما هي|ما معنى|اشرح|شرح|حلل|تحليل|فسر|وضح|explain|what is|what are|analyze|describe/gi, '')
+    .replace(/[?؟!،,]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 36)
+  if (!q) return null
+  const ar = userIsArabic
+  const map = {
+    technical_audit:   ar ? 'تدقيق تقني للكود'           : 'Technical code audit',
+    fix_issues:        ar ? 'إصلاح المشاكل المكتشفة'      : 'Fix discovered issues',
+    verify_fix:        ar ? 'التحقق من اكتمال الإصلاح'    : 'Verify the fix is complete',
+    continue:          ar ? `تعمّق في: ${q}`               : `Go deeper: ${q}`,
+    practical_example: ar ? `مثال على: ${q}`               : `Example: ${q}`,
+    deepen_concept:    ar ? `أعمق في: ${q}`                : `Deeper on: ${q}`,
+    apply_knowledge:   ar ? `تطبيق: ${q}`                  : `Apply: ${q}`,
+  }
+  return map[mode] || null
+}
 
+function buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, questionSimilarity, userIsArabic, cleanedText }) {
+  const fs = fieldSignals || ''
   if (fs.includes('?ambiguous') || fs.includes('::reset') || fs.includes('?failure')) return null
   if (!reply || reply.length < 80) return null
   if ((routeConf ?? 0) < 0.60) return null
-
-  const isAr      = userIsArabic
-  const hasCode   = fs.includes('#code') || fs.includes('#code_recall')
-  const isAnalyze = fs.includes('@intent.analyze') || fs.includes('@intent.explain')
-  const isSurface = fs.includes('@depth.surface')
-  const isTech    = fs.includes('@depth.technical')
-  const isFix     = fs.includes('@intent.fix')
-  const conf      = routeConf ?? 0.60
-
+  const isAr    = userIsArabic
+  const t       = (ar, de, en) => isAr ? ar : en
+  const hasCode = fs.includes('#code') || fs.includes('#code_recall')
+  const isAnz   = fs.includes('@intent.analyze') || fs.includes('@intent.explain')
+  const isSurf  = fs.includes('@depth.surface')
+  const isTech  = fs.includes('@depth.technical')
+  const isFix   = fs.includes('@intent.fix')
+  const conf    = routeConf ?? 0.60
+  const simil   = questionSimilarity ?? 0
   let s = null
-
-  if (isAnalyze && isSurface && hasCode) {
-    s = {
-      mode: 'technical_audit',
-      label: isAr ? 'تدقيق تقني' : 'Technical Audit',
-      text:  isAr ? 'افحص الكود من ناحية الأمان والأداء' : 'Review this code for security and performance issues',
-      confidence: conf
-    }
-  } else if ((isAnalyze || isTech) && hasCode && !isSurface) {
-    s = {
-      mode: 'fix_issues',
-      label: isAr ? 'إصلاح المشاكل' : 'Fix Issues',
-      text:  isAr ? 'أصلح هذه المشاكل في الكود' : 'Fix the issues you found in this code',
-      confidence: conf
-    }
-  } else if (isFix && hasCode) {
-    s = {
-      mode: 'verify_fix',
-      label: isAr ? 'تحقق من الإصلاح' : 'Verify Fix',
-      text:  isAr ? 'حلّل الكود مجدداً وتحقق من اكتمال الإصلاحات' : 'Analyze the code again and verify all fixes are complete',
-      confidence: conf * 0.90
-    }
-  } else if (continuity > 0.50 && (questionSimilarity ?? 0) > 0.55 && hasCode) {
-    s = {
-      mode: 'continue',
-      label: isAr ? 'تعمّق أكثر' : 'Go Deeper',
-      text:  isAr ? 'أعطني تفاصيل أكثر' : 'Give me more details',
-      confidence: conf * 0.85
-    }
+  if (hasCode) {
+    if (isAnz && isSurf)
+      s = { mode:'technical_audit', label:t('تدقيق تقني','Technical Audit'), text:t('افحص الكود من ناحية الأمان والأداء','Review this code for security and performance'), confidence:conf }
+    else if ((isAnz || isTech) && !isSurf)
+      s = { mode:'fix_issues', label:t('إصلاح المشاكل','Fix Issues'), text:t('أصلح هذه المشاكل في الكود','Fix the issues found in this code'), confidence:conf }
+    else if (isFix)
+      s = { mode:'verify_fix', label:t('تحقق من الإصلاح','Verify Fix'), text:t('حلّل الكود مجدداً وتحقق من الإصلاحات','Analyze the code again and verify all fixes'), confidence:conf * 0.90 }
+    else if (continuity > 0.50 && simil > 0.55)
+      s = { mode:'continue', label:t('تعمّق أكثر','Go Deeper'), text:t('أعطني تفاصيل أكثر','Give me more details'), confidence:conf * 0.85 }
+  } else {
+    if (isAnz && reply.length > 200 && continuity < 0.40)
+      s = { mode:'practical_example', label:t('مثال عملي','Practical Example'), text:t('أعطني مثالاً عملياً على هذا','Give me a practical example of this'), confidence:conf * 0.85 }
+    else if (isAnz && continuity > 0.50)
+      s = { mode:'deepen_concept', label:t('أعمق في هذه النقطة','Deepen This Point'), text:t('أريد فهم هذه النقطة بشكل أعمق','I want to understand this point better'), confidence:conf * 0.80 }
+    else if (continuity > 0.60 && simil > 0.50 && reply.length > 150)
+      s = { mode:'apply_knowledge', label:t('كيف أطبق هذا؟','How to apply this?'), text:t('كيف أطبق هذا في الواقع؟','How can I apply this in practice?'), confidence:conf * 0.75 }
   }
-
   if (!s || s.confidence < 0.60) return null
+  const smartLabel = buildSuggestionLabel(s.mode, cleanedText, isAr)
+  if (smartLabel) s.label = smartLabel
   s.strength = s.confidence < 0.75 ? 'soft' : 'strong'
   return s
 }
@@ -1500,7 +1509,7 @@ ${_rawCode.slice(0, 14000)}`
       flowType: sfFlowType ?? chooseSmartFlow(fieldSignals ?? ''), maxPhases: sfMaxPhases
     } : null
 
-    const nextSuggestion = buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, questionSimilarity, userIsArabic })
+    const nextSuggestion = buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, questionSimilarity, userIsArabic, cleanedText })
 
     return res.json({ newSummary: newSummary ?? null, smartFlowMeta,
       reply, nextSuggestion: nextSuggestion ?? null, celfVault: vaultToSave, observer: observerBox,
