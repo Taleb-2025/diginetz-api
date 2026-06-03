@@ -605,43 +605,86 @@ function buildSuggestionLabel(mode, cleanedText, userIsArabic) {
   return map[mode] || null
 }
 
-function buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, questionSimilarity, userIsArabic, cleanedText }) {
-  const fs = fieldSignals || ''
-  if (fs.includes('?ambiguous') || fs.includes('::reset') || fs.includes('?failure')) return null
-  if (!reply || reply.length < 80) return null
-  if ((routeConf ?? 0) < 0.60) return null
-  const isAr    = userIsArabic
-  const t       = (ar, de, en) => isAr ? ar : en
-  const hasCode = fs.includes('#code') || fs.includes('#code_recall')
-  const isAnz   = fs.includes('@intent.analyze') || fs.includes('@intent.explain')
-  const isSurf  = fs.includes('@depth.surface')
-  const isTech  = fs.includes('@depth.technical')
-  const isFix   = fs.includes('@intent.fix')
-  const conf    = routeConf ?? 0.60
-  const simil   = questionSimilarity ?? 0
-  let s = null
-  if (hasCode) {
-    if (isAnz && isSurf)
-      s = { mode:'technical_audit', label:t('تدقيق تقني','Technical Audit'), text:t('افحص الكود من ناحية الأمان والأداء','Review this code for security and performance'), confidence:conf }
-    else if ((isAnz || isTech) && !isSurf)
-      s = { mode:'fix_issues', label:t('إصلاح المشاكل','Fix Issues'), text:t('أصلح هذه المشاكل في الكود','Fix the issues found in this code'), confidence:conf }
-    else if (isFix)
-      s = { mode:'verify_fix', label:t('تحقق من الإصلاح','Verify Fix'), text:t('حلّل الكود مجدداً وتحقق من الإصلاحات','Analyze the code again and verify all fixes'), confidence:conf * 0.90 }
-    else if (continuity > 0.50 && simil > 0.55)
-      s = { mode:'continue', label:t('تعمّق أكثر','Go Deeper'), text:t('أعطني تفاصيل أكثر','Give me more details'), confidence:conf * 0.85 }
-  } else {
-    if (isAnz && reply.length > 200 && continuity < 0.40)
-      s = { mode:'practical_example', label:t('مثال عملي','Practical Example'), text:t('أعطني مثالاً عملياً على هذا','Give me a practical example of this'), confidence:conf * 0.85 }
-    else if (isAnz && continuity > 0.50)
-      s = { mode:'deepen_concept', label:t('أعمق في هذه النقطة','Deepen This Point'), text:t('أريد فهم هذه النقطة بشكل أعمق','I want to understand this point better'), confidence:conf * 0.80 }
-    else if (continuity > 0.60 && simil > 0.50 && reply.length > 150)
-      s = { mode:'apply_knowledge', label:t('كيف أطبق هذا؟','How to apply this?'), text:t('كيف أطبق هذا في الواقع؟','How can I apply this in practice?'), confidence:conf * 0.75 }
+function buildQuestionSP({ fieldSignals, routeConf, continuity, reply, cleanedText, questionSimilarity, userIsArabic }) {
+  const fs       = String(fieldSignals || '')
+  const baseConf = Math.max(Number(routeConf || 0), Number(questionSimilarity || 0))
+  if (baseConf < 0.55) return null
+  const normalize  = w => String(w).replace(/[\u064B-\u065F\u0670]/g, '').replace(/^ال/, '').replace(/[.,،;:!?؟]/g, '').toLowerCase()
+  const stopWords  = new Set('هذا هذه ذلك هو هي يعني بمعنى شرح اشرح ما ماذا كيف لماذا why what how the this that is are explain يستخدم يمكن في من على إلى عن أن مع أو also and or of to a an'.split(' '))
+  const text       = String(reply || '').replace(/```[\s\S]*?```/g, ' ').trim()
+  const qWords     = new Set(
+    String(cleanedText || '').replace(/[?؟!،.]/g, ' ').split(/\s+/)
+      .map(normalize).filter(w => w.length > 2 && !stopWords.has(w))
+  )
+  const normWords  = text.split(/\s+/).filter(w => { const n = normalize(w); return n.length > 3 && !qWords.has(n) && !stopWords.has(n) && !/^\d/.test(n) })
+  const freq = {}
+  normWords.forEach(w => { const k = normalize(w); freq[k] = (freq[k] || 0) + 1 })
+  const scored = Object.entries(freq).map(([k,f]) => ({ k, score: f * k.length })).sort((a,b) => b.score - a.score)
+  const topSet = new Set(scored.slice(0, 5).map(x => x.k))
+  let topic = ''
+  const sents = text.split(/[.؟!\n،]/).map(s => s.trim()).filter(s => s.length > 8)
+  for (const s of sents) {
+    const found = s.split(/\s+/).filter(w => topSet.has(normalize(w)))
+    if (found.length >= 2) { topic = found.slice(0, 2).join(' ').replace(/[.,،;:!?؟]/g, '').slice(0, 30); break }
   }
+  if (!topic && scored[0]) topic = scored[0].k.slice(0, 30)
+  if (!topic) topic = userIsArabic ? 'هذه النقطة' : 'this point'
+  return {
+    type: 'normal_question',
+    intent: fs.includes('@intent.explain') ? 'explain' : fs.includes('@intent.analyze') ? 'analyze' : 'general',
+    topic, depth: fs.includes('@depth.technical') ? 'technical' : 'surface',
+    continuity: continuity > 0.60 ? 'high' : continuity > 0.35 ? 'medium' : 'low',
+    confidence: baseConf, replyLong: text.length > 300, lang: userIsArabic ? 'Arabic' : 'other'
+  }
+}
+
+function selectSuggestionFromSP(sp) {
+  if (!sp || sp.confidence < 0.60) return null
+  const ar = sp.lang === 'Arabic', t = sp.topic
+  let s = null
+  if (sp.intent === 'explain' && sp.continuity === 'low')
+    s = { mode:'next_concept',   label:ar?`تابع: ${t}`:`Next: ${t}`,       text:ar?`ما هو ${t}؟`:`What is ${t}?`,                     confidence:sp.confidence }
+  else if (sp.intent === 'explain')
+    s = { mode:'deepen_concept', label:ar?`تعمّق في: ${t}`:`Deeper: ${t}`, text:ar?`اشرح ${t} بشكل أعمق`:`Explain ${t} in more depth`, confidence:sp.confidence * 0.90 }
+  else if (sp.intent === 'analyze')
+    s = { mode:'deepen_concept', label:ar?`تحليل: ${t}`:`Analyze: ${t}`,   text:ar?`حلّل ${t} بشكل أعمق`:`Analyze ${t} in more depth`,  confidence:sp.confidence * 0.90 }
+  else if (sp.continuity === 'high')
+    s = { mode:'apply_knowledge',label:ar?`تطبيق: ${t}`:`Apply: ${t}`,     text:ar?`كيف يُطبَّق ${t} عملياً؟`:`How is ${t} applied?`,   confidence:sp.confidence * 0.85 }
+  else if (sp.replyLong)
+    s = { mode:'rephrase',       label:ar?`تبسيط: ${t}`:`Simplify: ${t}`,  text:ar?`اشرح ${t} بطريقة أبسط`:`Explain ${t} more simply`,  confidence:sp.confidence * 0.80 }
   if (!s || s.confidence < 0.60) return null
-  const smartLabel = buildSuggestionLabel(s.mode, cleanedText, isAr)
-  if (smartLabel) s.label = smartLabel
-  s.strength = s.confidence < 0.75 ? 'soft' : 'strong'
+  s.strength = s.confidence >= 0.75 ? 'strong' : 'soft'
   return s
+}
+
+function buildNextSuggestion({ fieldSignals, routeConf, continuity, reply, questionSimilarity, userIsArabic, cleanedText }) {
+  const fs      = String(fieldSignals || '')
+  const text    = String(reply || '').replace(/```[\s\S]*?```/g, ' ').trim()
+  if (!text || text.length < 80) return null
+  if (fs.includes('?ambiguous') || fs.includes('::reset') || fs.includes('?failure')) return null
+  const baseConf = Math.max(Number(routeConf || 0), Number(questionSimilarity || 0))
+  if (baseConf < 0.60) return null
+  const isAr     = !!userIsArabic
+  const hasCode  = fs.includes('#code') || fs.includes('#code_recall') || /function|class|const|let|var|import|export|<\/html>|<script/i.test(text)
+  const isAnalyze = fs.includes('@intent.analyze')
+  const isSurface = fs.includes('@depth.surface')
+  const isTech    = fs.includes('@depth.technical')
+  const isFix     = fs.includes('@intent.fix')
+  const conf      = baseConf
+  if (hasCode) {
+    let s = null
+    if (isAnalyze && isSurface)
+      s = { mode:'technical_audit', label:isAr?'تدقيق تقني للكود':'Technical code audit', text:isAr?'افحص الكود من ناحية الأمان والأداء':'Review this code for security and performance', confidence:conf }
+    else if (isAnalyze || isTech)
+      s = { mode:'fix_issues', label:isAr?'إصلاح مشاكل الكود':'Fix code issues', text:isAr?'أصلح هذه المشاكل في الكود':'Fix the issues in this code', confidence:conf }
+    else if (isFix)
+      s = { mode:'verify_fix', label:isAr?'تحقق من الإصلاح':'Verify the fix', text:isAr?'حلّل الكود مجدداً وتحقق من اكتمال الإصلاحات':'Analyze the code again and verify all fixes', confidence:conf * 0.90 }
+    if (!s || s.confidence < 0.60) return null
+    s.strength = s.confidence >= 0.75 ? 'strong' : 'soft'
+    return s
+  }
+  const sp = buildQuestionSP({ fieldSignals, routeConf, continuity, reply, cleanedText, questionSimilarity, userIsArabic })
+  return selectSuggestionFromSP(sp)
 }
 
 function buildFixContract({ fieldSignals, userIsArabic }) {
