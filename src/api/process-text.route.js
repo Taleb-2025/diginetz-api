@@ -650,6 +650,8 @@ function selectSuggestionFromSP(sp) {
     s = { mode:'deepen_concept', label:ar?`تحليل: ${t}`:`Analyze: ${t}`,   text:ar?`حلّل ${t} بشكل أعمق`:`Analyze ${t} in more depth`,  confidence:sp.confidence * 0.90 }
   else if (sp.continuity === 'high')
     s = { mode:'apply_knowledge',label:ar?`تطبيق: ${t}`:`Apply: ${t}`,     text:ar?`كيف يُطبَّق ${t} عملياً؟`:`How is ${t} applied?`,   confidence:sp.confidence * 0.85 }
+  else if (sp.intent === 'general' && sp.continuity === 'low')
+    s = { mode:'next_concept',   label:ar?`تابع: ${t}`:`Next: ${t}`,       text:ar?`ما هو ${t}؟`:`What is ${t}?`,                     confidence:sp.confidence }
   else if (sp.replyLong)
     s = { mode:'rephrase',       label:ar?`تبسيط: ${t}`:`Simplify: ${t}`,  text:ar?`اشرح ${t} بطريقة أبسط`:`Explain ${t} more simply`,  confidence:sp.confidence * 0.80 }
   if (!s || s.confidence < 0.60) return null
@@ -698,7 +700,16 @@ function buildAnalysisContract(fieldSignals, userIsArabic, opts) {
   const fs  = String(fieldSignals || '')
   const wff = opts?.wantsFullFile
   if (wff) return null
-  if (!opts?.hasCodeContext) return null
+  if (!opts?.hasCodeContext) {
+    const surface  = fs.includes('@depth.surface')
+    const explain  = fs.includes('@intent.explain')
+    const analyze  = fs.includes('@intent.analyze')
+    if (surface || explain || analyze) {
+      const lang = userIsArabic ? '[lang: Arabic]' : '[lang: same_as_user]'
+      return [lang,'[task: knowledge_answer][depth: surface][audience: user]','[goal: direct useful answer]','[avoid: unnecessary details, repetition]','[shape: definition→brief_explanation]'].join('\n')
+    }
+    return null
+  }
   const hasAnalyze  = fs.includes('@intent.analyze')
   const hasExplain  = fs.includes('@intent.explain')
   const hasFix      = fs.includes('@intent.fix') || fs.includes('@intent.refactor') || fs.includes('@intent.build')
