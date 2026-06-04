@@ -1,5 +1,6 @@
-import { resolveConceptAnchors, blendWithAnchors, computeRatio } from './concept-anchor.js'
 
+import { resolveConceptAnchors, blendWithAnchors, computeRatio }
+  from '../utils/concept-anchor.js'
 
   export class CELF_Engine_AI_V5 {
 
