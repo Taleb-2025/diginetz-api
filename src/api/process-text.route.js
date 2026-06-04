@@ -372,59 +372,6 @@ function buildSemanticPattern(anchors) {
   return null
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  TRANSLATE SIGNALS
-// ═══════════════════════════════════════════════════════════════
-
-function translateSignals(fieldSignals) {
-  const fs = String(fieldSignals || '')
-  if (!fs) return null
-  const instructions = []
-
-  if (fs.includes('!critical'))              instructions.push('URGENT: production impact — act immediately, prioritize speed.')
-  if (fs.includes('!blocked'))               instructions.push('User is blocked and cannot proceed — resolve this first.')
-
-  if (fs.includes('?failure'))              instructions.push('Start by diagnosing the root cause before proposing any fix.')
-  if (fs.includes('?regression'))           instructions.push('This worked before — focus on what changed recently.')
-  if (fs.includes('?performance'))          instructions.push('Profile first: identify the bottleneck before optimizing.')
-  if (fs.includes('?security'))             instructions.push('Security issue: check for vulnerabilities, sanitize inputs, verify auth.')
-  if (fs.includes('?causal'))               instructions.push('User wants to understand WHY — explain the root cause clearly.')
-  if (fs.includes('?ambiguous'))            instructions.push('Request is unclear — ask one clarifying question before proceeding.')
-
-  if (fs.includes('@intent.fix'))           instructions.push('If a fix is needed → focus on the broken part only, avoid unrelated changes.')
-  if (fs.includes('@intent.refactor'))      instructions.push('If refactoring → improve structure while keeping existing behavior intact.')
-  if (fs.includes('@intent.analyze'))       instructions.push('Analyze purpose, structure, risks, and key issues. Report findings concisely.')
-  if (fs.includes('@intent.build'))         instructions.push('If building → define structure first, then implement step by step.')
-  if (fs.includes('@intent.explain'))       instructions.push('Explain at the appropriate level — avoid unnecessary jargon.')
-  if (fs.includes('@intent.review'))        instructions.push('Review for correctness, security, and quality — list findings clearly.')
-
-  if (fs.includes('::backend/auth'))        instructions.push('Scope: authentication and authorization flow only.')
-  if (fs.includes('::backend/cache'))       instructions.push('Scope: caching layer — Redis, memory, or buffer strategy.')
-  if (fs.includes('::backend/realtime'))    instructions.push('Scope: real-time — WebSocket, SSE, or live data handling.')
-  if (fs.includes('::backend/performance')) instructions.push('Scope: performance — latency, memory, and throughput.')
-  if (fs.includes('::backend/flow'))        instructions.push('Scope: request flow — middleware, pipeline, handlers.')
-  if (fs.includes('::database'))            instructions.push('Scope: database — queries, schema, migrations, or ORM.')
-  if (fs.includes('::api/gateway'))         instructions.push('Scope: API layer — routes, endpoints, middleware.')
-  if (fs.includes('::infra'))               instructions.push('Scope: infrastructure — deployment, Docker, CI/CD.')
-  if (fs.includes('::debug'))               instructions.push('Scope: debugging — trace the error, identify the source.')
-  if (fs.includes('::debug/test'))          instructions.push('Scope: testing — unit tests, integration, coverage.')
-  if (fs.includes('::code'))                instructions.push('Scope: general code review and analysis.')
-
-  if (fs.includes('#code_recall'))          instructions.push('Reference the previously provided code if relevant.')
-  if (fs.includes('#project_continuation')) instructions.push('This is an ongoing project — recall prior context and decisions.')
-  if (fs.includes('#tests'))                instructions.push('If tests are requested → include test cases.')
-  if (fs.includes('#diagram'))              instructions.push('Include a diagram or visual representation if helpful.')
-  if (fs.includes('#docs'))                 instructions.push('Generate documentation if asked.')
-
-  if (fs.includes('depth'))                 instructions.push('Provide full technical depth and detail.')
-  if (fs.includes('concise'))               instructions.push('Be brief and direct — no unnecessary explanation.')
-  if (fs.includes('step-by-step'))          instructions.push('Structure the answer as sequential numbered steps.')
-  if (fs.includes('explore'))               instructions.push('Explore openly — no forced conclusion required.')
-
-  if (fs.includes('::reset'))               instructions.push('Fresh start — ignore all prior context.')
-
-  return instructions.length > 0 ? instructions.join('\n') : null
-}
 
 // ═══════════════════════════════════════════════════════════════
 //  DIRECTIVES BUILDER
@@ -433,22 +380,20 @@ function translateSignals(fieldSignals) {
 function buildDirectives(anchors, userIsArabic, fieldSignals) {
   const lang    = userIsArabic ? '[lang: Arabic]' : '[lang: same_as_user]'
   const pattern = buildSemanticPattern(anchors)
-  const signals = translateSignals(fieldSignals)
-
-  const directivesPart = [lang, pattern].filter(Boolean).join('\n')
-  const signalsPart    = signals ?? null
+  const signals = fieldSignals ?? null
 
   const parts = []
+  const directivesPart = [lang, pattern].filter(Boolean).join('\n')
   if (directivesPart) parts.push('[Routing Directives]\n' + directivesPart)
-  if (signalsPart)    parts.push('[Routing Signals]\n' + signalsPart)
-  return parts.length ? parts.join('\n') : null
+  if (signals)        parts.push('[Routing Signals]\n' + signals)
+  return parts.join('\n') || null
 }
 
 // ═══════════════════════════════════════════════════════════════
 //  FIELD SIGNALS
 // ═══════════════════════════════════════════════════════════════
 
-function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity, anchors = []) {
+function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity, anchors = [], hasStoredCode = false) {
   const field  = celfResult.field ?? {}
   const novel  = field.noveltyPressure   ?? 0
   const coher  = field.semanticCoherence ?? 0
@@ -485,23 +430,31 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity,
     if (ANCHOR_TO_STATE[a])  add(ANCHOR_TO_STATE[a],  0.95)
   }
 
-  if (/critical|قاتل|خطير|urgent|عاجل/i.test(cleanedText))              add('!critical', 1.00)
-  if (/موقوف|blocked|cannot proceed/i.test(cleanedText))                  add('!blocked',  0.98)
-  if (/كان يعمل|used to work|regression/i.test(cleanedText))              add('?regression', 0.90)
-  if (/بطيء|slow|latency|performance|memory leak/i.test(cleanedText))    add('?performance', 0.90)
-  if (/ثغرة|vulnerability|injection|xss|csrf/i.test(cleanedText))        add('?security', 0.92)
-  if (/لماذا|why|warum/i.test(cleanedText))                               add('?causal', 0.60)
-  if (/رسم|diagram|chart/i.test(cleanedText))                             add('#diagram', 0.75)
-  if (/توثيق|documentation|docs/i.test(cleanedText))                     add('#docs', 0.75)
-  if (/بالتفصيل|detailed|full|شامل/i.test(cleanedText))                  add('depth', 0.70)
-  if (/باختصار|brief|concise/i.test(cleanedText))                        add('concise', 0.70)
-  if (/خطوة|step by step/i.test(cleanedText))                             add('step-by-step', 0.70)
-  if (codeBlocks.length > 0)                                              add('#code', 0.70)
+  if (/critical|قاتل|خطير|urgent|عاجل/i.test(cleanedText))               add('!critical', 1.00)
+  if (/موقوف|blocked|cannot proceed/i.test(cleanedText))                   add('!blocked',  0.98)
+  if (/كان يعمل|used to work|regression/i.test(cleanedText))               add('?regression', 0.90)
+  if (/بطيء|slow|latency|performance|memory leak/i.test(cleanedText))     add('?performance', 0.90)
+  if (/ثغرة|vulnerability|injection|xss|csrf/i.test(cleanedText))         add('?security', 0.92)
+  if (/لماذا|why|warum/i.test(cleanedText))                                add('?causal', 0.60)
+  if (/غامض|unclear|ambiguous|لا أفهم/i.test(cleanedText))                add('?ambiguous', 0.60)
+  if (/رسم|diagram|chart|visualize/i.test(cleanedText))                   add('#diagram', 0.75)
+  if (/اختبار|test cases|spec|unit test/i.test(cleanedText))              add('#tests', 0.75)
+  if (/توثيق|documentation|docs|readme/i.test(cleanedText))               add('#docs', 0.75)
+  if (/ضمير|هذا|ذلك|it|this|that/i.test(cleanedText))                    add('#resolved_ref', 0.65)
+  if (/مشروع|project|continuation/i.test(cleanedText) && continuity>0.50) add('#project_continuation', 0.80)
+  if (/بالتفصيل|detailed|full|شامل|in depth/i.test(cleanedText))         add('@depth.technical', 0.70)
+  if (/باختصار|brief|concise|بإيجاز/i.test(cleanedText))                 add('@depth.surface', 0.70)
+  if (/خطوة|step by step|بالترتيب/i.test(cleanedText))                    add('step-by-step', 0.70)
+  if (/خوارزم|algorithm|sort|search|complexity/i.test(cleanedText))       add('::analysis/algo', 0.75)
+  if (/debug|trace|تتبع|يعمل.*لكن/i.test(cleanedText))                   add('::debug', 0.75)
+  if (codeBlocks.length > 0)                                               add('#code', 0.80)
+  if (hasStoredCode)                                                        add('#code_recall', 0.75)
 
   const state = _semanticState.get(sid) ?? {}
-  if ((state.driftCount ?? 0) >= 2)                                       add('::reset', 0.85)
-  if (novel > 0.70)                                                        add('explore', novel)
-  if (continuity > 0.35)                                                   add('#continuity', continuity + coher + 0.3)
+  if ((state.driftCount ?? 0) >= 2)                                        add('::reset', 0.85)
+  if (novel > 0.70)                                                         add('explore', novel)
+  if (continuity > 0.35)                                                    add('#continuity', continuity + coher + 0.3)
+  if (continuity > 0.20 && (state.driftCount ?? 0) === 0)                  add('#followup', 0.60)
 
   const MAX_SIGNALS = 7
   const top = weighted
@@ -680,7 +633,7 @@ router.post('/process-text', async (req, res) => {
     const { anchors } = resolveConceptAnchors(cleanedText)
 
     // ── ⑤ FIELD SIGNALS ──────────────────────────────────────────
-    const fieldSignals = buildFieldSignals(sid, processed.celfResult, cleanedText, codeBlocks, continuity, anchors)
+    const fieldSignals = buildFieldSignals(sid, processed.celfResult, cleanedText, codeBlocks, continuity, anchors, hasStoredCode)
     updateSemanticState(sid, classifyDomain(cleanedText))
 
     // ── ⑥ CODE CONTEXT ───────────────────────────────────────────
