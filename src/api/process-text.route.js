@@ -521,7 +521,8 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity,
   if (behaviorMod)                                                        add(behaviorMod, 0.70)
   if (hasCausal)                                                          add('?causal', 0.60)
   const depthSignal = detectExplanationDepth(_q || cleanedText)
-  if (depthSignal?.signal)                                               add(depthSignal.signal, depthSignal.weight)
+  if (depthSignal?.signal && intentSignal !== '@intent.fix' && intentSignal !== '@intent.refactor' && intentSignal !== '@intent.build')
+                                                                         add(depthSignal.signal, depthSignal.weight)
   if (hasDeepIntent)                                                      add('depth', intent + 0.2)
   if (novel > 0.70 && !hasFollowup)                                      add('explore', novel)
   if (state.driftCount >= 2)                                             add('::reset', 0.85)
@@ -1436,7 +1437,7 @@ router.post('/process-text', async (req, res) => {
     const filteredHistory    = filterStyleInstructions(history)
     const _cleanedBuiltHint  = (built.systemHint ?? '').replace(/\[previously\][^\n]*/g,'').replace(/\n{2,}/g,'\n').trim() || null
     const userIsArabic       = /[\u0600-\u06FF]/.test(cleanedText || '')
-    const promptEditorMode   = editorMode && !_analysisOnly
+    const promptEditorMode   = editorMode
     const spCodeContext      = codeBlocks.length > 0 || !!effectiveMatch || (fieldSignals||'').includes('#code') || (fieldSignals||'').includes('#code_recall')
     const fixContract        = spCodeContext ? buildFixContract({ fieldSignals, userIsArabic, anchors: _anchors }) : null
 
