@@ -804,6 +804,57 @@ function findPrevAnswer(filteredHistory, prevItem, lastTopicText) {
   return ans?.role === 'assistant' ? ans.content.replace(/```[\s\S]*?```/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 120) : null
 }
 
+function translateSignals(fieldSignals) {
+  const fs = String(fieldSignals || '')
+  if (!fs) return null
+  const instructions = []
+
+  if (fs.includes('!critical'))              instructions.push('URGENT: production impact — act immediately, prioritize speed.')
+  if (fs.includes('!blocked'))               instructions.push('User is blocked and cannot proceed — resolve this first.')
+
+  if (fs.includes('?failure'))              instructions.push('Start by diagnosing the root cause before proposing any fix.')
+  if (fs.includes('?regression'))           instructions.push('This worked before — focus on what changed recently.')
+  if (fs.includes('?performance'))          instructions.push('Profile first: identify the bottleneck before optimizing.')
+  if (fs.includes('?security'))             instructions.push('Security issue: check for vulnerabilities, sanitize inputs, verify auth.')
+  if (fs.includes('?causal'))               instructions.push('User wants to understand WHY — explain the root cause clearly.')
+  if (fs.includes('?ambiguous'))            instructions.push('Request is unclear — ask one clarifying question before proceeding.')
+
+  if (fs.includes('@intent.fix'))           instructions.push('Fix only what is broken. Do not redesign or refactor unnecessarily.')
+  if (fs.includes('@intent.refactor'))      instructions.push('Improve structure and clarity. Keep existing behavior intact.')
+  if (fs.includes('@intent.analyze'))       instructions.push('Analyze purpose, structure, risks, and key issues. Be precise.')
+  if (fs.includes('@intent.build'))         instructions.push('Build from scratch. Define structure first, then implement.')
+  if (fs.includes('@intent.explain'))       instructions.push('Explain clearly for the user level. Avoid unnecessary jargon.')
+  if (fs.includes('@intent.review'))        instructions.push('Review for correctness, security, and quality. List findings.')
+
+  if (fs.includes('::backend/auth'))        instructions.push('Scope: authentication and authorization flow only.')
+  if (fs.includes('::backend/cache'))       instructions.push('Scope: caching layer — Redis, memory, or buffer strategy.')
+  if (fs.includes('::backend/realtime'))    instructions.push('Scope: real-time — WebSocket, SSE, or live data handling.')
+  if (fs.includes('::backend/performance')) instructions.push('Scope: performance — latency, memory, and throughput.')
+  if (fs.includes('::backend/flow'))        instructions.push('Scope: request flow — middleware, pipeline, handlers.')
+  if (fs.includes('::database'))            instructions.push('Scope: database — queries, schema, migrations, or ORM.')
+  if (fs.includes('::api/gateway'))         instructions.push('Scope: API layer — routes, endpoints, middleware.')
+  if (fs.includes('::infra'))               instructions.push('Scope: infrastructure — deployment, Docker, CI/CD.')
+  if (fs.includes('::debug'))               instructions.push('Scope: debugging — trace the error, identify the source.')
+  if (fs.includes('::debug/test'))          instructions.push('Scope: testing — unit tests, integration, coverage.')
+  if (fs.includes('::code'))                instructions.push('Scope: general code review and analysis.')
+  if (fs.includes('::analysis/algo'))       instructions.push('Scope: algorithm — complexity, correctness, optimization.')
+
+  if (fs.includes('#code_recall'))          instructions.push('Reference the previously provided code. Do not ask for it again.')
+  if (fs.includes('#project_continuation')) instructions.push('This is an ongoing project — recall all prior context and decisions.')
+  if (fs.includes('#tests'))                instructions.push('Output must include test cases.')
+  if (fs.includes('#diagram'))              instructions.push('Include a diagram or visual representation.')
+  if (fs.includes('#docs'))                 instructions.push('Generate documentation for the code or feature.')
+
+  if (fs.includes('depth'))                 instructions.push('Provide full technical depth and detail.')
+  if (fs.includes('concise'))               instructions.push('Be brief and direct — no unnecessary explanation.')
+  if (fs.includes('step-by-step'))          instructions.push('Structure the answer as sequential numbered steps.')
+  if (fs.includes('explore'))               instructions.push('Explore openly — no forced conclusion required.')
+
+  if (fs.includes('::reset'))               instructions.push('Fresh start — ignore all prior context.')
+
+  return instructions.length > 0 ? instructions.join('\n') : null
+}
+
 function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit, codeHint, builtSystemHint, activeStyle, continuity, phase, fieldSignals, prevItem, lastTopicText, sessionSummary, filteredHistory, editorMode, wantsFullFile, userIsArabic = false, hasFixContract = false, hasCodeContext = false, fieldShifted = false, anchors = [] }) {
   const parts = []
   if (sessionSummary?.text && !fieldShifted) {
@@ -815,7 +866,8 @@ function buildMiniContext({ engine, frontendContext, capsuleEvalResult, vaultHit
   const contract = hasFixContract ? null : buildAnalysisContract(fieldSignals, userIsArabic, { wantsFullFile, hasCodeContext }, anchors)
   if (contract) parts.push(contract)
   if (userIsArabic && !contract && !hasFixContract) parts.push('Respond in Arabic.')
-  if (fieldSignals) parts.push(fieldSignals)
+  const translatedSignals = translateSignals(fieldSignals)
+  if (translatedSignals) parts.push(translatedSignals)
   const stateHint = buildStateHint(phase, continuity)
   if (stateHint) parts.push(stateHint)
   if (codeHint)   parts.push(codeHint)
