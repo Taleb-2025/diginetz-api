@@ -993,10 +993,12 @@ function buildAnalysisContract(fieldSignals, userIsArabic, opts, anchors = []) {
   return [
     lang,
     pattern,
-    '[task: code_analysis][depth: surface]',
-    '[goal: explain purpose, risks, next action]',
-    '[avoid: fixing code unless asked]',
-    '[shape: purpose→issues→next_step]'
+    '[task: code_analysis][depth: technical]',
+    '[goal: identify purpose, structure, risks, key issues]',
+    '[avoid: generating fixed code, line-by-line walkthrough, repetition]',
+    '[shape: overview → key_findings → recommendations]',
+    '[output: concise — findings only, no full rewrite]',
+    'Analyze only. Do not generate fixed code unless explicitly asked.'
   ].filter(Boolean).join('\n')
 }
 
@@ -1491,7 +1493,7 @@ router.post('/process-text', async (req, res) => {
     const userIsArabic       = /[\u0600-\u06FF]/.test(cleanedText || '')
     const promptEditorMode   = editorMode
     const spCodeContext      = codeBlocks.length > 0 || !!effectiveMatch || (fieldSignals||'').includes('#code') || (fieldSignals||'').includes('#code_recall')
-    const fixContract        = spCodeContext ? buildFixContract({ fieldSignals, userIsArabic, anchors: _anchors }) : null
+    const fixContract        = spCodeContext && !_analysisOnly ? buildFixContract({ fieldSignals, userIsArabic, anchors: _anchors }) : null
 
     const miniCtxResult = buildMiniContext({ engine, frontendContext: promptEditorMode ? null : frontendContext, capsuleEvalResult, vaultHit: _routedVault, codeHint, builtSystemHint: _cleanedBuiltHint, activeStyle, continuity: effectiveContinuity, phase: processed.celfResult.phase ?? 'warmup', fieldSignals, prevItem: _prevItem, lastTopicText: lastTopicText ?? null, sessionSummary: activeSummary, filteredHistory: filteredHistory ?? [], editorMode: promptEditorMode, wantsFullFile: _wantsFullFile, userIsArabic, hasFixContract: !!fixContract, hasCodeContext: spCodeContext, fieldShifted, anchors: _anchors })
 
