@@ -1,6 +1,7 @@
 import { resolveConceptAnchors, blendWithAnchors, computeRatio } from './concept-anchor.js'
 
-export class CELF_Engine_AI_V5 {
+
+  export class CELF_Engine_AI_V5 {
 
   constructor(options = {}) {
     this.cycle       = options.cycle       ?? 360
