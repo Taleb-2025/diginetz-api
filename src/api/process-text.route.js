@@ -4,7 +4,6 @@ import { CELF_Engine_AI_V5 }                                                   f
 import { parse }                                                               from '../utils/lightweight-parser.js'
 import { cleanInput, filterStyleInstructions, detectStyleInstruction }         from '../utils/context-builder.js'
 import { observe }                                                             from '../utils/celf-observer.js'
-import { indexStore }                                                          from './index-code.route.js'
 import { getVectorSync, getVector }                                            from '../utils/vector-store.js'
 
 const router = express.Router()
@@ -55,7 +54,20 @@ function getEngine(sid) {
   }
   if (sessions.size >= MAX_SESSIONS) {
     const oldest = sessions.keys().next().value
-    sessions.delete(oldest); semanticTextMaps.delete(oldest); styleStore.delete(oldest)
+    sessions.delete(oldest)
+    processingLock.delete(oldest)
+    semanticTextMaps.delete(oldest)
+    styleStore.delete(oldest)
+    rawCodeStore.delete(oldest)
+    codeSessionStore.delete(oldest)
+    sessionSummaryStore.delete(oldest)
+    resumeBootstrapped.delete(oldest)
+    capsuleMemory.delete(oldest)
+    anchorMemory.delete(oldest)
+    metricsStore.delete(oldest)
+    _semanticState.delete(oldest)
+    _entityTracker.delete(oldest)
+    _fieldHistory.delete(oldest)
   }
   const engine = new CELF_Engine_AI_V5({
     resolution: 120, ringCount: 3, cycle: 360,
@@ -247,7 +259,7 @@ function retrieveRelevantCode(questionVector, questionText, sid, currentMsgIndex
     const msgAge      = Math.max(0, currentMsgIndex - ctx.msgIndex)
     const freshness   = Math.max(0, 1 - msgAge / 20)
     const finalScore  = (codeSim * 0.55 + summarySim * 0.30 + Math.min(0.30, symbolBoost) * 0.15) * 0.85 + freshness * 0.15
-    if (finalScore > bestScore && finalScore > 0.40) { bestScore = finalScore; best = ctx }
+    if (finalScore > bestScore && finalScore > 0.25) { bestScore = finalScore; best = ctx }
   }
   return best
 }
@@ -377,15 +389,40 @@ function buildSemanticPattern(anchors) {
 //  DIRECTIVES BUILDER
 // ═══════════════════════════════════════════════════════════════
 
+function buildRoutingConstraints(anchors, fieldSignals) {
+  const fs  = String(fieldSignals || '')
+  const has = a => anchors.includes(a)
+  const constraints = []
+
+  if (fs.includes('#code') || fs.includes('#code_recall'))
+    constraints.push('If code is provided → analyze it directly without asking for it again.')
+
+  if (has('@analysis_intent') && !has('@repair_intent'))
+    constraints.push('Output: concise findings — overview, key issues, recommendations. No full rewrite.')
+
+  if (has('@repair_intent'))
+    constraints.push('Output: targeted fix only. Do not rewrite unrelated parts.')
+
+  if (has('@build_intent'))
+    constraints.push('Output: structured implementation. Define contracts before code.')
+
+  if (fs.includes('#continuity') || fs.includes('#followup'))
+    constraints.push('Build on prior context. Do not repeat what was already addressed.')
+
+  return constraints.length > 0 ? '[Routing Constraints]\n' + constraints.join('\n') : null
+}
+
 function buildDirectives(anchors, userIsArabic, fieldSignals) {
-  const lang    = userIsArabic ? '[lang: Arabic]' : '[lang: same_as_user]'
-  const pattern = buildSemanticPattern(anchors)
-  const signals = fieldSignals ?? null
+  const lang        = userIsArabic ? '[lang: Arabic]' : '[lang: same_as_user]'
+  const pattern     = buildSemanticPattern(anchors)
+  const signals     = fieldSignals ?? null
+  const constraints = buildRoutingConstraints(anchors, fieldSignals)
 
   const parts = []
   const directivesPart = [lang, pattern].filter(Boolean).join('\n')
   if (directivesPart) parts.push('[Routing Directives]\n' + directivesPart)
   if (signals)        parts.push('[Routing Signals]\n' + signals)
+  if (constraints)    parts.push(constraints)
   return parts.join('\n') || null
 }
 
@@ -438,9 +475,9 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity,
   if (/لماذا|why|warum/i.test(cleanedText))                                add('?causal', 0.60)
   if (/غامض|unclear|ambiguous|لا أفهم/i.test(cleanedText))                add('?ambiguous', 0.60)
   if (/رسم|diagram|chart|visualize/i.test(cleanedText))                   add('#diagram', 0.75)
-  if (/اختبار|test cases|spec|unit test/i.test(cleanedText))              add('#tests', 0.75)
+  if (/اكتب.*اختبار|write.*test|generate.*test|test cases|أضف.*اختبار/i.test(cleanedText)) add('#tests', 0.75)
   if (/توثيق|documentation|docs|readme/i.test(cleanedText))               add('#docs', 0.75)
-  if (/ضمير|هذا|ذلك|it|this|that/i.test(cleanedText))                    add('#resolved_ref', 0.65)
+  if (/هذا.*الكود|ذلك.*الملف|this.*code|that.*function/i.test(cleanedText) && continuity > 0.30) add('#resolved_ref', 0.65)
   if (/مشروع|project|continuation/i.test(cleanedText) && continuity>0.50) add('#project_continuation', 0.80)
   if (/بالتفصيل|detailed|full|شامل|in depth/i.test(cleanedText))         add('@depth.technical', 0.70)
   if (/باختصار|brief|concise|بإيجاز/i.test(cleanedText))                 add('@depth.surface', 0.70)
@@ -475,7 +512,7 @@ function chooseMaxTokens(anchors, inputWords, hasCode, remaining) {
   const cap = Math.min(8000, Math.max(1000, Math.floor(remaining * 0.45)))
 
   if (has('@repair_intent') || has('@build_intent')) return Math.min(cap, 6000)
-  if (has('@analysis_intent'))                        return Math.min(cap, 3500)
+  if (has('@analysis_intent'))                        return cap
   if (has('@verify_intent'))                          return Math.min(cap, 4000)
   if (hasCode)                                        return Math.min(cap, 3000)
   if (inputWords <= 5)                                return 1000
@@ -584,7 +621,7 @@ router.get('/process-text', (_req, res) => {
 router.post('/process-text', async (req, res) => {
   const {
     text = '', sessionId, history = [], image = null, imageMimeType = 'image/jpeg',
-    savedCode = null, capsuleContext = null, recoveredCode = null, sessionSummary = null,
+    capsuleContext = null, recoveredCode = null, sessionSummary = null,
   } = req.body
 
   const hasText  = typeof text  === 'string' && text.trim().length > 0
@@ -624,17 +661,28 @@ router.post('/process-text', async (req, res) => {
     const tValue         = processed.result.t
     const field          = processed.celfResult.field ?? {}
     const continuity     = field.continuity  ?? 0
-    const novelty        = field.noveltyPressure ?? 0
     const questionVector = engine.semanticVector?.(cleanedText) ?? null
 
     storeSemanticEntry(sid, tValue, cleanedText.replace(/```[\s\S]*?```/g,'').replace(/\s{2,}/g,' ').trim())
 
     // ── ④ CONCEPT ANCHOR ─────────────────────────────────────────
-    const { anchors } = resolveConceptAnchors(cleanedText)
+    // نفصل سؤال المستخدم عن الكود قبل resolveConceptAnchors
+    const questionOnly = cleanedText
+      .replace(/```[\s\S]*?```/g, '')
+      .split('\n')
+      .filter(line => {
+        const l = line.trim()
+        if (!l) return false
+        if (/^\s*(import|export|const|let|var|function|class|async|return|if|for|while|try|catch)/i.test(l)) return false
+        if (/[{};]/.test(l) && l.length > 30) return false
+        return true
+      })
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 500) || cleanedText.slice(0, 200)
 
-    // ── ⑤ FIELD SIGNALS ──────────────────────────────────────────
-    const fieldSignals = buildFieldSignals(sid, processed.celfResult, cleanedText, codeBlocks, continuity, anchors, hasStoredCode)
-    updateSemanticState(sid, classifyDomain(cleanedText))
+    const { anchors } = resolveConceptAnchors(questionOnly)
 
     // ── ⑥ CODE CONTEXT ───────────────────────────────────────────
     if (codeBlocks.length > 0) {
@@ -652,10 +700,24 @@ router.post('/process-text', async (req, res) => {
 
     const hasStoredCode  = (rawCodeStore.get(sid) ?? []).length > 0
     const hasCode        = codeBlocks.length > 0 || hasStoredCode
+    // إذا كود مخزن → أرسله دائماً بدون اعتماد على similarity
     const effectiveMatch = hasCode && questionVector
       ? retrieveRelevantCode(questionVector, cleanedText, sid, tValue)
       : null
-    const storedRaw      = effectiveMatch?.raw ?? null
+    const codeRelated =
+      /اصلح|أصلح|عدل|تعديل|حلل|تحليل|analyze|fix|edit|refactor|review|debug|ثغرة|خطأ|مشكلة|improve|update|check|اختبر|وضح|explain/i.test(questionOnly)
+    const refRelated =
+      hasStoredCode &&
+      continuity > 0.20 &&
+      /هذا|هذه|ذلك|هنا|السابق|الكود|الملف|يعني|معنى|اشرح|وضح|this|that|previous|above/i.test(questionOnly)
+    const shouldAttachStoredCode =
+      hasStoredCode && (codeBlocks.length > 0 || codeRelated || refRelated)
+    const storedRaw = effectiveMatch?.raw
+      ?? (shouldAttachStoredCode ? (rawCodeStore.get(sid) ?? []).at(-1)?.raw ?? null : null)
+
+    // ── ⑤ FIELD SIGNALS ──────────────────────────────────────────
+    const fieldSignals = buildFieldSignals(sid, processed.celfResult, questionOnly, codeBlocks, continuity, anchors, !!storedRaw)
+    updateSemanticState(sid, classifyDomain(questionOnly || cleanedText))
 
     // ── ⑦ SESSION SUMMARY ────────────────────────────────────────
     if (!sessionSummaryStore.has(sid) && sessionSummary?.text) {
@@ -672,11 +734,6 @@ router.post('/process-text', async (req, res) => {
     const activeSummary = sessionSummaryStore.get(sid) ?? null
 
     // ── ⑧ CAPSULE CONTEXT ────────────────────────────────────────
-    let capsuleEvalResult = { score: 0, used: false }
-    if (typeof capsuleContext === 'string' && capsuleContext.length > 0 && questionVector) {
-      capsuleEvalResult = evaluateCapsuleContext(engine, questionVector, capsuleContext, cleanedText)
-    }
-
     // ── ⑨ SYSTEM PROMPT ──────────────────────────────────────────
     const directives  = buildDirectives(anchors, userIsArabic, fieldSignals)
     const styleMap    = { concise:'Be concise.', detailed:'Be detailed.', arabic:'Respond in Arabic.', english:'Reply in English.', german:'Antworte auf Deutsch.' }
@@ -689,12 +746,16 @@ router.post('/process-text', async (req, res) => {
 
     // ── ⑩ MESSAGES ───────────────────────────────────────────────
     const filteredHistory = filterStyleInstructions(history)
-    const historyMessages = buildHistoryLayer(filteredHistory, continuity, sid, !!storedRaw, classifyDomain(cleanedText))
+    const historyMessages = buildHistoryLayer(filteredHistory, continuity, sid, false, classifyDomain(cleanedText))
     const recCode         = typeof recoveredCode === 'string' && recoveredCode.length > 30 ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT) : null
 
-    const userContent = hasImage
-      ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: cleanedText }] : [])]
+    const questionText = storedRaw
+      ? (questionOnly || 'تعامل مع الكود المرفق حسب طلب المستخدم.')
       : cleanedText
+
+    const userContent = hasImage
+      ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: questionText }] : [])]
+      : questionText
 
     const messages = [
       ...(recCode && !storedRaw ? [{ role: 'user', content: recCode }] : []),
@@ -729,7 +790,7 @@ router.post('/process-text', async (req, res) => {
       while (reply && isTruncated(claudeData) && continuationCount < 2) {
         continuationCount++
         if (outputTokensTotal >= 4096) break
-        const contData = await continuationCall(cleanedText, reply, systemHint, model)
+        const contData = await continuationCall(questionText, reply, systemHint, model)
         if (!contData?.content?.[0]?.text) break
         reply             += removeOverlap(reply, contData.content[0].text)
         inputTokensTotal  += contData?.usage?.input_tokens  ?? 0
@@ -748,14 +809,6 @@ router.post('/process-text', async (req, res) => {
         observerBox = observe({ engine, questionText: cleanedText, questionVector, replyText: reply, noiseRemoved: false, lang: 'ar' })
         if (observerBox) { storeCapsule(sid, observerBox, cleanedText.slice(0,80), tValue); updateAnchors(sid, cleanedText.slice(0,80), 0.5) }
       } catch {}
-    }
-
-    if (reply) {
-      const replyBlocks = detectCodeBlocks(reply)
-      if (replyBlocks.length > 0 && replyBlocks[0].length > 200) {
-        storeCodeContext(sid, replyBlocks, engine, tValue + 0.9)
-        codeSessionStore.set(sid, { active: true, ttl: 6 })
-      }
     }
 
     if (reply) {
