@@ -489,11 +489,15 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity,
   }
   const ANCHOR_TO_STATE = { '@failure': '?failure' }
 
+  const INTENT_PRIORITY = ['@repair_intent', '@analysis_intent', '@build_intent', '@verify_intent']
+
   const weighted = []
   const add = (sig, w) => weighted.push({ text: sig, w })
 
+  const primaryIntent = INTENT_PRIORITY.find(a => anchors.includes(a))
+  if (primaryIntent && ANCHOR_TO_INTENT[primaryIntent]) add(ANCHOR_TO_INTENT[primaryIntent], 0.90)
+
   for (const a of anchors) {
-    if (ANCHOR_TO_INTENT[a]) add(ANCHOR_TO_INTENT[a], 0.90)
     if (ANCHOR_TO_SCOPE[a])  add(ANCHOR_TO_SCOPE[a],  0.85)
     if (ANCHOR_TO_STATE[a])  add(ANCHOR_TO_STATE[a],  0.95)
   }
