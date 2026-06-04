@@ -427,23 +427,6 @@ function translateSignals(fieldSignals) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  SOFT CONSTRAINTS
-// ═══════════════════════════════════════════════════════════════
-
-function buildSoftConstraints(anchors, hasCode, continuity, userIsArabic) {
-  const constraints = []
-  const has = a => anchors.includes(a)
-
-  if (hasCode)      constraints.push('If code is provided → reference it directly, do not ask for it again.')
-  if (continuity > 0.40) constraints.push('Build on the previous context — do not repeat what was already said.')
-  if (!has('@repair_intent') && !has('@build_intent') && hasCode)
-    constraints.push('Analyze only — do not generate a full rewrite unless explicitly asked.')
-  if (userIsArabic) constraints.push('Respond in Arabic unless code requires English.')
-
-  return constraints.length > 0 ? constraints.join('\n') : null
-}
-
-// ═══════════════════════════════════════════════════════════════
 //  DIRECTIVES BUILDER
 // ═══════════════════════════════════════════════════════════════
 
@@ -742,12 +725,11 @@ router.post('/process-text', async (req, res) => {
     }
 
     // ── ⑨ SYSTEM PROMPT ──────────────────────────────────────────
-    const directives       = buildDirectives(anchors, userIsArabic, fieldSignals)
-    const softConstraints  = buildSoftConstraints(anchors, hasCode, continuity, userIsArabic)
-    const styleMap         = { concise:'Be concise.', detailed:'Be detailed.', arabic:'Respond in Arabic.', english:'Reply in English.', german:'Antworte auf Deutsch.' }
-    const styleHint        = activeStyle && styleMap[activeStyle] ? styleMap[activeStyle] : null
+    const directives  = buildDirectives(anchors, userIsArabic, fieldSignals)
+    const styleMap    = { concise:'Be concise.', detailed:'Be detailed.', arabic:'Respond in Arabic.', english:'Reply in English.', german:'Antworte auf Deutsch.' }
+    const styleHint   = activeStyle && styleMap[activeStyle] ? styleMap[activeStyle] : null
 
-    const systemParts = [directives, softConstraints, styleHint].filter(Boolean)
+    const systemParts = [directives, styleHint].filter(Boolean)
     if (activeSummary?.text) systemParts.unshift(`[session] ${activeSummary.text}`)
 
     const systemHint = systemParts.join('\n') || null
