@@ -1,3 +1,5 @@
+import { resolveConceptAnchors, blendWithAnchors, computeRatio } from './concept-anchor.js'
+
 export class CELF_Engine_AI_V5 {
 
   constructor(options = {}) {
@@ -148,6 +150,18 @@ export class CELF_Engine_AI_V5 {
     h2 = Math.abs(h2 >>> 0)
     h3 = Math.abs(h3 >>> 0)
 
+    const { anchors } = resolveConceptAnchors(text)
+    let thetaH = h1
+    if (anchors.length > 0) {
+      const anchorKey = anchors.slice().sort().join('+')
+      let ah = 2166136261
+      for (let i = 0; i < anchorKey.length; i++) {
+        ah ^= anchorKey.charCodeAt(i)
+        ah  = Math.imul(ah, 16777619)
+      }
+      thetaH = Math.abs(ah >>> 0)
+    }
+
     const code      = /```|function|class|const|let|var|=>|import|export/.test(text) ? 1 : 0
     const question  = /[?؟]|كيف|ماذا|لماذا|هل|what|why|how|where/i.test(text) ? 1 : 0
     const error     = /error|fail|exception|خطأ|فشل/i.test(text) ? 1 : 0
@@ -169,11 +183,12 @@ export class CELF_Engine_AI_V5 {
       command * 0.15 + error * 0.15 + data * 0.10 + question * 0.05
     )
 
-    const theta = ((h1 % this.resolution) / this.resolution) * this.cycle
+    const theta = ((thetaH % this.resolution) / this.resolution) * this.cycle
     const index = this._thetaToIndex(theta)
 
     return {
       text, h1, h2, h3, vector, intensity, theta, index,
+      anchors,
       semantic: {
         code, question, error, command, data, emotional, reasoning,
         lexical, length,
@@ -187,6 +202,16 @@ export class CELF_Engine_AI_V5 {
   }
 
   semanticVector(text, h1, h2, h3) {
+    const raw = this._rawSemanticVector(text, h1, h2, h3)
+    if (h1) return raw
+    const { anchors, matched } = resolveConceptAnchors(String(text ?? ''))
+    if (!matched) return raw
+    const anchorVecs = anchors.map(a => this._rawSemanticVector(a))
+    const ratio      = computeRatio(anchors, anchorVecs)
+    return blendWithAnchors(raw, anchorVecs, ratio)
+  }
+
+  _rawSemanticVector(text, h1, h2, h3) {
     const D   = this.semanticDimensions
     const vec = new Float32Array(D)
     const raw = String(text ?? '')
@@ -211,69 +236,33 @@ export class CELF_Engine_AI_V5 {
     }
 
     const CONCEPT_MAP = {
-      websocket: '@realtime_transport', socket: '@realtime_transport', ws: '@realtime_transport',
-      fix: '@repair_intent', debug: '@repair_intent', repair: '@repair_intent',
-      refactor: '@repair_intent', patch: '@repair_intent', hotfix: '@repair_intent',
-      error: '@failure', bug: '@failure', exception: '@failure', crash: '@failure',
-      fault: '@failure', failure: '@failure', خطأ: '@failure', مشكلة: '@failure',
-      cache: '@memory_layer', redis: '@memory_layer', buffer: '@memory_layer',
-      queue: '@memory_layer', memo: '@memory_layer',
-      auth: '@identity_layer', jwt: '@identity_layer', token: '@identity_layer',
-      oauth: '@identity_layer', session: '@identity_layer', login: '@identity_layer',
-      database: '@data_store', db: '@data_store', postgres: '@data_store',
-      mysql: '@data_store', mongodb: '@data_store', sqlite: '@data_store',
-      redis_db: '@data_store', sql: '@data_store',
-      deploy: '@infra_layer', docker: '@infra_layer', kubernetes: '@infra_layer',
-      nginx: '@infra_layer', railway: '@infra_layer', cloud: '@infra_layer',
-      api: '@interface_layer', route: '@interface_layer', endpoint: '@interface_layer',
-      router: '@interface_layer', middleware: '@interface_layer', handler: '@interface_layer',
-      analyze: '@analysis_intent', review: '@analysis_intent', audit: '@analysis_intent',
-      inspect: '@analysis_intent', تحليل: '@analysis_intent', حلل: '@analysis_intent',
-      create: '@build_intent', build: '@build_intent', generate: '@build_intent',
-      implement: '@build_intent', write: '@build_intent', أنشئ: '@build_intent',
-      اكتب: '@build_intent',
-      test: '@verify_intent', spec: '@verify_intent', jest: '@verify_intent',
-      assert: '@verify_intent', mock: '@verify_intent',
+      websocket:'@realtime_transport',socket:'@realtime_transport',ws:'@realtime_transport',
+      fix:'@repair_intent',debug:'@repair_intent',repair:'@repair_intent',refactor:'@repair_intent',patch:'@repair_intent',hotfix:'@repair_intent',
+      error:'@failure',bug:'@failure',exception:'@failure',crash:'@failure',fault:'@failure',failure:'@failure',خطأ:'@failure',مشكلة:'@failure',
+      cache:'@memory_layer',redis:'@memory_layer',buffer:'@memory_layer',queue:'@memory_layer',memo:'@memory_layer',
+      auth:'@identity_layer',jwt:'@identity_layer',token:'@identity_layer',oauth:'@identity_layer',session:'@identity_layer',login:'@identity_layer',
+      database:'@data_store',db:'@data_store',postgres:'@data_store',mysql:'@data_store',mongodb:'@data_store',sqlite:'@data_store',redis_db:'@data_store',sql:'@data_store',
+      deploy:'@infra_layer',docker:'@infra_layer',kubernetes:'@infra_layer',nginx:'@infra_layer',railway:'@infra_layer',cloud:'@infra_layer',
+      api:'@interface_layer',route:'@interface_layer',endpoint:'@interface_layer',router:'@interface_layer',middleware:'@interface_layer',handler:'@interface_layer',
+      analyze:'@analysis_intent',review:'@analysis_intent',audit:'@analysis_intent',inspect:'@analysis_intent',تحليل:'@analysis_intent',حلل:'@analysis_intent',
+      create:'@build_intent',build:'@build_intent',generate:'@build_intent',implement:'@build_intent',write:'@build_intent',أنشئ:'@build_intent',اكتب:'@build_intent',
+      test:'@verify_intent',spec:'@verify_intent',jest:'@verify_intent',assert:'@verify_intent',mock:'@verify_intent',
     }
 
-        const SYNONYMS = {
-      'أصلح':'fix','إصلاح':'fix','اصلح':'fix',
-      'عدّل':'edit','عدل':'edit','تعديل':'edit','تعديلات':'edit',
-      'حلل':'analyze','تحليل':'analyze','analyze':'analyze',
-      'أنشئ':'create','انشئ':'create','ابنِ':'build',
-      'اكتب':'write','كتابة':'write',
-      'احذف':'delete','حذف':'delete','ازل':'remove','إزالة':'remove',
-      'أضف':'add','إضافة':'add','أضف':'add',
-      'استبدل':'replace','استبدال':'replace',
-      'حسّن':'improve','تحسين':'improve','طوّر':'improve',
-      'خطأ':'error','أخطاء':'error','مشكلة':'bug','مشاكل':'bug',
-      'فشل':'fail','فشلت':'fail',
+    const SYNONYMS = {
+      'أصلح':'fix','إصلاح':'fix','اصلح':'fix','عدّل':'edit','عدل':'edit','تعديل':'edit','تعديلات':'edit',
+      'حلل':'analyze','تحليل':'analyze','أنشئ':'create','انشئ':'create','ابنِ':'build','اكتب':'write','كتابة':'write',
+      'احذف':'delete','حذف':'delete','ازل':'remove','إزالة':'remove','أضف':'add','إضافة':'add',
+      'استبدل':'replace','استبدال':'replace','حسّن':'improve','تحسين':'improve','طوّر':'improve',
+      'خطأ':'error','أخطاء':'error','مشكلة':'bug','مشاكل':'bug','فشل':'fail','فشلت':'fail',
       'شرح':'explain','اشرح':'explain','وضّح':'explain','توضيح':'explain',
-      'ابحث':'search','بحث':'search',
-      'صمم':'design','تصميم':'design',
-      'اختبر':'test','اختبار':'test',
-      'نفّذ':'execute','تنفيذ':'execute',
-      'دمج':'merge','ادمج':'merge',
-      'حوّل':'convert','تحويل':'convert',
-      'رتّب':'sort','ترتيب':'sort',
-      'فلتر':'filter','تصفية':'filter',
-      'قسّم':'split','تقسيم':'split',
-      'دالة':'function','كلاس':'class','صنف':'class',
-      'متغير':'variable','ثابت':'constant',
-      'حلقة':'loop','شرط':'condition',
-      'مصفوفة':'array','قائمة':'list','كائن':'object',
-      'واجهة':'interface','نوع':'type',
-      'استيراد':'import','تصدير':'export',
+      'دالة':'function','كلاس':'class','صنف':'class','متغير':'variable','ثابت':'constant',
       'خادم':'server','عميل':'client','قاعدة':'database',
       'warum':'why','wie':'how','was':'what','wer':'who','wo':'where',
-      'erstellen':'create','löschen':'delete','ändern':'edit',
-      'reparieren':'fix','analysieren':'analyze','erklären':'explain',
-      'verbessern':'improve','hinzufügen':'add','entfernen':'remove',
-      'suchen':'search','testen':'test','schreiben':'write',
-      'fehler':'error','problem':'bug','lösung':'fix',
-      'funktion':'function','klasse':'class','variable':'variable',
-      'schleife':'loop','bedingung':'condition','objekt':'object',
-      'server':'server','datenbank':'database','import':'import',
+      'erstellen':'create','löschen':'delete','ändern':'edit','reparieren':'fix','analysieren':'analyze',
+      'erklären':'explain','verbessern':'improve','hinzufügen':'add','entfernen':'remove',
+      'fehler':'error','problem':'bug','lösung':'fix','funktion':'function','klasse':'class',
+      'server':'server','datenbank':'database',
     }
 
     const _hash = (s) => {
@@ -288,10 +277,7 @@ export class CELF_Engine_AI_V5 {
       vec[(Math.abs(Math.imul(fh ^ h3, 3266489917))  >>> 0) % D] += weight * 0.42
     }
 
-    const IDF_BOOST = new Set([
-      'function','class','error','import','export','const','async','return','await',
-      'أصلح','عدّل','حلل','اكتب','أنشئ','debug','fix','refactor','analyze','update'
-    ])
+    const IDF_BOOST = new Set(['function','class','error','import','export','const','async','return','await','أصلح','عدّل','حلل','اكتب','أنشئ','debug','fix','refactor','analyze','update'])
 
     for (let i = 0; i < tokens.length; i++) {
       const tok        = tokens[i]
@@ -301,49 +287,25 @@ export class CELF_Engine_AI_V5 {
       const posW = 1.0 / Math.sqrt(i + 1)
       const idfW = IDF_BOOST.has(tok) || IDF_BOOST.has(normalized) ? 1.8 : 1.0
       const w    = posW * idfW
-
       _place(_hash(normalized), w * 0.20)
       if (concept)                _place(_hash(concept),    w * 0.30)
       else if (normalized !== tok) _place(_hash(tok),       w * 0.07)
-
       const nxt  = i + 1 < tokens.length ? (SYNONYMS[tokens[i+1].toLowerCase()] || tokens[i+1]) : null
       const nxt2 = i + 2 < tokens.length ? (SYNONYMS[tokens[i+2].toLowerCase()] || tokens[i+2]) : null
-
-      if (nxt)
-        _place(_hash(normalized + '|' + nxt), w * 0.45)
-
-      if (nxt && nxt2)
-        _place(_hash(normalized + '|' + nxt + '|' + nxt2), w * 0.38)
-
-      if (tok.length > 4)
-        _place(_hash(tok.slice(0, Math.ceil(tok.length * 0.6))), w * 0.12)
+      if (nxt)       _place(_hash(normalized + '|' + nxt), w * 0.45)
+      if (nxt&&nxt2) _place(_hash(normalized + '|' + nxt + '|' + nxt2), w * 0.38)
+      if (tok.length > 4) _place(_hash(tok.slice(0, Math.ceil(tok.length * 0.6))), w * 0.12)
     }
 
     const CODE_SIGNALS = [
-      [/function\s+\w+/,     0.6, 'fn_decl'],
-      [/class\s+\w+/,        0.6, 'cls_decl'],
-      [/=>\s*\{/,            0.4, 'arrow_fn'],
-      [/import\s+.*from/,    0.5, 'import'],
-      [/```[\s\S]*?```/,     0.7, 'code_block'],
-      [/const|let|var/,      0.3, 'var_decl'],
-      [/error|خطأ|exception/i, 0.5, 'error_sig'],
-      [/أصلح|fix|debug/i,   0.6, 'fix_intent'],
-      [/تعديل|refactor/i,   0.5, 'modify_intent'],
+      [/function\s+\w+/,0.6,'fn_decl'],[/class\s+\w+/,0.6,'cls_decl'],[/=>\s*\{/,0.4,'arrow_fn'],
+      [/import\s+.*from/,0.5,'import'],[/```[\s\S]*?```/,0.7,'code_block'],[/const|let|var/,0.3,'var_decl'],
+      [/error|خطأ|exception/i,0.5,'error_sig'],[/أصلح|fix|debug/i,0.6,'fix_intent'],[/تعديل|refactor/i,0.5,'modify_intent'],
     ]
-    for (const [pat, boost, label] of CODE_SIGNALS) {
-      if (pat.test(raw)) {
-        _place(_hash('__sig__' + label), boost)
-      }
-    }
+    for (const [pat, boost, label] of CODE_SIGNALS) if (pat.test(raw)) _place(_hash('__sig__' + label), boost)
 
-    const LANG_MARKERS = [
-      [/[\u0600-\u06FF]/, '__lang_ar__', 0.3],
-      [/[a-zA-Z]{3,}/,   '__lang_en__', 0.2],
-      [/[\u00C0-\u024F]/, '__lang_de__', 0.2],
-    ]
-    for (const [pat, label, w] of LANG_MARKERS) {
-      if (pat.test(raw)) _place(_hash(label), w)
-    }
+    const LANG_MARKERS = [[/[\u0600-\u06FF]/,'__lang_ar__',0.3],[/[a-zA-Z]{3,}/,'__lang_en__',0.2],[/[\u00C0-\u024F]/,'__lang_de__',0.2]]
+    for (const [pat, label, w] of LANG_MARKERS) if (pat.test(raw)) _place(_hash(label), w)
 
     let norm = 0
     for (let i = 0; i < D; i++) norm += vec[i] * vec[i]
@@ -353,608 +315,363 @@ export class CELF_Engine_AI_V5 {
   }
 
   cosineSimilarity(a, b) { return this._cosine(a, b) }
+
   fieldSimilarity(snap1, snap2) {
     if (!snap1 || !snap2) return 0
-
     const vecSim = (snap1.vector && snap2.vector)
       ? this._cosine(snap1.vector, snap2.vector)
-      : this._cosine(
-          this.semanticVector(String(snap1.text ?? '')),
-          this.semanticVector(String(snap2.text ?? ''))
-        )
-
-    const a1 = (snap1.attractors ?? []).map(a => a.i)
-    const a2 = (snap2.attractors ?? []).map(a => a.i)
-    const shared = a1.filter(i => a2.some(j => Math.abs(i - j) < 6)).length
-    const attrSim = shared / Math.max(a1.length, a2.length, 1)
-
-    const sig1 = snap1.field?.signature ?? snap1.signature ?? 0
-    const sig2 = snap2.field?.signature ?? snap2.signature ?? 0
-    const sigDrift = this._clamp01(1 - Math.abs(sig1 - sig2) / this.cycle)
-
-    const delta1 = snap1.delta ?? null
-    const delta2 = snap2.delta ?? null
-    const trajSim = (delta1 && delta2)
-      ? this._cosine(delta1, delta2)
-      : 0
-
-    return this._round4(
-      vecSim   * 0.38 +
-      attrSim  * 0.32 +
-      sigDrift * 0.20 +
-      trajSim  * 0.10
-    )
+      : this._cosine(this.semanticVector(String(snap1.text??'')), this.semanticVector(String(snap2.text??'')))
+    const a1 = (snap1.attractors??[]).map(a=>a.i)
+    const a2 = (snap2.attractors??[]).map(a=>a.i)
+    const shared   = a1.filter(i=>a2.some(j=>Math.abs(i-j)<6)).length
+    const attrSim  = shared / Math.max(a1.length,a2.length,1)
+    const sig1     = snap1.field?.signature??snap1.signature??0
+    const sig2     = snap2.field?.signature??snap2.signature??0
+    const sigDrift = this._clamp01(1-Math.abs(sig1-sig2)/this.cycle)
+    const delta1   = snap1.delta??null
+    const delta2   = snap2.delta??null
+    const trajSim  = (delta1&&delta2) ? this._cosine(delta1,delta2) : 0
+    return this._round4(vecSim*0.38 + attrSim*0.32 + sigDrift*0.20 + trajSim*0.10)
   }
 
-  fieldDivergence(snap1, snap2) {
-    return this._round4(1 - this.fieldSimilarity(snap1, snap2))
-  }
-
-
+  fieldDivergence(snap1, snap2) { return this._round4(1 - this.fieldSimilarity(snap1, snap2)) }
 
   routeContext(query, limit = 5) {
-    const text   = typeof query === 'string' ? query : JSON.stringify(query ?? '')
+    const text   = typeof query === 'string' ? query : JSON.stringify(query??'')
     const vector = this.semanticVector(text)
     const memory = this.field.semanticMemory
     if (!memory.length) return []
     const items = memory
       .map(item => {
-        const rawSim   = this._cosine(vector, item.vector ?? new Float32Array(0))
-        const age      = this.state.t - (item.t ?? 0)
-        const fresh    = Math.max(0, 1 - age / 40)
-        const score    = rawSim * 0.82 + fresh * 0.18
-        return {
-          t: item.t,
-          text: item.text ?? '',
-          theta: this._round4(item.theta ?? 0),
-          score: this._round4(score),
-          phase: item.phase
-        }
+        const rawSim = this._cosine(vector, item.vector??new Float32Array(0))
+        const age    = this.state.t - (item.t??0)
+        const fresh  = Math.max(0, 1-age/40)
+        const score  = rawSim*0.82 + fresh*0.18
+        return { t:item.t, text:item.text??'', theta:this._round4(item.theta??0), score:this._round4(score), phase:item.phase }
       })
       .filter(item => item.score > 0.22 && item.text !== text)
-      .sort((a, b) => b.score - a.score)
+      .sort((a,b) => b.score-a.score)
       .slice(0, limit)
     const hit = this._retrieveVaultHit(vector)
-    return { items, vaultHit: hit ?? null }
+    return { items, vaultHit: hit??null }
   }
 
   _retrieveVaultHit(vector) {
-    let best = null, bestScore = -1
-    const continuity   = this.field?.continuity ?? 0
-    const novelty      = this.field?.noveltyPressure ?? 0
-    const coherence    = this.field?.coherence ?? 0
-    const resonance    = this.field?.resonance ?? 0
-    const currentPhase = this.state?.phase ?? 'warmup'
-    for (const [, cap] of this.vault) {
-      const msgAge = this.state.t - (cap.t ?? 0)
-      if (msgAge < 4) continue
-      const sim       = this._cosine(vector, cap.vector ?? new Float32Array(0))
-      const samePhase = cap.phase === currentPhase
-      const minCosine = samePhase ? 0.12 : 0.18
-      if (sim < minCosine) continue
-      const reinf   = this._clamp01((cap.reinforcement ?? 0) / 10)
-      const contFit = this._clamp01(1 - Math.abs(continuity - (cap.continuity ?? continuity)))
-      const novFit  = this._clamp01(1 - Math.abs(novelty    - (cap.novelty    ?? novelty)))
-      const cohFit  = this._clamp01(1 - Math.abs(coherence  - (cap.coherence  ?? coherence)))
-      const resFit  = this._clamp01(1 - Math.abs(resonance  - (cap.resonance  ?? resonance)))
-      const flow    = sim * 0.46 + contFit * 0.24 + novFit * 0.14 + cohFit * 0.08 + resFit * 0.08
-      const final   = flow * 0.84 + reinf * 0.16
-      if (final > bestScore && final > 0.24) {
-        bestScore = final
-        best = { compressed: (cap.compressed ?? cap.text)?.slice(0, 120) ?? '', score: this._round4(final), phiOrbit: this._round4(cap.theta ?? 0), reinforcement: cap.reinforcement ?? 0 }
-      }
+    let best=null, bestScore=-1
+    const continuity=this.field?.continuity??0, novelty=this.field?.noveltyPressure??0
+    const coherence=this.field?.coherence??0, resonance=this.field?.resonance??0
+    const currentPhase=this.state?.phase??'warmup'
+    for (const [,cap] of this.vault) {
+      const msgAge=this.state.t-(cap.t??0)
+      if (msgAge<4) continue
+      const sim=this._cosine(vector,cap.vector??new Float32Array(0))
+      const samePhase=cap.phase===currentPhase
+      if (sim<(samePhase?0.12:0.18)) continue
+      const reinf=this._clamp01((cap.reinforcement??0)/10)
+      const contFit=this._clamp01(1-Math.abs(continuity-(cap.continuity??continuity)))
+      const novFit=this._clamp01(1-Math.abs(novelty-(cap.novelty??novelty)))
+      const cohFit=this._clamp01(1-Math.abs(coherence-(cap.coherence??coherence)))
+      const resFit=this._clamp01(1-Math.abs(resonance-(cap.resonance??resonance)))
+      const flow=sim*0.46+contFit*0.24+novFit*0.14+cohFit*0.08+resFit*0.08
+      const final=flow*0.84+reinf*0.16
+      if (final>bestScore&&final>0.24) { bestScore=final; best={compressed:(cap.compressed??cap.text)?.slice(0,120)??'',score:this._round4(final),phiOrbit:this._round4(cap.theta??0),reinforcement:cap.reinforcement??0} }
     }
     return best
   }
 
-  buildFieldPrompt() {
-    return {
-      zone: this.state.phase, pressure: this._round4(this.field.topicPressure),
-      continuity: this._round4(this.field.continuity), phase: this.state.phase,
-      resonance: this._round4(this.field.resonance), coherence: this._round4(this.field.coherence),
-      drift: this._round4(this.field.drift), attractorCount: this.state.attractors.length, vaultSize: this.vault.size
-    }
-  }
-
-  buildCognitiveTarget(query, index = null) {
-    const userIntent = this._extractUserIntent(query)
-    const fieldState = {
-      phase: this.state.phase, continuity: this.field.continuity, coherence: this.field.coherence,
-      drift: this.field.drift, semanticGrounding: this.field.semanticGrounding,
-      noveltyPressure: this.field.noveltyPressure, executionReadiness: this.field.executionReadiness,
-      recallPotential: this.field.recallPotential, intentPressure: this.field.intentPressure,
-      avgCredibility: this.field.avgCredibility ?? 1.0, vaultSize: this.vault.size
-    }
-    const cognitiveMode =
-      fieldState.executionReadiness > 0.65 ? 'technical'   :
-      fieldState.intentPressure     > 0.60 ? 'analytical'  :
-      fieldState.noveltyPressure    > 0.65 ? 'exploratory' : 'general'
-    return {
-      focus: { mode: userIntent.mode, depth: userIntent.depth, what: userIntent.entities },
-      cognitiveMode, userIntent, fieldState,
-      _meta: { t: this.state.t, vaultSize: this.vault.size, deepAnalysis: userIntent.depth === 'deep' }
-    }
-  }
-
-  _extractUserIntent(query) {
-    const text = String(query ?? '').toLowerCase()
-    const mode =
-      /اشرح|explain|how does|what is|ما هو/i.test(text) ? 'explain'   :
-      /اكتب|build|create|generate|implement/i.test(text) ? 'implement' :
-      /اصلح|fix|debug|error|خطأ/i.test(text)             ? 'debug'     :
-      /صمم|design|architecture/i.test(text)               ? 'design'    : 'general'
-    const depth =
-      /بالتفصيل|detailed|full|complete/i.test(text) ? 'deep'    :
-      /باختصار|brief|quick/i.test(text)              ? 'surface' : 'balanced'
-    const entityPattern = /\b([A-Z][a-zA-Z]{3,}|[a-z]{4,}(?:Context|Builder|Engine|Index|Layer|Vault))\b/g
-    const entities = []
-    let m
-    while ((m = entityPattern.exec(query)) !== null)
-      if (!entities.includes(m[1])) entities.push(m[1])
-    return { mode, depth, entities, rawQuery: query }
-  }
-
   getSummary() {
-    return {
-      version: 'CELF-V5-bridge', phase: this.state.phase, t: this.state.t,
-      field: this.field, metrics: this._metrics(),
-      attractorCount: this.state.attractors.length, vaultSize: this.vault.size
-    }
+    return { version:'CELF-V5-bridge', phase:this.state.phase, t:this.state.t, field:this.field, metrics:this._metrics(), attractorCount:this.state.attractors.length, vaultSize:this.vault.size }
   }
 
-  getActiveCapsules() { return [...this.vault.values()].slice(0, 4) }
+  getActiveCapsules() { return [...this.vault.values()].slice(0,4) }
 
   storeOrUpdateCapsule(text, perturbation) {
-    const t = String(text ?? '')
-    if (t.length < 10) return null
-    let cs = 2166136261
-    const _tc = String(t ?? ''); for (let i = 0; i < _tc.length; i++) { cs ^= _tc.charCodeAt(i); cs = Math.imul(cs, 16777619) }
-    const checksum = Math.abs(cs >>> 0).toString(16)
-    for (const [id, cap] of this.vault) {
-      if (cap.checksum === checksum) {
-        cap.reinforcement = (cap.reinforcement ?? 0) + 0.08
-        cap.version = (cap.version ?? 1) + 1
-        return id
-      }
-    }
-    const id = `cap_${this.state.t}_${checksum.slice(0, 6)}`
-    const vector = perturbation?.semantic?.vector ?? this.semanticVector(t)
-    this.vault.set(id, {
-      id, text: t.slice(0, 4000), compressed: t.slice(0, 200), checksum, vector,
-      phase: this.state.phase, t: this.state.t,
-      theta: this._round4(this.field.signature * 1.618033988749895 % this.cycle),
-      reinforcement: 0, version: 1
-    })
-    this._pruneVault()
-    return id
+    const t=String(text??''); if(t.length<10) return null
+    let cs=2166136261; const _tc=String(t??''); for(let i=0;i<_tc.length;i++){cs^=_tc.charCodeAt(i);cs=Math.imul(cs,16777619)}
+    const checksum=Math.abs(cs>>>0).toString(16)
+    for(const[id,cap]of this.vault){if(cap.checksum===checksum){cap.reinforcement=(cap.reinforcement??0)+0.08;cap.version=(cap.version??1)+1;return id}}
+    const id=`cap_${this.state.t}_${checksum.slice(0,6)}`
+    const vector=perturbation?.semantic?.vector??this.semanticVector(t)
+    this.vault.set(id,{id,text:t.slice(0,4000),compressed:t.slice(0,200),checksum,vector,phase:this.state.phase,t:this.state.t,theta:this._round4(this.field.signature*1.618033988749895%this.cycle),reinforcement:0,version:1})
+    this._pruneVault(); return id
   }
 
   _computeFeedback(currentVector) {
-    if (!this._hasPrediction) {
-      this._lastVector.set(currentVector)
-      return { active: false, error: new Float32Array(this.semanticDimensions), magnitude: 0, quality: 1 }
-    }
-    const D = this.semanticDimensions
-    const similarity = this._cosine(currentVector, this._lastPrediction)
-    const magnitude  = this._clamp01(1 - similarity)
-    const error      = new Float32Array(D)
-    for (let i = 0; i < D; i++) error[i] = currentVector[i] - this._lastPrediction[i]
+    if(!this._hasPrediction){this._lastVector.set(currentVector);return{active:false,error:new Float32Array(this.semanticDimensions),magnitude:0,quality:1}}
+    const D=this.semanticDimensions
+    const similarity=this._cosine(currentVector,this._lastPrediction)
+    const magnitude=this._clamp01(1-similarity)
+    const error=new Float32Array(D)
+    for(let i=0;i<D;i++) error[i]=currentVector[i]-this._lastPrediction[i]
     this._lastVector.set(currentVector)
-    return { active: true, error, magnitude: this._round4(magnitude), quality: this._round4(similarity) }
+    return{active:true,error,magnitude:this._round4(magnitude),quality:this._round4(similarity)}
   }
 
   _learn(feedback) {
-    const D = this.semanticDimensions, A = this.maxAttractors
-    const e = feedback.error, a = this._lastAttractorState
-    for (let d = 0; d < D; d++)
-      for (let j = 0; j < A; j++)
-        this.W[d * A + j] += this.eta * e[d] * a[j]
-    const decay = 1 - this.eta * 0.001
-    for (let i = 0; i < this.W.length; i++) this.W[i] *= decay
-    this.theta_vault = this._clamp01(this.theta_vault + this.etaThreshold * (feedback.magnitude - this.theta_vault))
+    const D=this.semanticDimensions,A=this.maxAttractors
+    const e=feedback.error,a=this._lastAttractorState
+    for(let d=0;d<D;d++) for(let j=0;j<A;j++) this.W[d*A+j]+=this.eta*e[d]*a[j]
+    const decay=1-this.eta*0.001
+    for(let i=0;i<this.W.length;i++) this.W[i]*=decay
+    this.theta_vault=this._clamp01(this.theta_vault+this.etaThreshold*(feedback.magnitude-this.theta_vault))
     this.state.errorHistory.push(feedback.magnitude)
-    if (this.state.errorHistory.length > 32) this.state.errorHistory.shift()
-    this.state.totalError += feedback.magnitude
-    this.state.learnCount++
-    this.field.predictionError = this._round4(feedback.magnitude)
+    if(this.state.errorHistory.length>32) this.state.errorHistory.shift()
+    this.state.totalError+=feedback.magnitude; this.state.learnCount++
+    this.field.predictionError=this._round4(feedback.magnitude)
   }
 
   _buildDelta(perturb) {
-    const phi     = 1.618033988749895
-    const nextSig = this._containTheta(this.state.signature * phi + perturb.theta + perturb.intensity * this.cycle * 0.22)
-    const wrapped = Math.abs(this._signedIndexDist(this.state.lastIndex, perturb.index)) > this.resolution / 2
-    if (wrapped) this.state.cycleCount++
-    const deltaIndex = this._signedIndexDist(this.state.lastIndex, perturb.index)
-    this.state.signature      = nextSig
-    this.state.lastTheta      = perturb.theta
-    this.state.lastIndex      = perturb.index
-    this.state.lastDeltaTheta = this._indexToTheta(deltaIndex)
-    return {
-      index: perturb.index, intensity: perturb.intensity, signature: nextSig,
-      ringVector: Array.from({ length: this.ringCount }, (_, r) =>
-        this._clamp01(perturb.intensity * ((r + 1) / this.ringCount)))
-    }
+    const phi=1.618033988749895
+    const nextSig=this._containTheta(this.state.signature*phi+perturb.theta+perturb.intensity*this.cycle*0.22)
+    const wrapped=Math.abs(this._signedIndexDist(this.state.lastIndex,perturb.index))>this.resolution/2
+    if(wrapped) this.state.cycleCount++
+    const deltaIndex=this._signedIndexDist(this.state.lastIndex,perturb.index)
+    this.state.signature=nextSig; this.state.lastTheta=perturb.theta; this.state.lastIndex=perturb.index; this.state.lastDeltaTheta=this._indexToTheta(deltaIndex)
+    return{index:perturb.index,intensity:perturb.intensity,signature:nextSig,ringVector:Array.from({length:this.ringCount},(_,r)=>this._clamp01(perturb.intensity*((r+1)/this.ringCount)))}
   }
 
-  _applyDelta(delta, perturb, sourceWeight = 1.0) {
-    const radius = Math.max(2, Math.floor(3 + delta.intensity * 32))
-    const semW   = this._clamp01(
-      perturb.semantic.code * 0.20 + perturb.semantic.command * 0.20 +
-      perturb.semantic.error * 0.18 + perturb.semantic.data * 0.15 +
-      perturb.semantic.lexical * 0.15 + perturb.semantic.length * 0.12
-    )
-    for (let r = 0; r < this.ringCount; r++) {
-      const rd = delta.ringVector[r]
-      for (let i = 0; i < this.resolution; i++) {
-        const cell = this.rings[r][i]
-        const d    = this._circularIndexDist(i, delta.index)
-        const prox = this._clamp01(1 - d / radius)
-        const pressure  = this._clamp01(rd * 0.45 + semW * 0.30 + (1 - prox) * 0.25)
-        const density   = cell.constraintDensity
-        const expansion = prox * rd * this.recoveryRate * (1 - pressure) * (1 - density) * (1 + semW * 0.20) * sourceWeight
-        const narrowing = pressure * this.constraintRate * (1 - prox * 0.5) * (1 + density)
-        cell.pressure      = pressure
-        cell.p             = this._clampP(cell.p + expansion - narrowing)
-        cell.memory        = this._clamp01(cell.memory * 0.985 + prox * rd * 0.013 * sourceWeight)
-        cell.hysteresis    = this._clamp01(cell.hysteresis * 0.995 + prox * rd * 0.005)
-        cell.semanticTrace = this._clamp01(cell.semanticTrace * 0.992 + prox * semW * 0.008 * sourceWeight)
+  _applyDelta(delta,perturb,sourceWeight=1.0){
+    const radius=Math.max(2,Math.floor(3+delta.intensity*32))
+    const semW=this._clamp01(perturb.semantic.code*0.20+perturb.semantic.command*0.20+perturb.semantic.error*0.18+perturb.semantic.data*0.15+perturb.semantic.lexical*0.15+perturb.semantic.length*0.12)
+    for(let r=0;r<this.ringCount;r++){
+      const rd=delta.ringVector[r]
+      for(let i=0;i<this.resolution;i++){
+        const cell=this.rings[r][i]; const d=this._circularIndexDist(i,delta.index); const prox=this._clamp01(1-d/radius)
+        const pressure=this._clamp01(rd*0.45+semW*0.30+(1-prox)*0.25); const density=cell.constraintDensity
+        const expansion=prox*rd*this.recoveryRate*(1-pressure)*(1-density)*(1+semW*0.20)*sourceWeight
+        const narrowing=pressure*this.constraintRate*(1-prox*0.5)*(1+density)
+        cell.pressure=pressure; cell.p=this._clampP(cell.p+expansion-narrowing)
+        cell.memory=this._clamp01(cell.memory*0.985+prox*rd*0.013*sourceWeight)
+        cell.hysteresis=this._clamp01(cell.hysteresis*0.995+prox*rd*0.005)
+        cell.semanticTrace=this._clamp01(cell.semanticTrace*0.992+prox*semW*0.008*sourceWeight)
       }
     }
   }
 
-  _conserveMass() {
-    const cells = []
-    for (const ring of this.rings) for (const c of ring) cells.push(c)
-    const floor   = this.epsilon * cells.length
-    const target  = Math.max(this.massTarget, floor + this.epsilon)
-    const current = cells.reduce((s, c) => s + Math.max(0, c.p - this.epsilon), 0)
-    if (current < this.epsilon) {
-      const memSum = cells.reduce((s, c) => s + Math.max(this.epsilon, c.memory + c.semanticTrace), 0)
-      for (const c of cells) c.p = this.epsilon + ((target - floor) * Math.max(this.epsilon, c.memory + c.semanticTrace) / memSum)
+  _conserveMass(){
+    const cells=[]
+    for(const ring of this.rings) for(const c of ring) cells.push(c)
+    const floor=this.epsilon*cells.length; const target=Math.max(this.massTarget,floor+this.epsilon)
+    const current=cells.reduce((s,c)=>s+Math.max(0,c.p-this.epsilon),0)
+    if(current<this.epsilon){
+      const memSum=cells.reduce((s,c)=>s+Math.max(this.epsilon,c.memory+c.semanticTrace),0)
+      for(const c of cells) c.p=this.epsilon+((target-floor)*Math.max(this.epsilon,c.memory+c.semanticTrace)/memSum)
       return
     }
-    const factor = Math.max(0, target - floor) / current
-    for (const c of cells) c.p = this.epsilon + Math.max(0, c.p - this.epsilon) * factor
+    const factor=Math.max(0,target-floor)/current
+    for(const c of cells) c.p=this.epsilon+Math.max(0,c.p-this.epsilon)*factor
   }
 
-  _updateCellDynamics() {
-    for (const ring of this.rings) {
-      for (const cell of ring) {
-        const baseline = 1 / this.resolution
-        cell.elasticStrain = this._clamp01(Math.abs(cell.p - baseline) * cell.hysteresis * 0.3)
-        cell.p = this._clampP(cell.p - cell.elasticStrain * this.recoveryRate * 0.5)
-        cell.constraintDensity = this._clamp01(
-          cell.constraintDensity * 0.995 + cell.pressure * 0.0026 +
-          cell.memory * 0.0017 + cell.semanticTrace * 0.0007
-        )
-        cell.credibility = this._clamp01(cell.credibility * 0.99 + (1 - this.field.predictionError) * 0.01)
+  _updateCellDynamics(){
+    for(const ring of this.rings){
+      for(const cell of ring){
+        const baseline=1/this.resolution
+        cell.elasticStrain=this._clamp01(Math.abs(cell.p-baseline)*cell.hysteresis*0.3)
+        cell.p=this._clampP(cell.p-cell.elasticStrain*this.recoveryRate*0.5)
+        cell.constraintDensity=this._clamp01(cell.constraintDensity*0.995+cell.pressure*0.0026+cell.memory*0.0017+cell.semanticTrace*0.0007)
+        cell.credibility=this._clamp01(cell.credibility*0.99+(1-this.field.predictionError)*0.01)
       }
     }
   }
 
-  _diffuse() {
-    const next = this.rings.map(ring => ring.map(c => c.p))
-    for (let r = 0; r < this.ringCount; r++) {
-      for (let i = 0; i < this.resolution; i++) {
-        const cell  = this.rings[r][i]
-        const left  = this.rings[r][this._wrapI(i - 1)].p
-        const right = this.rings[r][this._wrapI(i + 1)].p
-        const up    = this.rings[this._wrapR(r - 1)][i].p
-        const down  = this.rings[this._wrapR(r + 1)][i].p
-        const lap   = (left + right - 2 * cell.p) * 0.70 + (up + down - 2 * cell.p) * 0.30
-        const R     = (1 - cell.constraintDensity) * (1 - cell.semanticTrace * 0.25) * (1 - cell.hysteresis * 0.30)
-        next[r][i]  = this._clampP(cell.p + this.diffusionRate * R * lap)
+  _diffuse(){
+    const next=this.rings.map(ring=>ring.map(c=>c.p))
+    for(let r=0;r<this.ringCount;r++){
+      for(let i=0;i<this.resolution;i++){
+        const cell=this.rings[r][i]
+        const left=this.rings[r][this._wrapI(i-1)].p; const right=this.rings[r][this._wrapI(i+1)].p
+        const up=this.rings[this._wrapR(r-1)][i].p; const down=this.rings[this._wrapR(r+1)][i].p
+        const lap=(left+right-2*cell.p)*0.70+(up+down-2*cell.p)*0.30
+        const R=(1-cell.constraintDensity)*(1-cell.semanticTrace*0.25)*(1-cell.hysteresis*0.30)
+        next[r][i]=this._clampP(cell.p+this.diffusionRate*R*lap)
       }
     }
-    for (let r = 0; r < this.ringCount; r++)
-      for (let i = 0; i < this.resolution; i++)
-        this.rings[r][i].p = next[r][i]
+    for(let r=0;r<this.ringCount;r++) for(let i=0;i<this.resolution;i++) this.rings[r][i].p=next[r][i]
   }
 
-  _updateAttractors(perturb, isFeedback = false) {
-    const candidates = []
-    for (let r = 0; r < this.ringCount; r++) {
-      for (let i = 0; i < this.resolution; i++) {
-        const c     = this.rings[r][i]
-        const score = this._clamp01(c.p * 0.40 + c.memory * 0.20 + c.semanticTrace * 0.15 + c.constraintDensity * 0.10 + c.credibility * 0.15)
-        if (score > this.theta_attractor)
-          candidates.push({ r, i, theta: c.theta, strength: score, memory: c.memory,
-            semanticWeight: c.semanticTrace, intentWeight: c.intentTrace ?? 0,
-            credibility: c.credibility, emergentCredibility: c.credibility,
-            constraintDensity: c.constraintDensity, vector: perturb.vector.slice() })
+  _updateAttractors(perturb,isFeedback=false){
+    const candidates=[]
+    for(let r=0;r<this.ringCount;r++){
+      for(let i=0;i<this.resolution;i++){
+        const c=this.rings[r][i]
+        const score=this._clamp01(c.p*0.40+c.memory*0.20+c.semanticTrace*0.15+c.constraintDensity*0.10+c.credibility*0.15)
+        if(score>this.theta_attractor) candidates.push({r,i,theta:c.theta,strength:score,memory:c.memory,semanticWeight:c.semanticTrace,intentWeight:c.intentTrace??0,credibility:c.credibility,emergentCredibility:c.credibility,constraintDensity:c.constraintDensity,vector:perturb.vector.slice()})
       }
     }
-    candidates.sort((a, b) => b.strength - a.strength)
-    const selected = []
-    for (const c of candidates) {
-      if (!selected.some(a => a.r === c.r && this._circularIndexDist(a.i, c.i) < 6)) selected.push(c)
-      if (selected.length >= this.attractorLimit) break
+    candidates.sort((a,b)=>b.strength-a.strength)
+    const selected=[]
+    for(const c of candidates){
+      if(!selected.some(a=>a.r===c.r&&this._circularIndexDist(a.i,c.i)<6)) selected.push(c)
+      if(selected.length>=this.attractorLimit) break
     }
-    const attrScale = isFeedback ? 0.25 : 1.0
-    this.state.attractors = selected.map(a => ({
-      ...a,
-      stability  : this._clamp01(a.strength * attrScale),
-      orbitTheta : this._containTheta(a.theta + this.state.lastDeltaTheta * this.attractorRate)
-    }))
+    const attrScale=isFeedback?0.25:1.0
+    this.state.attractors=selected.map(a=>({...a,stability:this._clamp01(a.strength*attrScale),orbitTheta:this._containTheta(a.theta+this.state.lastDeltaTheta*this.attractorRate)}))
   }
 
-  _applyAttractors() {
-    for (const a of this.state.attractors) {
-      const center = this._thetaToIndex(a.orbitTheta ?? a.theta)
-      const radius = Math.max(2, Math.floor(4 + a.stability * 18))
-      for (let di = -radius; di <= radius; di++) {
-        const idx  = this._wrapI(center + di)
-        const prox = this._clamp01(1 - Math.abs(di) / (radius + 1))
-        const cell = this.rings[a.r][idx]
-        const pull = this.attractorRate * a.stability * prox * (1 - cell.pressure)
-        cell.p             = this._clampP(cell.p + pull)
-        cell.memory        = this._clamp01(cell.memory + pull * 0.1)
-        cell.semanticTrace = this._clamp01(cell.semanticTrace + pull * 0.04)
+  _applyAttractors(){
+    for(const a of this.state.attractors){
+      const center=this._thetaToIndex(a.orbitTheta??a.theta); const radius=Math.max(2,Math.floor(4+a.stability*18))
+      for(let di=-radius;di<=radius;di++){
+        const idx=this._wrapI(center+di); const prox=this._clamp01(1-Math.abs(di)/(radius+1)); const cell=this.rings[a.r][idx]
+        const pull=this.attractorRate*a.stability*prox*(1-cell.pressure)
+        cell.p=this._clampP(cell.p+pull); cell.memory=this._clamp01(cell.memory+pull*0.1); cell.semanticTrace=this._clamp01(cell.semanticTrace+pull*0.04)
       }
     }
   }
 
-  _updateSemanticField(perturb, feedback) {
-    const last  = this.field.semanticMemory.at(-1)
-    const simil = last ? this._cosine(perturb.vector, last.vector) : 0
-    const novel = this._clamp01(1 - simil)
-    const grounding = this._clamp01(
-      perturb.semantic.lexical * 0.30 + perturb.semantic.length * 0.15 +
-      perturb.semantic.code * 0.20 + perturb.semantic.data * 0.20 + perturb.semantic.command * 0.15
-    )
-    const intent = this._clamp01(
-      perturb.semantic.command * 0.30 + perturb.semantic.error * 0.25 +
-      perturb.semantic.question * 0.20 + perturb.semantic.code * 0.25
-    )
-    this.field.semanticGrounding  = this._round4(this.field.semanticGrounding  * 0.86 + grounding * 0.14)
-    this.field.semanticCoherence  = this._round4(this.field.semanticCoherence  * 0.82 + simil     * 0.18)
-    this.field.intentPressure     = this._round4(this.field.intentPressure     * 0.78 + intent    * 0.22)
-    this.field.noveltyPressure    = this._round4(this.field.noveltyPressure    * 0.80 + novel     * 0.20)
-    this.field.executionReadiness = this._round4(this._clamp01(perturb.semantic.command * 0.40 + perturb.semantic.code * 0.30 + this.field.coherence * 0.30))
-    this.field.recallPotential    = this._round4(this._clamp01(simil * 0.40 + this.field.persistence * 0.30 + this.field.continuity * 0.30))
-    const creds = this.state.attractors.map(a => a.emergentCredibility ?? 1)
-    this.field.avgCredibility = creds.length ? this._round4(creds.reduce((s, v) => s + v, 0) / creds.length) : 1.0
-    this.field.semanticMemory.push({
-      t: this.state.t, text: perturb.text,
-      theta: this._round4(this.state.lastTheta),
-      vector: perturb.vector.slice(), grounding,
-      coherence: this.field.semanticCoherence, novelty: this.field.noveltyPressure,
-      phase: this.state.phase, predictionError: feedback.magnitude,
-      continuity: this.field.continuity, resonance: this.field.resonance
-    })
-    if (this.field.semanticMemory.length > this.semanticMemoryLimit) this.field.semanticMemory.shift()
+  _updateSemanticField(perturb,feedback){
+    const last=this.field.semanticMemory.at(-1); const simil=last?this._cosine(perturb.vector,last.vector):0
+    const novel=this._clamp01(1-simil)
+    const grounding=this._clamp01(perturb.semantic.lexical*0.30+perturb.semantic.length*0.15+perturb.semantic.code*0.20+perturb.semantic.data*0.20+perturb.semantic.command*0.15)
+    const intent=this._clamp01(perturb.semantic.command*0.30+perturb.semantic.error*0.25+perturb.semantic.question*0.20+perturb.semantic.code*0.25)
+    this.field.semanticGrounding=this._round4(this.field.semanticGrounding*0.86+grounding*0.14)
+    this.field.semanticCoherence=this._round4(this.field.semanticCoherence*0.82+simil*0.18)
+    this.field.intentPressure=this._round4(this.field.intentPressure*0.78+intent*0.22)
+    this.field.noveltyPressure=this._round4(this.field.noveltyPressure*0.80+novel*0.20)
+    this.field.executionReadiness=this._round4(this._clamp01(perturb.semantic.command*0.40+perturb.semantic.code*0.30+this.field.coherence*0.30))
+    this.field.recallPotential=this._round4(this._clamp01(simil*0.40+this.field.persistence*0.30+this.field.continuity*0.30))
+    const creds=this.state.attractors.map(a=>a.emergentCredibility??1)
+    this.field.avgCredibility=creds.length?this._round4(creds.reduce((s,v)=>s+v,0)/creds.length):1.0
+    this.field.semanticMemory.push({t:this.state.t,text:perturb.text,theta:this._round4(this.state.lastTheta),vector:perturb.vector.slice(),grounding,coherence:this.field.semanticCoherence,novelty:this.field.noveltyPressure,phase:this.state.phase,predictionError:feedback.magnitude,continuity:this.field.continuity,resonance:this.field.resonance})
+    if(this.field.semanticMemory.length>this.semanticMemoryLimit) this.field.semanticMemory.shift()
   }
 
-  _predict() {
-    const D = this.semanticDimensions, A = this.maxAttractors
-    const a = new Float32Array(A)
-    for (let j = 0; j < Math.min(this.state.attractors.length, A); j++) a[j] = this.state.attractors[j].strength ?? 0
-    let aNorm = 0
-    for (let j = 0; j < A; j++) aNorm += a[j] * a[j]
-    aNorm = Math.sqrt(aNorm) || 1
-    for (let j = 0; j < A; j++) a[j] /= aNorm
-    const pred = new Float32Array(D)
-    for (let d = 0; d < D; d++) {
-      let sum = 0
-      for (let j = 0; j < A; j++) sum += this.W[d * A + j] * a[j]
-      pred[d] = sum
-    }
-    let pNorm = 0
-    for (let i = 0; i < D; i++) pNorm += pred[i] * pred[i]
-    pNorm = Math.sqrt(pNorm) || 1
-    for (let i = 0; i < D; i++) pred[i] = Math.fround(pred[i] / pNorm)
-    this._lastPrediction.set(pred)
-    this._lastAttractorState.set(a)
-    this._hasPrediction = true
+  _predict(){
+    const D=this.semanticDimensions,A=this.maxAttractors; const a=new Float32Array(A)
+    for(let j=0;j<Math.min(this.state.attractors.length,A);j++) a[j]=this.state.attractors[j].strength??0
+    let aNorm=0; for(let j=0;j<A;j++) aNorm+=a[j]*a[j]; aNorm=Math.sqrt(aNorm)||1; for(let j=0;j<A;j++) a[j]/=aNorm
+    const pred=new Float32Array(D)
+    for(let d=0;d<D;d++){let sum=0;for(let j=0;j<A;j++) sum+=this.W[d*A+j]*a[j];pred[d]=sum}
+    let pNorm=0; for(let i=0;i<D;i++) pNorm+=pred[i]*pred[i]; pNorm=Math.sqrt(pNorm)||1; for(let i=0;i<D;i++) pred[i]=Math.fround(pred[i]/pNorm)
+    this._lastPrediction.set(pred); this._lastAttractorState.set(a); this._hasPrediction=true
   }
 
-  _storeCapsule(input, perturb, feedback) {
-    const text = String(input ?? '')
-    if (text.length < 10) return
-    let cs = 2166136261
-    const _txt = String(text ?? ''); for (let i = 0; i < _txt.length; i++) { cs ^= _txt.charCodeAt(i); cs = Math.imul(cs, 16777619) }
-    const checksum = Math.abs(cs >>> 0).toString(16)
-    for (const [, cap] of this.vault) {
-      if (cap.checksum === checksum) {
-        cap.reinforcement = (cap.reinforcement ?? 0) + 0.1
-        cap.version = (cap.version ?? 1) + 1
-        cap.continuity = this.field.continuity
-        cap.novelty    = this.field.noveltyPressure
-        cap.coherence  = this.field.coherence
-        cap.resonance  = this.field.resonance
-        cap.error      = feedback.magnitude
-        return
-      }
+  _storeCapsule(input,perturb,feedback){
+    const text=String(input??''); if(text.length<10) return
+    let cs=2166136261; const _txt=String(text??''); for(let i=0;i<_txt.length;i++){cs^=_txt.charCodeAt(i);cs=Math.imul(cs,16777619)}
+    const checksum=Math.abs(cs>>>0).toString(16)
+    for(const[,cap]of this.vault){
+      if(cap.checksum===checksum){cap.reinforcement=(cap.reinforcement??0)+0.1;cap.version=(cap.version??1)+1;cap.continuity=this.field.continuity;cap.novelty=this.field.noveltyPressure;cap.coherence=this.field.coherence;cap.resonance=this.field.resonance;cap.error=feedback.magnitude;return}
     }
-    const id = `cap_${this.state.t}_${checksum.slice(0, 6)}`
-    const cleanText = text
-      .replace(/```[\s\S]*?```/g, '')
-      .replace(/^(import|export|class|function|const|let|var|async)\s.*/gm, '')
-      .replace(/\s{2,}/g, ' ')
-      .trim()
-      .slice(0, 200) || text.slice(0, 80)
-    const _anchors = this._buildSteering(text).split(' ').filter(Boolean)
-    const _signals = [
-      this.field.continuity > 0.60 ? '>#' + (this.state.phase ?? 'stable') : null,
-      feedback.magnitude > 0.40    ? '?failure' : null,
-      this.field.noveltyPressure > 0.70 ? '>explore' : null,
-    ].filter(Boolean).slice(0, 3).join(' ')
-
-    this.vault.set(id, {
-      id, text: text.slice(0, 4000), compressed: cleanText, checksum, vector: perturb.vector.slice(),
-      phase: this.state.phase, t: this.state.t, error: feedback.magnitude,
-      theta: this._round4(this.field.signature * 1.618033988749895 % this.cycle),
-      reinforcement: 0, version: 1,
-      continuity: this.field.continuity, novelty: this.field.noveltyPressure,
-      coherence: this.field.coherence, resonance: this.field.resonance,
-      anchors: _anchors,
-      signals: _signals
-    })
+    const id=`cap_${this.state.t}_${checksum.slice(0,6)}`
+    const cleanText=text.replace(/```[\s\S]*?```/g,'').replace(/^(import|export|class|function|const|let|var|async)\s.*/gm,'').replace(/\s{2,}/g,' ').trim().slice(0,200)||text.slice(0,80)
+    const _anchors=this._buildSteering(text).split(' ').filter(Boolean)
+    const _signals=[this.field.continuity>0.60?'>#'+(this.state.phase??'stable'):null,feedback.magnitude>0.40?'?failure':null,this.field.noveltyPressure>0.70?'>explore':null].filter(Boolean).slice(0,3).join(' ')
+    this.vault.set(id,{id,text:text.slice(0,4000),compressed:cleanText,checksum,vector:perturb.vector.slice(),phase:this.state.phase,t:this.state.t,error:feedback.magnitude,theta:this._round4(this.field.signature*1.618033988749895%this.cycle),reinforcement:0,version:1,continuity:this.field.continuity,novelty:this.field.noveltyPressure,coherence:this.field.coherence,resonance:this.field.resonance,anchors:_anchors,signals:_signals})
     this._pruneVault()
   }
 
-  _pruneVault() {
-    if (this.vault.size <= 256) return
-    const scored = [...this.vault.entries()].map(([id, cap]) => {
-      const reinf      = this._clamp01((cap.reinforcement ?? 0) / 10)
-      const age        = Math.max(0, this.state.t - (cap.t ?? this.state.t))
-      const agePenalty = this._clamp01(age / 256)
-      const score = reinf * 0.40 + this._clamp01(cap.coherence ?? 0) * 0.20 + this._clamp01(cap.resonance ?? 0) * 0.20 + this._clamp01(cap.continuity ?? 0) * 0.20 - agePenalty * 0.12
-      return [id, score]
-    }).sort((a, b) => a[1] - b[1])
-    for (const [id] of scored.slice(0, this.vault.size - 256)) this.vault.delete(id)
+  _pruneVault(){
+    if(this.vault.size<=256) return
+    const scored=[...this.vault.entries()].map(([id,cap])=>{
+      const reinf=this._clamp01((cap.reinforcement??0)/10); const age=Math.max(0,this.state.t-(cap.t??this.state.t)); const agePenalty=this._clamp01(age/256)
+      const score=reinf*0.40+this._clamp01(cap.coherence??0)*0.20+this._clamp01(cap.resonance??0)*0.20+this._clamp01(cap.continuity??0)*0.20-agePenalty*0.12
+      return[id,score]
+    }).sort((a,b)=>a[1]-b[1])
+    for(const[id]of scored.slice(0,this.vault.size-256)) this.vault.delete(id)
   }
 
-  _updatePhase() {
-    const m = this._metrics()
-    let phase = 'stable'
-    if (this.state.t < 8)                                                                      phase = 'warmup'
-    else if (m.entropy > 0.72 && m.aliveRatio < 0.30)                                         phase = 'noise'
-    else if (m.pressure > 0.70 && m.entropy > 0.65)                                           phase = 'turbulent'
-    else if (m.aliveRatio < 0.25)                                                              phase = 'compressed'
-    else if (m.attractorStr > 0.72 && m.drift < 0.20 && this.field.semanticCoherence > 0.45) phase = 'locked'
-    else if (m.drift > 0.55 || this.field.noveltyPressure > 0.72)                             phase = 'drift'
-    else if (m.residual > 0.55 && m.attractorStr > 0.50)                                      phase = 'emergent'
-    else if (m.pressure > 0.45 || this.field.intentPressure > 0.60)                           phase = 'metastable'
-    this.state.phase = phase
+  _updatePhase(){
+    const m=this._metrics(); let phase='stable'
+    if(this.state.t<8)                                                                    phase='warmup'
+    else if(m.entropy>0.72&&m.aliveRatio<0.30)                                           phase='noise'
+    else if(m.pressure>0.70&&m.entropy>0.65)                                             phase='turbulent'
+    else if(m.aliveRatio<0.25)                                                            phase='compressed'
+    else if(m.attractorStr>0.72&&m.drift<0.20&&this.field.semanticCoherence>0.45)       phase='locked'
+    else if(m.drift>0.55||this.field.noveltyPressure>0.72)                               phase='drift'
+    else if(m.residual>0.55&&m.attractorStr>0.50)                                        phase='emergent'
+    else if(m.pressure>0.45||this.field.intentPressure>0.60)                             phase='metastable'
+    this.state.phase=phase
   }
 
-  _updateFieldIdentity() {
-    const m = this._metrics(), phi = 1.618033988749895
-    this.field.signature     = this._containTheta(this.field.signature * phi + this.state.signature + m.entropy * this.cycle * 0.20 + m.attractorStr * this.cycle * 0.14)
-    this.field.coherence     = this._round4(this._clamp01((1 - m.drift) * 0.35 + m.attractorStr * 0.30 + (1 - m.pressure) * 0.20 + this.field.semanticCoherence * 0.15))
-    this.field.continuity    = this._round4(this._clamp01(m.residual * 0.35 + m.attractorStr * 0.25 + (1 - m.drift) * 0.20 + this.field.semanticGrounding * 0.20))
-    this.field.drift         = this._round4(m.drift)
-    this.field.momentum      = this._round4(this._clamp01(Math.abs(this.state.lastDeltaTheta) / (this.cycle * 0.5)))
-    this.field.resonance     = this._round4(this._clamp01(m.entropy * 0.25 + m.attractorStr * 0.30 + m.residual * 0.20 + this.field.semanticCoherence * 0.25))
-    this.field.topicPressure = this._round4(m.pressure)
-    this.field.persistence   = this._round4(this._clamp01(this.field.persistence * 0.92 + this.field.continuity * 0.08))
-    this.field.emergence     = this._round4(this._clamp01(m.residual * 0.25 + m.entropy * 0.20 + m.attractorStr * 0.30 + this.field.noveltyPressure * 0.25))
+  _updateFieldIdentity(){
+    const m=this._metrics(),phi=1.618033988749895
+    this.field.signature=this._containTheta(this.field.signature*phi+this.state.signature+m.entropy*this.cycle*0.20+m.attractorStr*this.cycle*0.14)
+    this.field.coherence=this._round4(this._clamp01((1-m.drift)*0.35+m.attractorStr*0.30+(1-m.pressure)*0.20+this.field.semanticCoherence*0.15))
+    this.field.continuity=this._round4(this._clamp01(m.residual*0.35+m.attractorStr*0.25+(1-m.drift)*0.20+this.field.semanticGrounding*0.20))
+    this.field.drift=this._round4(m.drift)
+    this.field.momentum=this._round4(this._clamp01(Math.abs(this.state.lastDeltaTheta)/(this.cycle*0.5)))
+    this.field.resonance=this._round4(this._clamp01(m.entropy*0.25+m.attractorStr*0.30+m.residual*0.20+this.field.semanticCoherence*0.25))
+    this.field.topicPressure=this._round4(m.pressure)
+    this.field.persistence=this._round4(this._clamp01(this.field.persistence*0.92+this.field.continuity*0.08))
+    this.field.emergence=this._round4(this._clamp01(m.residual*0.25+m.entropy*0.20+m.attractorStr*0.30+this.field.noveltyPressure*0.25))
   }
 
-  _updateLocalization() {
-    let maxP = 0, sumP = 0
-    for (const ring of this.rings) for (const c of ring) { sumP += c.p; if (c.p > maxP) maxP = c.p }
-    this.field.localization = this._round4(sumP > 0 ? maxP / sumP : 0)
-    this.field.signalType   = this.field.localization > 0.012 ? 'signal' : 'noise'
+  _updateLocalization(){
+    let maxP=0,sumP=0
+    for(const ring of this.rings) for(const c of ring){sumP+=c.p;if(c.p>maxP)maxP=c.p}
+    this.field.localization=this._round4(sumP>0?maxP/sumP:0)
+    this.field.signalType=this.field.localization>0.012?'signal':'noise'
   }
 
-  _snapshot(perturb, feedback) {
-    const m = this._metrics()
-    return {
-      version: 'CELF-V5', t: this.state.t, phase: this.state.phase,
-      field: {
-        signature: this._round4(this.field.signature), coherence: this.field.coherence,
-        continuity: this.field.continuity, drift: this.field.drift, momentum: this.field.momentum,
-        resonance: this.field.resonance, persistence: this.field.persistence, emergence: this.field.emergence,
-        topicPressure: this.field.topicPressure, semanticGrounding: this.field.semanticGrounding,
-        semanticCoherence: this.field.semanticCoherence, intentPressure: this.field.intentPressure,
-        executionReadiness: this.field.executionReadiness, recallPotential: this.field.recallPotential,
-        noveltyPressure: this.field.noveltyPressure, localization: this.field.localization,
-        signalType: this.field.signalType, avgCredibility: this.field.avgCredibility ?? 1.0,
-        predictionError: this.field.predictionError, lastSourceWeight: this.field.lastSourceWeight ?? 1.0
-      },
-      perturbation: {
-        length: perturb.words, numeric: 0, rupture: 0, spread: perturb.words, sourceWeight: 1.0,
-        semantic: {
-          words: perturb.words, unique: 0, lexicalDensity: perturb.semantic.lexical,
-          code: perturb.semantic.code, question: perturb.semantic.question,
-          error: perturb.semantic.error, command: perturb.semantic.command,
-          reasoning: perturb.semantic.reasoning ?? 0, emotional: perturb.semantic.emotional ?? 0,
-          data: perturb.semantic.data, intent: perturb.semantic.intent
-        }
-      },
-      metrics: m,
-      attractors: this.state.attractors.slice(0, 6).map(a => ({
-        r: a.r, i: a.i, theta: this._round4(a.theta), orbitTheta: this._round4(a.orbitTheta ?? a.theta),
-        strength: this._round4(a.strength), stability: this._round4(a.stability),
-        constraintDensity: this._round4(a.constraintDensity ?? 0),
-        semanticWeight: this._round4(a.semanticWeight ?? 0), intentWeight: this._round4(a.intentWeight ?? 0),
-        credibility: this._round4(a.credibility ?? 1.0), emergentCredibility: this._round4(a.emergentCredibility ?? 1.0)
-      })),
-      control: {
-        mode: this.state.phase === 'drift' ? 'clarify' : 'balance',
-        executionReadiness: this.field.executionReadiness, recallPotential: this.field.recallPotential,
-        semanticGrounding: this.field.semanticGrounding, signalType: this.field.signalType
-      },
-      signal: { localization: this.field.localization, signalType: this.field.signalType, sourceWeight: this.field.lastSourceWeight ?? 1.0 },
-      delta: this._lastVector.slice()
-    }
+  _snapshot(perturb,feedback){
+    const m=this._metrics()
+    return{version:'CELF-V5',t:this.state.t,phase:this.state.phase,
+      field:{signature:this._round4(this.field.signature),coherence:this.field.coherence,continuity:this.field.continuity,drift:this.field.drift,momentum:this.field.momentum,resonance:this.field.resonance,persistence:this.field.persistence,emergence:this.field.emergence,topicPressure:this.field.topicPressure,semanticGrounding:this.field.semanticGrounding,semanticCoherence:this.field.semanticCoherence,intentPressure:this.field.intentPressure,executionReadiness:this.field.executionReadiness,recallPotential:this.field.recallPotential,noveltyPressure:this.field.noveltyPressure,localization:this.field.localization,signalType:this.field.signalType,avgCredibility:this.field.avgCredibility??1.0,predictionError:this.field.predictionError,lastSourceWeight:this.field.lastSourceWeight??1.0},
+      perturbation:{length:perturb.words,numeric:0,rupture:0,spread:perturb.words,sourceWeight:1.0,semantic:{words:perturb.words,unique:0,lexicalDensity:perturb.semantic.lexical,code:perturb.semantic.code,question:perturb.semantic.question,error:perturb.semantic.error,command:perturb.semantic.command,reasoning:perturb.semantic.reasoning??0,emotional:perturb.semantic.emotional??0,data:perturb.semantic.data,intent:perturb.semantic.intent}},
+      metrics:m,
+      attractors:this.state.attractors.slice(0,6).map(a=>({r:a.r,i:a.i,theta:this._round4(a.theta),orbitTheta:this._round4(a.orbitTheta??a.theta),strength:this._round4(a.strength),stability:this._round4(a.stability),constraintDensity:this._round4(a.constraintDensity??0),semanticWeight:this._round4(a.semanticWeight??0),intentWeight:this._round4(a.intentWeight??0),credibility:this._round4(a.credibility??1.0),emergentCredibility:this._round4(a.emergentCredibility??1.0)})),
+      control:{mode:this.state.phase==='drift'?'clarify':'balance',executionReadiness:this.field.executionReadiness,recallPotential:this.field.recallPotential,semanticGrounding:this.field.semanticGrounding,signalType:this.field.signalType},
+      signal:{localization:this.field.localization,signalType:this.field.signalType,sourceWeight:this.field.lastSourceWeight??1.0},
+      delta:this._lastVector.slice()}
   }
 
-  _commit(snap) {
-    this.state.history.push({ t: snap.t, phase: snap.phase, drift: snap.field.drift, coherence: snap.field.coherence, error: this.field.predictionError })
-    if (this.state.history.length > this.historyLimit) this.state.history.shift()
+  _commit(snap){
+    this.state.history.push({t:snap.t,phase:snap.phase,drift:snap.field.drift,coherence:snap.field.coherence,error:this.field.predictionError})
+    if(this.state.history.length>this.historyLimit) this.state.history.shift()
     this.state.t++
   }
 
-  _metrics() {
-    if (this._metricsCache !== null && this._metricsCacheTime === this.state.t) return this._metricsCache
-    const ps = [], prs = [], res = [], sem = []
-    for (const ring of this.rings) for (const c of ring) { ps.push(c.p); prs.push(c.pressure); res.push(c.residual ?? c.memory); sem.push(c.semanticTrace) }
-    const mean    = ps.reduce((s, v) => s + v, 0) / ps.length
-    const entropy = this._entropy(ps)
-    const prev    = this.state.history.at(-1)
-    const drift   = prev ? this._clamp01(Math.abs((prev.coherence ?? 0) - this.field.coherence) + Math.abs(prev.drift ?? 0)) : 0
-    const attrStr = this.state.attractors.length ? this.state.attractors.reduce((s, a) => s + (a.stability ?? 0), 0) / this.state.attractors.length : 0
-    const result = {
-      mean: this._round4(mean), entropy: this._round4(entropy),
-      pressure: this._round4(prs.reduce((s, v) => s + v, 0) / prs.length),
-      residual: this._round4(res.reduce((s, v) => s + v, 0) / res.length),
-      residualMass: this._round4(res.reduce((s, v) => s + v, 0) / res.length),
-      aliveRatio: this._round4(ps.filter(v => v > this.activationThreshold).length / ps.length),
-      attractorStr: this._round4(attrStr), attractorStrength: this._round4(attrStr),
-      drift: this._round4(drift),
-      semanticMass: this._round4(sem.reduce((s, v) => s + v, 0) / sem.length),
-      fieldCurvature: this._round4(sem.reduce((s, v) => s + v, 0) / sem.length),
-      totalMass: this._round4(this._totalMass())
-    }
-    this._metricsCache = result; this._metricsCacheTime = this.state.t
-    return result
+  _metrics(){
+    if(this._metricsCache!==null&&this._metricsCacheTime===this.state.t) return this._metricsCache
+    const ps=[],prs=[],res=[],sem=[]
+    for(const ring of this.rings) for(const c of ring){ps.push(c.p);prs.push(c.pressure);res.push(c.residual??c.memory);sem.push(c.semanticTrace)}
+    const mean=ps.reduce((s,v)=>s+v,0)/ps.length; const entropy=this._entropy(ps)
+    const prev=this.state.history.at(-1)
+    const drift=prev?this._clamp01(Math.abs((prev.coherence??0)-this.field.coherence)+Math.abs(prev.drift??0)):0
+    const attrStr=this.state.attractors.length?this.state.attractors.reduce((s,a)=>s+(a.stability??0),0)/this.state.attractors.length:0
+    const result={mean:this._round4(mean),entropy:this._round4(entropy),pressure:this._round4(prs.reduce((s,v)=>s+v,0)/prs.length),residual:this._round4(res.reduce((s,v)=>s+v,0)/res.length),residualMass:this._round4(res.reduce((s,v)=>s+v,0)/res.length),aliveRatio:this._round4(ps.filter(v=>v>this.activationThreshold).length/ps.length),attractorStr:this._round4(attrStr),attractorStrength:this._round4(attrStr),drift:this._round4(drift),semanticMass:this._round4(sem.reduce((s,v)=>s+v,0)/sem.length),fieldCurvature:this._round4(sem.reduce((s,v)=>s+v,0)/sem.length),totalMass:this._round4(this._totalMass())}
+    this._metricsCache=result; this._metricsCacheTime=this.state.t; return result
   }
 
-  _entropy(values) {
-    const sum = values.reduce((s, v) => s + v, 0)
-    if (sum <= 0) return 0
-    let h = 0
-    for (const v of values) { const p = v / sum; if (p > 0) h -= p * Math.log(p) }
-    return this._clamp01(h / Math.log(values.length))
+  _entropy(values){
+    const sum=values.reduce((s,v)=>s+v,0); if(sum<=0) return 0
+    let h=0; for(const v of values){const p=v/sum;if(p>0)h-=p*Math.log(p)}
+    return this._clamp01(h/Math.log(values.length))
   }
 
-  _cosine(a, b) {
-    const n = Math.min(a.length, b.length)
-    if (!n) return 0
-    let dot = 0, na = 0, nb = 0
-    for (let i = 0; i < n; i++) { dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i] }
-    return (na > 0 && nb > 0) ? Math.max(-1, Math.min(1, dot / (Math.sqrt(na) * Math.sqrt(nb)))) : 0
+  _cosine(a,b){
+    const n=Math.min(a.length,b.length); if(!n) return 0
+    let dot=0,na=0,nb=0
+    for(let i=0;i<n;i++){dot+=a[i]*b[i];na+=a[i]*a[i];nb+=b[i]*b[i]}
+    return(na>0&&nb>0)?Math.max(-1,Math.min(1,dot/(Math.sqrt(na)*Math.sqrt(nb)))):0
   }
 
-  _totalMass() { let s = 0; for (const ring of this.rings) for (const c of ring) s += c.p; return s }
-  _containTheta(v)         { return ((Number(v) % this.cycle) + this.cycle) % this.cycle }
-  _thetaToIndex(theta)     { return Math.floor((this._containTheta(theta) / this.cycle) * this.resolution) % this.resolution }
-  _indexToTheta(d)         { return (d / this.resolution) * this.cycle }
-  _wrapI(i)                { return ((i % this.resolution) + this.resolution) % this.resolution }
-  _wrapR(r)                { return ((r % this.ringCount)  + this.ringCount)  % this.ringCount  }
-  _circularIndexDist(a, b) { const d = Math.abs(a - b); return Math.min(d, this.resolution - d) }
-  _signedIndexDist(a, b)   { const f = (b - a + this.resolution) % this.resolution; return f > this.resolution / 2 ? f - this.resolution : f }
-  _clamp01(v)              { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0 }
-  _clampP(v)               { const n = Number(v); return Number.isFinite(n) ? Math.max(this.epsilon, n) : this.epsilon }
-  _round4(v)               { return Math.round(Number(v || 0) * 10000) / 10000 }
+  _totalMass(){let s=0;for(const ring of this.rings) for(const c of ring) s+=c.p;return s}
+  _containTheta(v){return((Number(v)%this.cycle)+this.cycle)%this.cycle}
+  _thetaToIndex(theta){return Math.floor((this._containTheta(theta)/this.cycle)*this.resolution)%this.resolution}
+  _indexToTheta(d){return(d/this.resolution)*this.cycle}
+  _wrapI(i){return((i%this.resolution)+this.resolution)%this.resolution}
+  _wrapR(r){return((r%this.ringCount)+this.ringCount)%this.ringCount}
+  _circularIndexDist(a,b){const d=Math.abs(a-b);return Math.min(d,this.resolution-d)}
+  _signedIndexDist(a,b){const f=(b-a+this.resolution)%this.resolution;return f>this.resolution/2?f-this.resolution:f}
+  _clamp01(v){const n=Number(v);return Number.isFinite(n)?Math.max(0,Math.min(1,n)):0}
+  _clampP(v){const n=Number(v);return Number.isFinite(n)?Math.max(this.epsilon,n):this.epsilon}
+  _round4(v){return Math.round(Number(v||0)*10000)/10000}
 
-  _buildSteering(text) {
-    const t = String(text ?? '')
-    const anchors = []
-    if (/websocket|socket|\bws\b|realtime|stream/i.test(t))                    anchors.push('realtime_transport')
-    if (/error|fail|crash|exception|خطأ|مشكلة|bug|fault/i.test(t))             anchors.push('failure')
-    if (/fix|debug|repair|refactor|patch|اصلح|عدل/i.test(t))                   anchors.push('repair_intent')
-    if (/analyze|review|audit|تحليل|حلل/i.test(t))                             anchors.push('analysis_intent')
-    if (/cache|redis|buffer|queue/i.test(t))                                     anchors.push('memory_layer')
-    if (/auth|jwt|token|oauth|session|login/i.test(t))                          anchors.push('identity_layer')
-    if (/database|\bdb\b|postgres|mysql|mongodb|\bsql\b/i.test(t))          anchors.push('data_store')
-    if (/api|route|endpoint|router|middleware|handler/i.test(t))                anchors.push('interface_layer')
-    if (/deploy|docker|kubernetes|nginx|railway|cloud/i.test(t))                anchors.push('infra_layer')
-    if (/create|build|generate|implement|write|أنشئ|اكتب/i.test(t))            anchors.push('build_intent')
-    if (/test|spec|jest|assert|mock/i.test(t))                                  anchors.push('verify_intent')
-    return anchors.slice(0, 3).join(' ')
+  _buildSteering(text){
+    const t=String(text??''); const anchors=[]
+    if(/websocket|socket|\bws\b|realtime|stream/i.test(t))   anchors.push('realtime_transport')
+    if(/error|fail|crash|exception|خطأ|مشكلة|bug|fault/i.test(t)) anchors.push('failure')
+    if(/fix|debug|repair|refactor|patch|اصلح|عدل/i.test(t))  anchors.push('repair_intent')
+    if(/analyze|review|audit|تحليل|حلل/i.test(t))            anchors.push('analysis_intent')
+    if(/cache|redis|buffer|queue/i.test(t))                   anchors.push('memory_layer')
+    if(/auth|jwt|token|oauth|session|login/i.test(t))         anchors.push('identity_layer')
+    if(/database|\bdb\b|postgres|mysql|mongodb|\bsql\b/i.test(t)) anchors.push('data_store')
+    if(/api|route|endpoint|router|middleware|handler/i.test(t)) anchors.push('interface_layer')
+    if(/deploy|docker|kubernetes|nginx|railway|cloud/i.test(t)) anchors.push('infra_layer')
+    if(/create|build|generate|implement|write|أنشئ|اكتب/i.test(t)) anchors.push('build_intent')
+    if(/test|spec|jest|assert|mock/i.test(t))                 anchors.push('verify_intent')
+    return anchors.slice(0,3).join(' ')
   }
 }
