@@ -1,36 +1,29 @@
 import express from 'express'
-import { resolveConceptAnchors }                                               from '../utils/concept-anchor.js'
-import { CELF_Engine_AI_V5 }                                                   from '../engines/celf-engine-v5.js'
-import { parse }                                                               from '../utils/lightweight-parser.js'
-import { cleanInput, filterStyleInstructions, detectStyleInstruction }         from '../utils/context-builder.js'
-import { observe }                                                             from '../utils/celf-observer.js'
-import { getVectorSync, getVector }                                            from '../utils/vector-store.js'
-import { buildSignalEngine, classifyDomain as _classifyDomain }                from '../utils/semantic-signal-engine.js'
+import { resolveConceptAnchors } from '../utils/concept-anchor.js'
+import { cleanInput, filterStyleInstructions, detectStyleInstruction } from '../utils/context-builder.js'
+import { buildSignalEngine, classifyDomain as _classifyDomain } from '../utils/semantic-signal-engine.js'
 
 const router = express.Router()
 
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 //  CONSTANTS
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 
-const MAX_SESSIONS       = 150
-const MAX_INPUT_CHARS    = 40000
-const MAX_TEXT_MAP       = 300
-const SUMMARY_INTERVAL   = 8
+const MAX_INPUT_CHARS      = 40000
+const MAX_TEXT_MAP         = 300
+const SUMMARY_INTERVAL     = 8
 const RECOVERED_CODE_LIMIT = 14000
-const ENABLE_VORSCHLAG   = false
 
 const FILLERS = new Set([
   'the','and','or','but','is','are','was','were','a','an','in','on','at','to','for',
-  'ich','bin','ein','eine','der','die','das','und','wie','mit','von','auf','bei','für',
+  'ich','bin','ein','eine','der','die','das','und','wie','mit','von','auf','bei','fuer',
   'هل','في','من','على','مع','هو','هي','كان','لا','أو','و','ما','هذا','ذلك'
 ])
 
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 //  STATE STORES
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 
-const sessions            = new Map()
 const processingLock      = new Set()
 const semanticTextMaps    = new Map()
 const styleStore          = new Map()
@@ -42,69 +35,12 @@ const capsuleMemory       = new Map()
 const anchorMemory        = new Map()
 const metricsStore        = new Map()
 const _semanticState      = new Map()
-const _entityTracker      = new Map()
-const _fieldHistory       = new Map()
 
-// ═══════════════════════════════════════════════════════════════
-//  ENGINE
-// ═══════════════════════════════════════════════════════════════
-
-function getEngine(sid) {
-  if (sessions.has(sid)) {
-    const e = sessions.get(sid); sessions.delete(sid); sessions.set(sid, e); return e
-  }
-  if (sessions.size >= MAX_SESSIONS) {
-    const oldest = sessions.keys().next().value
-    sessions.delete(oldest)
-    processingLock.delete(oldest)
-    semanticTextMaps.delete(oldest)
-    styleStore.delete(oldest)
-    rawCodeStore.delete(oldest)
-    codeSessionStore.delete(oldest)
-    sessionSummaryStore.delete(oldest)
-    resumeBootstrapped.delete(oldest)
-    capsuleMemory.delete(oldest)
-    anchorMemory.delete(oldest)
-    metricsStore.delete(oldest)
-    _semanticState.delete(oldest)
-    _entityTracker.delete(oldest)
-    _fieldHistory.delete(oldest)
-  }
-  const engine = new CELF_Engine_AI_V5({
-    resolution: 120, ringCount: 3, cycle: 360,
-    diffusionRate: 0.08, constraintRate: 0.12,
-    attractorLimit: 8, historyLimit: 128, archiveLimit: 128, semanticMemoryLimit: 96
-  })
-  sessions.set(sid, engine)
-  return engine
-}
-
-function feed(sid, text) {
-  const signals = parse(text)
-  if (!signals.valid) return { ok: false, reason: signals.reason ?? 'invalid_signals' }
-  const engine   = getEngine(sid)
-  const snapshot = engine.process(text)
-  const field    = snapshot.field        ?? {}
-  const metrics  = snapshot.metrics      ?? {}
-  const coherence  = Number(field.coherence        ?? 0)
-  const resonance  = Number(field.resonance         ?? 0)
-  const confidence = Number(field.semanticGrounding ?? 0)
-  const intent     = snapshot.perturbation?.semantic?.question ? 'question' : 'statement'
-  const passToLLM  = coherence > 0.15 || resonance > 0.20 || confidence < 0.4
-  return { ok: true, passToLLM, signals, result: snapshot, celfResult: { phase: snapshot.phase, t: snapshot.t, field, metrics, perturbation: snapshot.perturbation ?? {}, attractors: snapshot.attractors ?? [] } }
-}
-
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 //  UTILITIES
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 
-function engine_cosine(a, b) {
-  if (!a?.length || !b?.length) return 0
-  const n = Math.min(a.length, b.length)
-  let dot = 0, na = 0, nb = 0
-  for (let i = 0; i < n; i++) { dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i] }
-  return (na > 0 && nb > 0) ? Math.max(0, Math.min(1, dot / (Math.sqrt(na) * Math.sqrt(nb)))) : 0
-}
+const classifyDomain = _classifyDomain
 
 function semanticHash(text) {
   const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 200)
@@ -146,9 +82,6 @@ function extractSymbols(raw) {
   return [...new Set(symbols)].slice(0, 25)
 }
 
-// classifyDomain → imported from semantic-signal-engine.js
-const classifyDomain = _classifyDomain
-
 function detectCodeBlocks(text) {
   const blocks = []
   const fenced = /```(?:[a-zA-Z0-9_+-]*)?(?: |\n)([\s\S]*?)```/gi
@@ -173,8 +106,8 @@ function compressAssistantMessage(content) {
   const parts = []; let lastIndex = 0; let match
   codeBlockPattern.lastIndex = 0
   while ((match = codeBlockPattern.exec(content)) !== null) {
-    const textBefore  = content.slice(lastIndex, match.index)
-    const lang        = match[1]?.trim() || 'code'
+    const textBefore = content.slice(lastIndex, match.index)
+    const lang       = match[1]?.trim() || 'code'
     if (textBefore.trim()) parts.push({ type: 'text', content: textBefore.trim() })
     parts.push({ type: 'label', content: `[${lang} implementation]` })
     lastIndex = match.index + match[0].length
@@ -194,11 +127,6 @@ function compressUserMessage(content) {
   return content.replace(/```[\s\S]*?```/g, '[code attached]').replace(/\s{2,}/g, ' ').trim().slice(0, 300) || '[code message]'
 }
 
-function compressReplyForFeedback(reply) {
-  if (!reply || typeof reply !== 'string') return null
-  return reply.replace(/```[\s\S]*?```/g, '[code]').replace(/\n{3,}/g, '\n\n').trim().slice(0, 400)
-}
-
 function storeSemanticEntry(sid, t, text) {
   const map        = semanticTextMaps.get(sid) ?? new Map()
   const compressed = semanticCompress(text, 15)
@@ -213,11 +141,11 @@ function storeSemanticEntry(sid, t, text) {
   semanticTextMaps.set(sid, map)
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 //  CODE MANAGER
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 
-function storeCodeContext(sid, rawArr, engine, tValue) {
+function storeCodeContext(sid, rawArr, tValue) {
   const contexts = rawCodeStore.get(sid) ?? []
   for (const raw of rawArr) {
     if (!raw || raw.length < 30) continue
@@ -226,54 +154,37 @@ function storeCodeContext(sid, rawArr, engine, tValue) {
     const hash     = Math.abs(cs >>> 0).toString(16)
     const existing = contexts.find(c => c.hash === hash)
     if (existing) { existing.updatedAt = Date.now(); existing.msgIndex = tValue; continue }
-    const symbols       = extractSymbols(raw)
-    const summary       = `${classifyDomain(raw)} code: ${symbols.slice(0,6).join(', ') || 'general'}`
-    const codeVector    = engine.semanticVector(raw.slice(0, 2000))
-    const summaryVector = engine.semanticVector(summary)
-    contexts.push({ id: `ctx_${tValue}_${hash.slice(0,6)}`, raw, codeVector, summaryVector, symbols, summary, domain: classifyDomain(raw), hash, createdAt: Date.now(), updatedAt: Date.now(), msgIndex: tValue })
+    const symbols = extractSymbols(raw)
+    const summary = `${classifyDomain(raw)} code: ${symbols.slice(0,6).join(', ') || 'general'}`
+    contexts.push({ id: `ctx_${tValue}_${hash.slice(0,6)}`, raw, symbols, summary, domain: classifyDomain(raw), hash, createdAt: Date.now(), updatedAt: Date.now(), msgIndex: tValue })
   }
   if (contexts.length > 10) contexts.splice(0, contexts.length - 10)
   rawCodeStore.set(sid, contexts)
 }
 
-function retrieveRelevantCode(questionVector, questionText, sid, currentMsgIndex) {
+function retrieveRelevantCode(questionText, sid, currentMsgIndex) {
   const contexts = rawCodeStore.get(sid) ?? []
   if (!contexts.length) return null
   let best = null, bestScore = 0
   const qLower = questionText.toLowerCase()
   for (const ctx of contexts) {
-    const codeSim    = questionVector && ctx.codeVector    ? engine_cosine(questionVector, ctx.codeVector)    : 0
-    const summarySim = questionVector && ctx.summaryVector ? engine_cosine(questionVector, ctx.summaryVector) : 0
-    const symbolBoost = (ctx.symbols ?? []).filter(s => qLower.includes(s)).length * 0.12
+    const symbolBoost = (ctx.symbols ?? []).filter(s => qLower.includes(s)).length * 0.15
+    const domainMatch = classifyDomain(questionText) === ctx.domain ? 0.30 : 0
     const msgAge      = Math.max(0, currentMsgIndex - ctx.msgIndex)
     const freshness   = Math.max(0, 1 - msgAge / 20)
-    const finalScore  = (codeSim * 0.55 + summarySim * 0.30 + Math.min(0.30, symbolBoost) * 0.15) * 0.85 + freshness * 0.15
-    if (finalScore > bestScore && finalScore > 0.25) { bestScore = finalScore; best = ctx }
+    const finalScore  = symbolBoost * 0.50 + domainMatch * 0.35 + freshness * 0.15
+    if (finalScore > bestScore && finalScore > 0.10) { bestScore = finalScore; best = ctx }
   }
   return best
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 //  MEMORY
-// ═══════════════════════════════════════════════════════════════
-
-function storeCapsule(sid, observer, topicText, t, domain = 'general') {
-  if (!observer?.diagnostics) return
-  const d = observer.diagnostics
-  if (d.confidence === 'unknown') return
-  const sessionCaps = capsuleMemory.get(sid) ?? new Map()
-  const store = sessionCaps.get(domain) ?? []
-  store.push({ topic: topicText ?? 'general', covered: d.concepts?.filter(c => c.covered).map(c => c.label) ?? [], pending: d.concepts?.filter(c => !c.covered).map(c => c.label) ?? [], confidence: d.confidence, coverage: d.coverage, t })
-  if (store.length > 8) store.shift()
-  sessionCaps.set(domain, store)
-  capsuleMemory.set(sid, sessionCaps)
-}
+// ═══════════════════════════════════════════════════════
 
 function updateAnchors(sid, topicText, weight, domain = 'general') {
   if (!topicText || weight < 0.3) return
-  const sessionAnchors = anchorMemory.get(sid) instanceof Map
-    ? anchorMemory.get(sid)
-    : new Map()
+  const sessionAnchors = anchorMemory.get(sid) instanceof Map ? anchorMemory.get(sid) : new Map()
   const store    = sessionAnchors.get(domain) ?? []
   const existing = store.find(a => a.concept === topicText)
   if (existing) { existing.weight = Math.min(1, existing.weight * 0.9 + weight * 0.1) }
@@ -287,7 +198,6 @@ function updateAnchors(sid, topicText, weight, domain = 'general') {
 function buildCapsuleContext(sid, domain = 'general') {
   const sessionCaps = capsuleMemory.get(sid)
   if (!sessionCaps) return []
-  // نجلب الـ domain الحالي + general كسياق إضافي
   const domainCaps  = sessionCaps.get(domain) ?? []
   const generalCaps = domain !== 'general' ? (sessionCaps.get('general') ?? []) : []
   const caps = [...domainCaps.slice(-2), ...generalCaps.slice(-1)]
@@ -304,7 +214,6 @@ function buildCapsuleContext(sid, domain = 'general') {
 function buildAnchorContext(sid, domain = 'general') {
   const sessionAnchors = anchorMemory.get(sid)
   if (!sessionAnchors) return []
-  // دعم Map بـ domain أو Array قديم
   const anchors = sessionAnchors instanceof Map
     ? [...(sessionAnchors.get(domain) ?? []), ...(domain !== 'general' ? (sessionAnchors.get('general') ?? []) : [])]
     : sessionAnchors
@@ -313,34 +222,23 @@ function buildAnchorContext(sid, domain = 'general') {
   return [{ role: 'user', content: `[persistent topics: ${top}]` }]
 }
 
-function evaluateCapsuleContext(engine, questionVector, capsuleContext, questionText) {
-  if (!capsuleContext || !questionVector?.length) return { score: 0, used: false }
-  const capsuleVector = engine.semanticVector?.(capsuleContext)
-  if (!capsuleVector?.length) return { score: 0, used: false }
-  const sim   = engine.cosineSimilarity(questionVector, capsuleVector)
-  const used  = sim >= 0.28
-  return { score: Math.round(sim * 1000) / 1000, used }
-}
-
-async function generateSessionSummary(sid, history, engine) {
+async function generateSessionSummary(sid, history) {
   if (!history || history.length < 4) return null
-  const recent  = history.slice(-16)
-  const domain  = classifyDomain(recent.filter(h => h.role === 'user').map(h => h.content).join(' '))
-  const symbols = (recent.map(h => h.content).join(' ').match(/[a-zA-Z][a-zA-Z0-9]{2,}/g) ?? []).slice(0, 6).join(', ')
+  const recent    = history.slice(-16)
+  const domain    = classifyDomain(recent.filter(h => h.role === 'user').map(h => h.content).join(' '))
+  const symbols   = (recent.map(h => h.content).join(' ').match(/[a-zA-Z][a-zA-Z0-9]{2,}/g) ?? []).slice(0, 6).join(', ')
   const mainTopic = recent.filter(h => h.role === 'user')[0]?.content?.replace(/```[\s\S]*?```/g,'').trim().slice(0,80) ?? 'general'
-  const decisions = recent.filter(h => h.role === 'user' && /قررنا|decided|we.ll use/i.test(h.content)).map(h => h.content.slice(0,80)).slice(0,3)
-  return { text: `${domain}: ${symbols || 'general'} — ${mainTopic}`.slice(0,200), decisions, generatedAt: Date.now() }
+  return { text: `${domain}: ${symbols || 'general'} - ${mainTopic}`.slice(0,200), generatedAt: Date.now() }
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 //  CONTEXT BUILDER
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 
 function buildHistoryLayer(history, continuity, sid, needsRawCode = false, currentDomain = 'general') {
   const filtered = filterStyleInstructions(history)
   const clean    = filtered.filter(h => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string' && h.content.length > 0)
   if (clean.length <= 4) return clean.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : h.content }))
-
   if (continuity >= 0.70) {
     return clean.slice(-4).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) }))
   }
@@ -352,16 +250,13 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false, curre
   return clean.slice(-4).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : compressUserMessage(h.content) }))
 }
 
-// ← Semantic Signal Engine → ../utils/semantic-signal-engine.js
-
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 //  TOKEN BUDGET
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 
 function chooseMaxTokens(anchors, inputWords, hasCode, remaining) {
   const has = a => anchors.includes(a)
   const cap = Math.min(8000, Math.max(1000, Math.floor(remaining * 0.45)))
-
   if (has('@repair_intent') || has('@build_intent')) return Math.min(cap, 6000)
   if (has('@analysis_intent'))                        return cap
   if (has('@verify_intent'))                          return Math.min(cap, 4000)
@@ -371,9 +266,9 @@ function chooseMaxTokens(anchors, inputWords, hasCode, remaining) {
   return Math.min(cap, 2500)
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 //  LLM CALLER
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 
 function checkPayload(systemHint, messages) {
   const size = JSON.stringify({ system: systemHint, messages }).length
@@ -415,9 +310,9 @@ function removeOverlap(existing, continuation) {
 async function continuationCall(currentText, partialReply, systemHint, model = 'claude-haiku-4-5-20251001') {
   const hasOpenCode    = (partialReply.match(/```/g) ?? []).length % 2 !== 0
   const continuePrompt = hasOpenCode
-    ? 'continue exactly from where you stopped — complete the open code block, do not repeat what was already written'
-    : 'continue exactly from where you stopped — do not repeat what was already written'
-  const body     = buildClaudeBody(model, 4096, systemHint, [
+    ? 'continue exactly from where you stopped - complete the open code block, do not repeat what was already written'
+    : 'continue exactly from where you stopped - do not repeat what was already written'
+  const body = buildClaudeBody(model, 4096, systemHint, [
     { role: 'user', content: currentText },
     { role: 'assistant', content: partialReply },
     { role: 'user', content: continuePrompt }
@@ -426,9 +321,9 @@ async function continuationCall(currentText, partialReply, systemHint, model = '
   return await response.json()
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 //  STYLE
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 
 function setStyle(sid, style, ttl) { styleStore.set(sid, { style, ttl }) }
 function getAndTickStyle(sid) {
@@ -439,14 +334,12 @@ function getAndTickStyle(sid) {
   return entry.style
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 //  SEMANTIC STATE
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 
 function getSemanticState(sid) {
-  if (!_semanticState.has(sid)) {
-    _semanticState.set(sid, { dominantDomain: 'general', driftCount: 0 })
-  }
+  if (!_semanticState.has(sid)) _semanticState.set(sid, { dominantDomain: 'general', driftCount: 0 })
   return _semanticState.get(sid)
 }
 
@@ -461,18 +354,18 @@ function updateSemanticState(sid, detectedDomain) {
   return state
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 //  MAIN ROUTE
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'CELF_Engine_AI_V5', version: '11.0' })
+  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '12.0' })
 })
 
 router.post('/process-text', async (req, res) => {
   const {
     text = '', sessionId, history = [], image = null, imageMimeType = 'image/jpeg',
-    capsuleContext = null, recoveredCode = null, sessionSummary = null,
+    recoveredCode = null, sessionSummary = null,
   } = req.body
 
   const hasText  = typeof text  === 'string' && text.trim().length > 0
@@ -486,10 +379,9 @@ router.post('/process-text', async (req, res) => {
   const sid = sessionId
 
   try {
-    // ── ① INPUT ─────────────────────────────────────────────────
-    const rawText    = hasText && text.length > MAX_INPUT_CHARS ? text.slice(0, MAX_INPUT_CHARS) + '\n\n[truncated]' : text
+    // -- INPUT
+    const rawText     = hasText && text.length > MAX_INPUT_CHARS ? text.slice(0, MAX_INPUT_CHARS) + '\n\n[truncated]' : text
     const cleanedText = hasText ? cleanInput(rawText) : rawText
-    const inputText   = cleanedText || '(image)'
 
     if (hasText) {
       const styleDetected = detectStyleInstruction(cleanedText)
@@ -500,24 +392,13 @@ router.post('/process-text', async (req, res) => {
     const wordCount    = cleanedText.trim().split(/\s+/).length
     const codeBlocks   = detectCodeBlocks(text || cleanedText)
 
-    // ── ② VECTOR STORE ──────────────────────────────────────────
-    const _storedVec = getVectorSync(inputText.toLowerCase().trim().slice(0, 100))
-    if (!_storedVec) getVector(inputText.toLowerCase().trim().slice(0, 100)).catch(() => null)
-
-    // ── ③ CELF ENGINE ────────────────────────────────────────────
-    const processed = feed(sid, inputText)
-    if (!processed.ok) return res.status(422).json({ error: processed.reason || 'processing_failed' })
-
-    const engine         = getEngine(sid)
-    const tValue         = processed.result.t
-    const field          = processed.celfResult.field ?? {}
-    const continuity     = field.continuity  ?? 0
-    const questionVector = engine.semanticVector?.(cleanedText) ?? null
+    // -- CONTINUITY (بدون محرك)
+    const tValue     = (history?.length ?? 0) + 1
+    const continuity = Math.min(1, (history?.length ?? 0) / 10)
 
     storeSemanticEntry(sid, tValue, cleanedText.replace(/```[\s\S]*?```/g,'').replace(/\s{2,}/g,' ').trim())
 
-    // ── ④ CONCEPT ANCHOR ─────────────────────────────────────────
-    // نفصل سؤال المستخدم عن الكود قبل resolveConceptAnchors
+    // -- CONCEPT ANCHOR
     const questionOnly = cleanedText
       .replace(/```[\s\S]*?```/g, '')
       .split('\n')
@@ -535,42 +416,50 @@ router.post('/process-text', async (req, res) => {
 
     const { anchors } = resolveConceptAnchors(questionOnly)
 
-    // ── ⑥ CODE CONTEXT ───────────────────────────────────────────
+    // -- ACTIVE DOMAIN (قبل CODE CONTEXT)
+    const _detectedDomain = classifyDomain(questionOnly)
+    const activeDomain = _detectedDomain !== 'general'
+      ? _detectedDomain
+      : (getSemanticState(sid).dominantDomain ?? 'general')
+
+    // -- CODE CONTEXT
     if (codeBlocks.length > 0) {
-      storeCodeContext(sid, codeBlocks, engine, tValue)
+      storeCodeContext(sid, codeBlocks, tValue)
       codeSessionStore.set(sid, { active: true, ttl: 6 })
     } else {
       const cs = codeSessionStore.get(sid)
       if (cs?.active) { cs.ttl--; if (cs.ttl <= 0) cs.active = false }
     }
 
-    if (!rawCodeStore.has(sid) && recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30) {
-      storeCodeContext(sid, [recoveredCode], engine, tValue)
+    const BLOCK_CODE_DOMAINS = new Set(['science','math','humanities','general'])
+    if (!rawCodeStore.has(sid) && recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30
+        && !BLOCK_CODE_DOMAINS.has(activeDomain)) {
+      storeCodeContext(sid, [recoveredCode], tValue)
       codeSessionStore.set(sid, { active: true, ttl: 6 })
     }
 
-    const hasStoredCode  = (rawCodeStore.get(sid) ?? []).length > 0
-    const hasCode        = codeBlocks.length > 0 || hasStoredCode
-    // إذا كود مخزن → أرسله دائماً بدون اعتماد على similarity
-    const effectiveMatch = hasCode && questionVector
-      ? retrieveRelevantCode(questionVector, cleanedText, sid, tValue)
+    const hasStoredCode = (rawCodeStore.get(sid) ?? []).length > 0
+    const hasCode       = codeBlocks.length > 0 ||
+      (hasStoredCode && !BLOCK_CODE_DOMAINS.has(activeDomain))
+    const effectiveMatch = hasCode && !BLOCK_CODE_DOMAINS.has(activeDomain)
+      ? retrieveRelevantCode(cleanedText, sid, tValue)
       : null
     const codeRelated =
       /اصلح|أصلح|عدل|تعديل|حلل|تحليل|analyze|fix|edit|refactor|review|debug|ثغرة|خطأ|مشكلة|improve|update|check|اختبر|وضح|explain/i.test(questionOnly)
     const refRelated =
-      hasStoredCode &&
-      continuity > 0.20 &&
+      hasStoredCode && continuity > 0.20 &&
       /هذا|هذه|ذلك|هنا|السابق|الكود|الملف|يعني|معنى|اشرح|وضح|this|that|previous|above/i.test(questionOnly)
     const shouldAttachStoredCode =
-      hasStoredCode && (codeBlocks.length > 0 || codeRelated || refRelated)
-    const storedRaw = effectiveMatch?.raw
-      ?? (shouldAttachStoredCode ? (rawCodeStore.get(sid) ?? []).at(-1)?.raw ?? null : null)
+      hasStoredCode &&
+      !BLOCK_CODE_DOMAINS.has(activeDomain) &&
+      (codeBlocks.length > 0 || codeRelated || refRelated)
+    const storedRaw = effectiveMatch?.raw ?? (shouldAttachStoredCode ? (rawCodeStore.get(sid) ?? []).at(-1)?.raw ?? null : null)
 
-    // ── ⑤⑥ SEMANTIC SIGNAL ENGINE ──────────────────────────────────
-    const { fieldSignals, systemHint: _systemHint, allowCodeSuggestion, activeDomain: _activeDomain } =
+    // -- SEMANTIC SIGNAL ENGINE
+    const { fieldSignals, systemHint: _systemHint, allowCodeSuggestion } =
       buildSignalEngine({
         sid,
-        celfResult: processed.celfResult,
+        celfResult: { field: { continuity, noveltyPressure: 0, semanticCoherence: 0 } },
         questionOnly,
         codeBlocks,
         continuity,
@@ -579,44 +468,30 @@ router.post('/process-text', async (req, res) => {
         userIsArabic,
         semanticState: getSemanticState(sid)
       })
-    updateSemanticState(sid, _activeDomain)
-    const activeDomainEarly = _activeDomain
+    updateSemanticState(sid, activeDomain)
 
-    // ── ⑦ SESSION SUMMARY ────────────────────────────────────────
-    if (!sessionSummaryStore.has(sid) && sessionSummary?.text) {
-      sessionSummaryStore.set(sid, sessionSummary)
-    }
-    if (!resumeBootstrapped.has(sid) && (sessionSummary?.text || recoveredCode)) {
-      const resumeText = [
-        sessionSummary?.text ? `[session resumed] ${sessionSummary.text}` : null,
-        recoveredCode ? `[code resumed] ${classifyDomain(recoveredCode)} code` : null
-      ].filter(Boolean).join('\n')
-      if (resumeText.trim()) { try { engine.process(resumeText, { sourceWeight: 0.65 }) } catch {} }
-      resumeBootstrapped.add(sid)
-    }
+    // -- SESSION SUMMARY
+    if (!sessionSummaryStore.has(sid) && sessionSummary?.text) sessionSummaryStore.set(sid, sessionSummary)
+    if (!resumeBootstrapped.has(sid) && sessionSummary?.text) resumeBootstrapped.add(sid)
     const activeSummary = sessionSummaryStore.get(sid) ?? null
 
-    // ── ⑧ CAPSULE CONTEXT ────────────────────────────────────────
-    // ── ⑨ SYSTEM PROMPT ──────────────────────────────────────────
+    // -- SYSTEM PROMPT
     const styleMap  = { concise:'Be concise.', detailed:'Be detailed.', arabic:'Respond in Arabic.', english:'Reply in English.', german:'Antworte auf Deutsch.' }
     const styleHint = activeStyle && styleMap[activeStyle] ? styleMap[activeStyle] : null
-
     const systemParts = [_systemHint, styleHint].filter(Boolean)
     if (activeSummary?.text) systemParts.unshift(`[session] ${activeSummary.text}`)
-
     const systemHint = systemParts.join('\n') || null
 
-    // ── ⑩ MESSAGES ───────────────────────────────────────────────
+    // -- MESSAGES
     const filteredHistory = filterStyleInstructions(history)
-    const activeDomain    = _activeDomain
+    // activeDomain already computed above
     const historyMessages = buildHistoryLayer(filteredHistory, continuity, sid, false, activeDomain)
-    const recCode         = typeof recoveredCode === 'string' && recoveredCode.length > 30 ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT) : null
-
-    const questionText = storedRaw
-      ? (questionOnly || 'تعامل مع الكود المرفق حسب طلب المستخدم.')
-      : cleanedText
-
-    const userContent = hasImage
+    const recCode         = typeof recoveredCode === 'string' && recoveredCode.length > 30
+      && !BLOCK_CODE_DOMAINS.has(activeDomain)
+      ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT)
+      : null
+    const questionText    = storedRaw ? (questionOnly || 'تعامل مع الكود المرفق حسب طلب المستخدم.') : cleanedText
+    const userContent     = hasImage
       ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: questionText }] : [])]
       : questionText
 
@@ -627,7 +502,7 @@ router.post('/process-text', async (req, res) => {
       { role: 'user', content: userContent }
     ]
 
-    // ── ⑪ LLM ────────────────────────────────────────────────────
+    // -- LLM
     const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
     const remaining     = Math.max(1000, 180000 - inputEstimate)
     const maxTokens     = chooseMaxTokens(anchors, wordCount, hasCode, remaining)
@@ -665,35 +540,23 @@ router.post('/process-text', async (req, res) => {
       throw err
     }
 
-    // ── ⑫ POST PROCESSOR ─────────────────────────────────────────
-    let observerBox = null
-    if (reply && !hasImage && tValue > 1 && wordCount > 2 && questionVector?.length) {
-      try {
-        observerBox = observe({ engine, questionText: cleanedText, questionVector, replyText: reply, noiseRemoved: false, lang: 'ar' })
-        const currentDomain = classifyDomain(questionOnly || cleanedText)
-        if (observerBox) { storeCapsule(sid, observerBox, cleanedText.slice(0,80), tValue, currentDomain); updateAnchors(sid, cleanedText.slice(0,80), 0.5, currentDomain) }
-      } catch {}
-    }
+    // -- POST PROCESSOR
+    const currentDomain = classifyDomain(questionOnly || cleanedText)
+    updateAnchors(sid, cleanedText.slice(0,80), 0.5, currentDomain)
 
-    // خزّن كود LLM فقط إذا كان full_file (كود كامل مولّد بطلب صريح)
     if (reply && fieldSignals?.includes('#full_file')) {
       const replyBlocks = detectCodeBlocks(reply)
       if (replyBlocks.length > 0 && replyBlocks[0].length > 200) {
-        storeCodeContext(sid, replyBlocks, engine, tValue + 0.9)
+        storeCodeContext(sid, replyBlocks, tValue + 0.9)
         codeSessionStore.set(sid, { active: true, ttl: 6 })
       }
-    }
-
-    if (reply) {
-      const replyCompressed = compressReplyForFeedback(reply)
-      if (replyCompressed) { try { engine.process(replyCompressed, { sourceWeight: 0.25 }) } catch {} }
     }
 
     const msgCountAfter = (history?.length ?? 0) + 1
     let newSummary = null
     if (msgCountAfter % SUMMARY_INTERVAL === 0) {
       try {
-        newSummary = await generateSessionSummary(sid, [...(history ?? []), { role: 'assistant', content: reply ?? '' }], engine)
+        newSummary = await generateSessionSummary(sid, [...(history ?? []), { role: 'assistant', content: reply ?? '' }])
         if (newSummary) sessionSummaryStore.set(sid, newSummary)
       } catch {}
     }
@@ -701,38 +564,14 @@ router.post('/process-text', async (req, res) => {
     const costUSD = parseFloat(((inputTokensTotal/1_000_000)*1.0 + (outputTokensTotal/1_000_000)*5.0).toFixed(6))
     metricsStore.set(sid, { sessionId: sid, inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, costUSD, maxTokens, payloadSize, updatedAt: new Date().toISOString() })
 
-    const vaultToSave = [...getEngine(sid).vault.values()].slice(-20).map(c => ({
-      id: c.id, vector: Array.from(c.vector ?? []), text: c.text?.slice(0,200) ?? '', phase: c.phase ?? 'warmup', error: c.error ?? 0, theta: c.theta ?? 0, reinforcement: c.reinforcement ?? 0
-    }))
-
     return res.json({
       reply,
       newSummary: newSummary ?? null,
-      nextSuggestion: allowCodeSuggestion ? null : null,
-      celfVault: vaultToSave,
-      observer: observerBox,
-      debug: {
-        systemHint: systemHint ?? null,
-        fieldSignals,
-        anchors,
-        continuity,
-        allowCodeSuggestion,
-        activeDomain: activeDomain ?? activeDomainEarly,
-        phase: processed.celfResult.phase,
-        msgCount: messages.length,
-        hasCode,
-        storedCode: !!storedRaw,
-        maxTokens,
-        model
-      },
-      metrics: {
-        inputTokens: inputTokensTotal,
-        outputTokens: outputTokensTotal,
-        costUSD,
-        maxTokens,
-        model,
-        payloadSize
-      }
+      nextSuggestion: null,
+      celfVault: [],
+      observer: null,
+      debug: { systemHint: systemHint ?? null, fieldSignals, anchors, continuity, allowCodeSuggestion, activeDomain, msgCount: messages.length, hasCode, storedCode: !!storedRaw, maxTokens, model },
+      metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, costUSD, maxTokens, model, payloadSize }
     })
 
   } catch (err) {
@@ -743,11 +582,6 @@ router.post('/process-text', async (req, res) => {
   }
 })
 
-router.get('/session/:id', (req, res) => {
-  if (!sessions.has(req.params.id)) return res.status(404).json({ error: 'session_not_found' })
-  return res.json({ ok: true, sessionId: req.params.id, summary: sessions.get(req.params.id).getSummary?.() ?? {} })
-})
-
 router.get('/metrics/:id', (req, res) => {
   const m = metricsStore.get(req.params.id)
   if (!m) return res.status(404).json({ error: 'metrics_not_found' })
@@ -756,13 +590,11 @@ router.get('/metrics/:id', (req, res) => {
 
 router.delete('/session/:id', (req, res) => {
   const id = req.params.id
-  sessions.delete(id); metricsStore.delete(id); semanticTextMaps.delete(id)
-  styleStore.delete(id); processingLock.delete(id); _semanticState.delete(id)
-  _fieldHistory.delete(id); _entityTracker.delete(id); rawCodeStore.delete(id)
+  metricsStore.delete(id); semanticTextMaps.delete(id); styleStore.delete(id)
+  processingLock.delete(id); _semanticState.delete(id); rawCodeStore.delete(id)
   codeSessionStore.delete(id); resumeBootstrapped.delete(id); capsuleMemory.delete(id)
   anchorMemory.delete(id); sessionSummaryStore.delete(id)
   return res.json({ ok: true })
 })
 
-export { getEngine }
 export default router
