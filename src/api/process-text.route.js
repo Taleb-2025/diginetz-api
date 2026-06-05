@@ -157,6 +157,9 @@ function classifyDomain(text) {
   if (/algorithm|sort|search|graph|tree|dynamic|recursion/i.test(t))                       return 'algorithms'
   if (/test|jest|mocha|cypress|spec|unit|mock|coverage/i.test(t))                          return 'testing'
   if (/const|let|var|function|class|import|export|async/.test(t) && t.length > 80)         return 'code'
+  if (/فيزياء|physics|كيمياء|chemistry|بيولوجيا|biology|كوانتم|quantum|ذرة|atom|موجة|wave|تشابك|entanglement|نسبية|relativity|ميكانيكا|mechanics|طاقة|energy|جسيم|particle|نووي|nuclear/i.test(t)) return 'science'
+  if (/رياضيات|math|جبر|algebra|هندسة|geometry|إحصاء|statistics|حساب|calculus|مبرهنة|theorem|معادلة|equation|دالة.*رياضي|تفاضل|differential|تكامل|integral/i.test(t))  return 'math'
+  if (/تاريخ|history|جغرافيا|geography|فلسفة|philosophy|أدب|literature|لغة|language/i.test(t)) return 'humanities'
   return 'general'
 }
 
@@ -268,31 +271,42 @@ function retrieveRelevantCode(questionVector, questionText, sid, currentMsgIndex
 //  MEMORY
 // ═══════════════════════════════════════════════════════════════
 
-function storeCapsule(sid, observer, topicText, t) {
+function storeCapsule(sid, observer, topicText, t, domain = 'general') {
   if (!observer?.diagnostics) return
   const d = observer.diagnostics
   if (d.confidence === 'unknown') return
-  const store = capsuleMemory.get(sid) ?? []
+  const sessionCaps = capsuleMemory.get(sid) ?? new Map()
+  const store = sessionCaps.get(domain) ?? []
   store.push({ topic: topicText ?? 'general', covered: d.concepts?.filter(c => c.covered).map(c => c.label) ?? [], pending: d.concepts?.filter(c => !c.covered).map(c => c.label) ?? [], confidence: d.confidence, coverage: d.coverage, t })
-  if (store.length > 10) store.shift()
-  capsuleMemory.set(sid, store)
+  if (store.length > 8) store.shift()
+  sessionCaps.set(domain, store)
+  capsuleMemory.set(sid, sessionCaps)
 }
 
-function updateAnchors(sid, topicText, weight) {
+function updateAnchors(sid, topicText, weight, domain = 'general') {
   if (!topicText || weight < 0.3) return
-  const store    = anchorMemory.get(sid) ?? []
+  const sessionAnchors = anchorMemory.get(sid) instanceof Map
+    ? anchorMemory.get(sid)
+    : new Map()
+  const store    = sessionAnchors.get(domain) ?? []
   const existing = store.find(a => a.concept === topicText)
   if (existing) { existing.weight = Math.min(1, existing.weight * 0.9 + weight * 0.1) }
   else { store.push({ concept: topicText, weight, t: Date.now() }) }
   store.sort((a, b) => b.weight - a.weight)
   if (store.length > 5) store.pop()
-  anchorMemory.set(sid, store)
+  sessionAnchors.set(domain, store)
+  anchorMemory.set(sid, sessionAnchors)
 }
 
-function buildCapsuleContext(sid) {
-  const caps = capsuleMemory.get(sid) ?? []
+function buildCapsuleContext(sid, domain = 'general') {
+  const sessionCaps = capsuleMemory.get(sid)
+  if (!sessionCaps) return []
+  // نجلب الـ domain الحالي + general كسياق إضافي
+  const domainCaps  = sessionCaps.get(domain) ?? []
+  const generalCaps = domain !== 'general' ? (sessionCaps.get('general') ?? []) : []
+  const caps = [...domainCaps.slice(-2), ...generalCaps.slice(-1)]
   if (!caps.length) return []
-  const lines = caps.slice(-3).map(c => {
+  const lines = caps.map(c => {
     const parts = [`topic:${c.topic}`]
     if (c.covered?.length) parts.push(`covered:${c.covered.slice(0,3).join(',')}`)
     if (c.pending?.length) parts.push(`pending:${c.pending.slice(0,2).join(',')}`)
@@ -301,8 +315,13 @@ function buildCapsuleContext(sid) {
   return [{ role: 'user', content: `[memory]\n${lines.join('\n')}` }]
 }
 
-function buildAnchorContext(sid) {
-  const anchors = anchorMemory.get(sid) ?? []
+function buildAnchorContext(sid, domain = 'general') {
+  const sessionAnchors = anchorMemory.get(sid)
+  if (!sessionAnchors) return []
+  // دعم Map بـ domain أو Array قديم
+  const anchors = sessionAnchors instanceof Map
+    ? [...(sessionAnchors.get(domain) ?? []), ...(domain !== 'general' ? (sessionAnchors.get('general') ?? []) : [])]
+    : sessionAnchors
   if (!anchors.length) return []
   const top = anchors.slice(0, 3).map(a => `${a.concept}(${Math.round(a.weight*100)}%)`).join(', ')
   return [{ role: 'user', content: `[persistent topics: ${top}]` }]
@@ -341,9 +360,9 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false, curre
   }
   if (continuity >= 0.40) {
     const msgs = clean.slice(-4).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) }))
-    return [...msgs, ...buildCapsuleContext(sid)]
+    return [...msgs, ...buildCapsuleContext(sid, currentDomain)]
   }
-  if (continuity >= 0.20) return [...buildCapsuleContext(sid), ...buildAnchorContext(sid)]
+  if (continuity >= 0.20) return [...buildCapsuleContext(sid, currentDomain), ...buildAnchorContext(sid, currentDomain)]
   return clean.slice(-4).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : compressUserMessage(h.content) }))
 }
 
@@ -400,14 +419,24 @@ function buildRoutingConstraints(anchors, fieldSignals) {
   if (has('@analysis_intent') && !has('@repair_intent'))
     constraints.push('Output: concise findings — overview, key issues, recommendations. No full rewrite.')
 
-  if (has('@repair_intent'))
+  if (has('@repair_intent') && !fs.includes('#full_file'))
     constraints.push('Output: targeted fix only. Do not rewrite unrelated parts.')
+
+  if (fs.includes('#full_file'))
+    constraints.push('Output: complete working file. Include all code. No truncation.')
 
   if (has('@build_intent'))
     constraints.push('Output: structured implementation. Define contracts before code.')
 
   if (fs.includes('#continuity') || fs.includes('#followup'))
     constraints.push('Build on prior context. Do not repeat what was already addressed.')
+
+  if (has('@repair_intent') || has('@build_intent')) {
+    constraints.push('Always wrap code in fenced blocks with language tag — e.g. ```html ... ``` or ```javascript ... ```.')
+    constraints.push('Use textContent or createElement instead of innerHTML when inserting user data.')
+    constraints.push('Only claim a fix is applied if the actual code change is present in your output.')
+    constraints.push('Do not mention improvements that are not reflected in the code you return.')
+  }
 
   return constraints.length > 0 ? '[Routing Constraints]\n' + constraints.join('\n') : null
 }
@@ -417,12 +446,14 @@ function buildDirectives(anchors, userIsArabic, fieldSignals) {
   const pattern     = buildSemanticPattern(anchors)
   const signals     = fieldSignals ?? null
   const constraints = buildRoutingConstraints(anchors, fieldSignals)
+  const fs          = String(fieldSignals || '')
 
   const parts = []
   const directivesPart = [lang, pattern].filter(Boolean).join('\n')
   if (directivesPart) parts.push('[Routing Directives]\n' + directivesPart)
   if (signals)        parts.push('[Routing Signals]\n' + signals)
   if (constraints)    parts.push(constraints)
+  if (fs.includes('@depth.surface')) parts.push('concise')
   return parts.join('\n') || null
 }
 
@@ -486,6 +517,11 @@ function buildFieldSignals(sid, celfResult, cleanedText, codeBlocks, continuity,
   if (/debug|trace|تتبع|يعمل.*لكن/i.test(cleanedText))                   add('::debug', 0.75)
   if (codeBlocks.length > 0)                                               add('#code', 0.80)
   if (hasStoredCode)                                                        add('#code_recall', 0.75)
+  if (/أنزله|أعطني.*كامل|الكود.*كامل|full.*file|complete.*code|اعطني الكود|كامل.*نهائي/i.test(cleanedText)) add('#full_file', 0.92)
+
+  // domain signal — يُضاف دائماً إذا ليس general
+  const _dom = classifyDomain(cleanedText)
+  if (_dom !== 'general') add(`::${_dom}`, 0.72)
 
   const state = _semanticState.get(sid) ?? {}
   if ((state.driftCount ?? 0) >= 2)                                        add('::reset', 0.85)
@@ -719,6 +755,13 @@ router.post('/process-text', async (req, res) => {
     const fieldSignals = buildFieldSignals(sid, processed.celfResult, questionOnly, codeBlocks, continuity, anchors, !!storedRaw)
     updateSemanticState(sid, classifyDomain(questionOnly || cleanedText))
 
+    // ── ⑤.⑤ ALLOW CODE SUGGESTION ────────────────────────────────
+    const activeDomainEarly = classifyDomain(questionOnly || cleanedText)
+    const CODE_DOMAINS = new Set(['debugging','backend','frontend','database','security','devops','algorithms','testing','code'])
+    const allowCodeSuggestion =
+      CODE_DOMAINS.has(activeDomainEarly) &&
+      !/فيزياء|physics|كيمياء|chemistry|رياضيات|math|بيولوجيا|biology|تاريخ|history|جغرافيا|geography|فلسفة|philosophy|أدب|literature/i.test(questionOnly)
+
     // ── ⑦ SESSION SUMMARY ────────────────────────────────────────
     if (!sessionSummaryStore.has(sid) && sessionSummary?.text) {
       sessionSummaryStore.set(sid, sessionSummary)
@@ -746,7 +789,8 @@ router.post('/process-text', async (req, res) => {
 
     // ── ⑩ MESSAGES ───────────────────────────────────────────────
     const filteredHistory = filterStyleInstructions(history)
-    const historyMessages = buildHistoryLayer(filteredHistory, continuity, sid, false, classifyDomain(cleanedText))
+    const activeDomain    = classifyDomain(questionOnly || cleanedText)
+    const historyMessages = buildHistoryLayer(filteredHistory, continuity, sid, false, activeDomain)
     const recCode         = typeof recoveredCode === 'string' && recoveredCode.length > 30 ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT) : null
 
     const questionText = storedRaw
@@ -807,8 +851,18 @@ router.post('/process-text', async (req, res) => {
     if (reply && !hasImage && tValue > 1 && wordCount > 2 && questionVector?.length) {
       try {
         observerBox = observe({ engine, questionText: cleanedText, questionVector, replyText: reply, noiseRemoved: false, lang: 'ar' })
-        if (observerBox) { storeCapsule(sid, observerBox, cleanedText.slice(0,80), tValue); updateAnchors(sid, cleanedText.slice(0,80), 0.5) }
+        const currentDomain = classifyDomain(questionOnly || cleanedText)
+        if (observerBox) { storeCapsule(sid, observerBox, cleanedText.slice(0,80), tValue, currentDomain); updateAnchors(sid, cleanedText.slice(0,80), 0.5, currentDomain) }
       } catch {}
+    }
+
+    // خزّن كود LLM فقط إذا كان full_file (كود كامل مولّد بطلب صريح)
+    if (reply && fieldSignals?.includes('#full_file')) {
+      const replyBlocks = detectCodeBlocks(reply)
+      if (replyBlocks.length > 0 && replyBlocks[0].length > 200) {
+        storeCodeContext(sid, replyBlocks, engine, tValue + 0.9)
+        codeSessionStore.set(sid, { active: true, ttl: 6 })
+      }
     }
 
     if (reply) {
@@ -835,7 +889,7 @@ router.post('/process-text', async (req, res) => {
     return res.json({
       reply,
       newSummary: newSummary ?? null,
-      nextSuggestion: null,
+      nextSuggestion: allowCodeSuggestion ? null : null,
       celfVault: vaultToSave,
       observer: observerBox,
       debug: {
@@ -843,6 +897,8 @@ router.post('/process-text', async (req, res) => {
         fieldSignals,
         anchors,
         continuity,
+        allowCodeSuggestion,
+        activeDomain: activeDomain ?? activeDomainEarly,
         phase: processed.celfResult.phase,
         msgCount: messages.length,
         hasCode,
