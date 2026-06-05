@@ -757,10 +757,15 @@ router.post('/process-text', async (req, res) => {
 
     // ── ⑤.⑤ ALLOW CODE SUGGESTION ────────────────────────────────
     const activeDomainEarly = classifyDomain(questionOnly || cleanedText)
-    const CODE_DOMAINS = new Set(['debugging','backend','frontend','database','security','devops','algorithms','testing','code'])
+    const NON_CODE_DOMAINS  = new Set(['science','math','humanities','general'])
+    const fs_sig            = String(fieldSignals || '')
+    const hasCodeIntent     =
+      anchors.some(a => ['@repair_intent','@build_intent'].includes(a)) ||
+      /(@intent\.fix|@intent\.build|#code|#code_recall)/.test(fs_sig)
     const allowCodeSuggestion =
-      CODE_DOMAINS.has(activeDomainEarly) &&
-      !/فيزياء|physics|كيمياء|chemistry|رياضيات|math|بيولوجيا|biology|تاريخ|history|جغرافيا|geography|فلسفة|philosophy|أدب|literature/i.test(questionOnly)
+      !!storedRaw &&
+      !NON_CODE_DOMAINS.has(activeDomainEarly) &&
+      hasCodeIntent
 
     // ── ⑦ SESSION SUMMARY ────────────────────────────────────────
     if (!sessionSummaryStore.has(sid) && sessionSummary?.text) {
