@@ -204,7 +204,7 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   // ── Code signals
   if (codeBlocks.length > 0)  add('#code',        0.80)
   if (hasStoredCode)           add('#code_recall', 0.75)
-  if (/أنزله|أعطني.*كامل|الكود.*كامل|full.*file|complete.*code|اعطني الكود|كامل.*نهائي/i.test(questionOnly)) add('#full_file', 0.92)
+  if (/أنزله|انزله|نزله|أعطني.*كامل|اعطني.*كامل|الكود.*كامل|full.*file|complete.*code|اعطني الكود|كامل.*نهائي|download.*full|give.*full|كامل.*الكود/i.test(questionOnly)) add('#full_file', 0.92)
 
   // ── Domain signal (مع fallback من semanticState)
   const detectedDomain = classifyDomain(questionOnly)
