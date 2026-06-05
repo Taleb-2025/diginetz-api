@@ -176,7 +176,7 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
 
   // ── Priority signals
   if (/critical|قاتل|خطير|urgent|عاجل/i.test(questionOnly))              add('!critical', 1.00)
-  if (/موقوف|blocked|cannot proceed/i.test(questionOnly))                  add('!blocked',  0.98)
+  if (/موقوف|توقف|متوقف|stopped|blocked|cannot proceed|لا يعمل|انهار|crashed/i.test(questionOnly)) add('!blocked', 0.98)
 
   // ── Diagnostic signals
   if (/كان يعمل|used to work|regression/i.test(questionOnly))             add('?regression',  0.90)
