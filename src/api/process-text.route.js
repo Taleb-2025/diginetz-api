@@ -5,13 +5,8 @@ import { buildSignalEngine, classifyDomain as _classifyDomain } from '../utils/s
 
 const router = express.Router()
 
-// ═══════════════════════════════════════════════════════
-//  CONSTANTS
-// ═══════════════════════════════════════════════════════
-
 const MAX_INPUT_CHARS      = 40000
 const MAX_TEXT_MAP         = 300
-const SUMMARY_INTERVAL     = 8
 const RECOVERED_CODE_LIMIT = 14000
 
 const FILLERS = new Set([
@@ -19,10 +14,6 @@ const FILLERS = new Set([
   'ich','bin','ein','eine','der','die','das','und','wie','mit','von','auf','bei','fuer',
   'هل','في','من','على','مع','هو','هي','كان','لا','أو','و','ما','هذا','ذلك'
 ])
-
-// ═══════════════════════════════════════════════════════
-//  STATE STORES
-// ═══════════════════════════════════════════════════════
 
 const processingLock      = new Set()
 const semanticTextMaps    = new Map()
@@ -35,10 +26,6 @@ const capsuleMemory       = new Map()
 const anchorMemory        = new Map()
 const metricsStore        = new Map()
 const _semanticState      = new Map()
-
-// ═══════════════════════════════════════════════════════
-//  UTILITIES
-// ═══════════════════════════════════════════════════════
 
 const classifyDomain = _classifyDomain
 
@@ -141,10 +128,6 @@ function storeSemanticEntry(sid, t, text) {
   semanticTextMaps.set(sid, map)
 }
 
-// ═══════════════════════════════════════════════════════
-//  CODE MANAGER
-// ═══════════════════════════════════════════════════════
-
 function storeCodeContext(sid, rawArr, tValue) {
   const contexts = rawCodeStore.get(sid) ?? []
   for (const raw of rawArr) {
@@ -177,10 +160,6 @@ function retrieveRelevantCode(questionText, sid, currentMsgIndex) {
   }
   return best
 }
-
-// ═══════════════════════════════════════════════════════
-//  MEMORY
-// ═══════════════════════════════════════════════════════
 
 function updateAnchors(sid, topicText, weight, domain = 'general') {
   if (!topicText || weight < 0.3) return
@@ -222,18 +201,19 @@ function buildAnchorContext(sid, domain = 'general') {
   return [{ role: 'user', content: `[persistent topics: ${top}]` }]
 }
 
-async function generateSessionSummary(sid, history) {
+// ④ generateSessionSummary — يُدخل سؤال المستخدم الحالي في الملخص
+async function generateSessionSummary(sid, history, currentQuestion = '') {
   if (!history || history.length < 4) return null
   const recent    = history.slice(-16)
   const domain    = classifyDomain(recent.filter(h => h.role === 'user').map(h => h.content).join(' '))
   const symbols   = (recent.map(h => h.content).join(' ').match(/[a-zA-Z][a-zA-Z0-9]{2,}/g) ?? []).slice(0, 6).join(', ')
-  const mainTopic = recent.filter(h => h.role === 'user')[0]?.content?.replace(/```[\s\S]*?```/g,'').trim().slice(0,80) ?? 'general'
+  const mainTopic = (
+    currentQuestion.replace(/```[\s\S]*?```/g,'').trim().slice(0, 80) ||
+    recent.filter(h => h.role === 'user')[0]?.content?.replace(/```[\s\S]*?```/g,'').trim().slice(0,80) ||
+    'general'
+  )
   return { text: `${domain}: ${symbols || 'general'} - ${mainTopic}`.slice(0,200), generatedAt: Date.now() }
 }
-
-// ═══════════════════════════════════════════════════════
-//  CONTEXT BUILDER
-// ═══════════════════════════════════════════════════════
 
 function buildHistoryLayer(history, continuity, sid, needsRawCode = false, currentDomain = 'general') {
   const filtered = filterStyleInstructions(history)
@@ -250,10 +230,6 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false, curre
   return clean.slice(-4).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : compressUserMessage(h.content) }))
 }
 
-// ═══════════════════════════════════════════════════════
-//  TOKEN BUDGET
-// ═══════════════════════════════════════════════════════
-
 function chooseMaxTokens(anchors, inputWords, hasCode, remaining) {
   const has = a => anchors.includes(a)
   const cap = Math.min(8000, Math.max(1000, Math.floor(remaining * 0.45)))
@@ -265,10 +241,6 @@ function chooseMaxTokens(anchors, inputWords, hasCode, remaining) {
   if (inputWords <= 15)                               return 2000
   return Math.min(cap, 2500)
 }
-
-// ═══════════════════════════════════════════════════════
-//  LLM CALLER
-// ═══════════════════════════════════════════════════════
 
 function checkPayload(systemHint, messages) {
   const size = JSON.stringify({ system: systemHint, messages }).length
@@ -321,10 +293,6 @@ async function continuationCall(currentText, partialReply, systemHint, model = '
   return await response.json()
 }
 
-// ═══════════════════════════════════════════════════════
-//  STYLE
-// ═══════════════════════════════════════════════════════
-
 function setStyle(sid, style, ttl) { styleStore.set(sid, { style, ttl }) }
 function getAndTickStyle(sid) {
   const entry = styleStore.get(sid)
@@ -334,32 +302,31 @@ function getAndTickStyle(sid) {
   return entry.style
 }
 
-// ═══════════════════════════════════════════════════════
-//  SEMANTIC STATE
-// ═══════════════════════════════════════════════════════
-
 function getSemanticState(sid) {
   if (!_semanticState.has(sid)) _semanticState.set(sid, { dominantDomain: 'general', driftCount: 0 })
   return _semanticState.get(sid)
 }
 
+// ① updateSemanticState — يثبّت dominantDomain من أول domain حقيقي
 function updateSemanticState(sid, detectedDomain) {
   const state = getSemanticState(sid)
-  if (detectedDomain !== state.dominantDomain && detectedDomain !== 'general') {
-    state.driftCount++
-    if (state.driftCount >= 3) { state.dominantDomain = detectedDomain; state.driftCount = 0 }
-  } else if (detectedDomain === state.dominantDomain) {
-    state.driftCount = 0
+  if (detectedDomain !== 'general') {
+    if (state.dominantDomain === 'general') {
+      // أول domain حقيقي يُثبَّت فوراً بدون انتظار driftCount
+      state.dominantDomain = detectedDomain
+      state.driftCount = 0
+    } else if (detectedDomain !== state.dominantDomain) {
+      state.driftCount++
+      if (state.driftCount >= 3) { state.dominantDomain = detectedDomain; state.driftCount = 0 }
+    } else {
+      state.driftCount = 0
+    }
   }
   return state
 }
 
-// ═══════════════════════════════════════════════════════
-//  MAIN ROUTE
-// ═══════════════════════════════════════════════════════
-
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '12.0' })
+  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '12.1' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -379,7 +346,6 @@ router.post('/process-text', async (req, res) => {
   const sid = sessionId
 
   try {
-    // -- INPUT
     const rawText     = hasText && text.length > MAX_INPUT_CHARS ? text.slice(0, MAX_INPUT_CHARS) + '\n\n[truncated]' : text
     const cleanedText = hasText ? cleanInput(rawText) : rawText
 
@@ -392,13 +358,11 @@ router.post('/process-text', async (req, res) => {
     const wordCount    = cleanedText.trim().split(/\s+/).length
     const codeBlocks   = detectCodeBlocks(text || cleanedText)
 
-    // -- CONTINUITY
     const tValue     = (history?.length ?? 0) + 1
     const continuity = Math.min(1, (history?.length ?? 0) / 10)
 
     storeSemanticEntry(sid, tValue, cleanedText.replace(/```[\s\S]*?```/g,'').replace(/\s{2,}/g,' ').trim())
 
-    // -- CONCEPT ANCHOR
     const questionOnly = cleanedText
       .replace(/```[\s\S]*?```/g, '')
       .split('\n')
@@ -416,20 +380,26 @@ router.post('/process-text', async (req, res) => {
 
     const { anchors } = resolveConceptAnchors(questionOnly)
 
-    // -- ACTIVE DOMAIN
     const _detectedDomain = classifyDomain(questionOnly)
     const activeDomain = _detectedDomain !== 'general'
       ? _detectedDomain
       : (getSemanticState(sid).dominantDomain ?? 'general')
 
-    // -- CODE CONTEXT  ① التعديل الأول
     const HARD_BLOCK_DOMAINS = new Set(['science','math','humanities'])
-    const codeRelated = /اصلح|أصلح|عدل|تعديل|حلل|analyze|fix|edit|refactor|review|debug|ثغرة|خطأ|مشكلة|improve|update|check|اختبر|وضح|explain/i.test(questionOnly)
+
+    // ③ codeRelated — بدون explain/وضح العام (يُشغّل الكود بنية تعديل/إصلاح صريحة)
+    const codeRelated = /اصلح|أصلح|عدل|تعديل|حلل|analyze|fix|edit|refactor|review|debug|ثغرة|خطأ|مشكلة|improve|update|check|اختبر/i.test(questionOnly)
+
+    // ② explainCodeRelated — شرح آمن: يسحب الكود فقط إذا ذُكر الكود صراحةً مع طلب الشرح
+    const explainCodeRelated =
+      /اشرح|شرح|وضح|explain/i.test(questionOnly) &&
+      /كود|الكود|code|file|ملف|function|class|html|css|js|javascript/i.test(questionOnly)
+
     const hasStoredCode     = (rawCodeStore.get(sid) ?? []).length > 0
     const codeSessionActive = codeSessionStore.get(sid)?.active === true
     const hasCodeAnchor     = anchors.some(a => ['@repair_intent','@build_intent','@analysis_intent'].includes(a))
     const refRelated        = hasStoredCode && continuity > 0.20 && /هذا|هذه|ذلك|هنا|السابق|الكود|الملف|يعني|معنى|اشرح|وضح|this|that|previous|above/i.test(questionOnly)
-    const generalAllowsCode = activeDomain === 'general' && (hasCodeAnchor || codeSessionActive || codeRelated || refRelated || codeBlocks.length > 0)
+    const generalAllowsCode = activeDomain === 'general' && (hasCodeAnchor || codeSessionActive || codeRelated || explainCodeRelated || refRelated || codeBlocks.length > 0)
     const shouldBlockCode   = HARD_BLOCK_DOMAINS.has(activeDomain) || (activeDomain === 'general' && !generalAllowsCode)
 
     if (codeBlocks.length > 0) {
@@ -441,23 +411,34 @@ router.post('/process-text', async (req, res) => {
     }
 
     if (!rawCodeStore.has(sid) && recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30
-        && !shouldBlockCode) {  // ② التعديل الثاني (recCode)
+        && !shouldBlockCode) {
       storeCodeContext(sid, [recoveredCode], tValue)
       codeSessionStore.set(sid, { active: true, ttl: 6 })
     }
 
-    const hasCode       = codeBlocks.length > 0 ||
-      (hasStoredCode && !shouldBlockCode)
+    const hasCode        = codeBlocks.length > 0 || (hasStoredCode && !shouldBlockCode)
     const effectiveMatch = hasCode && !shouldBlockCode
       ? retrieveRelevantCode(cleanedText, sid, tValue)
       : null
-    const shouldAttachStoredCode =
-      hasStoredCode &&
-      !shouldBlockCode &&
-      (codeBlocks.length > 0 || codeRelated || refRelated)
-    const storedRaw = effectiveMatch?.raw ?? (shouldAttachStoredCode ? (rawCodeStore.get(sid) ?? []).at(-1)?.raw ?? null : null)
 
-    // -- SEMANTIC SIGNAL ENGINE
+    const shouldAttachStoredCode =
+      hasStoredCode && !shouldBlockCode &&
+      (codeBlocks.length > 0 || codeRelated || explainCodeRelated || refRelated || hasCodeAnchor || codeSessionActive)
+
+    // ② recoveredCode → storedRaw عند الحاجة (إذا لا يوجد effectiveMatch ويوجد recoveredCode)
+    const storedRaw =
+      effectiveMatch?.raw ??
+      (shouldAttachStoredCode
+        ? (rawCodeStore.get(sid) ?? []).at(-1)?.raw ?? null
+        : null) ??
+      // fallback: إذا recoveredCode مؤهّل ولا يوجد أي كود مخزن محلياً، استخدمه مباشرة
+      (recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode && !hasStoredCode
+        ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT)
+        : null)
+
+    // ① finalHasCode — يشمل storedRaw من recoveredCode
+    const finalHasCode = codeBlocks.length > 0 || !!storedRaw
+
     const { fieldSignals, systemHint: _systemHint, allowCodeSuggestion } =
       buildSignalEngine({
         sid,
@@ -472,23 +453,19 @@ router.post('/process-text', async (req, res) => {
       })
     updateSemanticState(sid, activeDomain)
 
-    // -- SESSION SUMMARY
     if (!sessionSummaryStore.has(sid) && sessionSummary?.text) sessionSummaryStore.set(sid, sessionSummary)
     if (!resumeBootstrapped.has(sid) && sessionSummary?.text) resumeBootstrapped.add(sid)
     const activeSummary = sessionSummaryStore.get(sid) ?? null
 
-    // -- SYSTEM PROMPT
     const styleMap  = { concise:'Be concise.', detailed:'Be detailed.', arabic:'Respond in Arabic.', english:'Reply in English.', german:'Antworte auf Deutsch.' }
     const styleHint = activeStyle && styleMap[activeStyle] ? styleMap[activeStyle] : null
     const systemParts = [_systemHint, styleHint].filter(Boolean)
     if (activeSummary?.text) systemParts.unshift(`[session] ${activeSummary.text}`)
     const systemHint = systemParts.join('\n') || null
 
-    // -- MESSAGES
     const filteredHistory = filterStyleInstructions(history)
     const historyMessages = buildHistoryLayer(filteredHistory, continuity, sid, false, activeDomain)
-    const recCode         = typeof recoveredCode === 'string' && recoveredCode.length > 30
-      && !shouldBlockCode  // ② التعديل الثاني (recCode في messages)
+    const recCode         = typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode
       ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT)
       : null
     const questionText    = storedRaw ? (questionOnly || 'تعامل مع الكود المرفق حسب طلب المستخدم.') : cleanedText
@@ -503,10 +480,9 @@ router.post('/process-text', async (req, res) => {
       { role: 'user', content: userContent }
     ]
 
-    // -- LLM
     const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
     const remaining     = Math.max(1000, 180000 - inputEstimate)
-    const maxTokens     = chooseMaxTokens(anchors, wordCount, hasCode, remaining)
+    const maxTokens     = chooseMaxTokens(anchors, wordCount, finalHasCode, remaining)
     const model         = 'claude-haiku-4-5-20251001'
 
     let payloadSize = 0
@@ -541,7 +517,6 @@ router.post('/process-text', async (req, res) => {
       throw err
     }
 
-    // -- POST PROCESSOR
     const currentDomain = classifyDomain(questionOnly || cleanedText)
     updateAnchors(sid, cleanedText.slice(0,80), 0.5, currentDomain)
 
@@ -555,9 +530,18 @@ router.post('/process-text', async (req, res) => {
 
     const msgCountAfter = (history?.length ?? 0) + 1
     let newSummary = null
-    if (msgCountAfter >= 4) {  // ③ التعديل الثالث
+    if (msgCountAfter >= 4) {
       try {
-        newSummary = await generateSessionSummary(sid, [...(history ?? []), { role: 'assistant', content: reply ?? '' }])
+        // ④ تمرير questionOnly لـ generateSessionSummary
+        newSummary = await generateSessionSummary(
+          sid,
+          [
+            ...(history ?? []),
+            { role: 'user', content: cleanedText },
+            { role: 'assistant', content: reply ?? '' }
+          ],
+          questionOnly
+        )
         if (newSummary) sessionSummaryStore.set(sid, newSummary)
       } catch {}
     }
@@ -571,7 +555,7 @@ router.post('/process-text', async (req, res) => {
       nextSuggestion: null,
       celfVault: [],
       observer: null,
-      debug: { systemHint: systemHint ?? null, fieldSignals, anchors, continuity, allowCodeSuggestion, activeDomain, msgCount: messages.length, hasCode, storedCode: !!storedRaw, maxTokens, model },
+      debug: { systemHint: systemHint ?? null, fieldSignals, anchors, continuity, allowCodeSuggestion, activeDomain, msgCount: messages.length, hasCode: finalHasCode, storedCode: !!storedRaw, maxTokens, model },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, costUSD, maxTokens, model, payloadSize }
     })
 
