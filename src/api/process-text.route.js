@@ -392,7 +392,7 @@ router.post('/process-text', async (req, res) => {
     const wordCount    = cleanedText.trim().split(/\s+/).length
     const codeBlocks   = detectCodeBlocks(text || cleanedText)
 
-    // -- CONTINUITY (بدون محرك)
+    // -- CONTINUITY
     const tValue     = (history?.length ?? 0) + 1
     const continuity = Math.min(1, (history?.length ?? 0) / 10)
 
@@ -416,13 +416,22 @@ router.post('/process-text', async (req, res) => {
 
     const { anchors } = resolveConceptAnchors(questionOnly)
 
-    // -- ACTIVE DOMAIN (قبل CODE CONTEXT)
+    // -- ACTIVE DOMAIN
     const _detectedDomain = classifyDomain(questionOnly)
     const activeDomain = _detectedDomain !== 'general'
       ? _detectedDomain
       : (getSemanticState(sid).dominantDomain ?? 'general')
 
-    // -- CODE CONTEXT
+    // -- CODE CONTEXT  ① التعديل الأول
+    const HARD_BLOCK_DOMAINS = new Set(['science','math','humanities'])
+    const codeRelated = /اصلح|أصلح|عدل|تعديل|حلل|analyze|fix|edit|refactor|review|debug|ثغرة|خطأ|مشكلة|improve|update|check|اختبر|وضح|explain/i.test(questionOnly)
+    const hasStoredCode     = (rawCodeStore.get(sid) ?? []).length > 0
+    const codeSessionActive = codeSessionStore.get(sid)?.active === true
+    const hasCodeAnchor     = anchors.some(a => ['@repair_intent','@build_intent','@analysis_intent'].includes(a))
+    const refRelated        = hasStoredCode && continuity > 0.20 && /هذا|هذه|ذلك|هنا|السابق|الكود|الملف|يعني|معنى|اشرح|وضح|this|that|previous|above/i.test(questionOnly)
+    const generalAllowsCode = activeDomain === 'general' && (hasCodeAnchor || codeSessionActive || codeRelated || refRelated || codeBlocks.length > 0)
+    const shouldBlockCode   = HARD_BLOCK_DOMAINS.has(activeDomain) || (activeDomain === 'general' && !generalAllowsCode)
+
     if (codeBlocks.length > 0) {
       storeCodeContext(sid, codeBlocks, tValue)
       codeSessionStore.set(sid, { active: true, ttl: 6 })
@@ -431,27 +440,20 @@ router.post('/process-text', async (req, res) => {
       if (cs?.active) { cs.ttl--; if (cs.ttl <= 0) cs.active = false }
     }
 
-    const BLOCK_CODE_DOMAINS = new Set(['science','math','humanities','general'])
     if (!rawCodeStore.has(sid) && recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30
-        && !BLOCK_CODE_DOMAINS.has(activeDomain)) {
+        && !shouldBlockCode) {  // ② التعديل الثاني (recCode)
       storeCodeContext(sid, [recoveredCode], tValue)
       codeSessionStore.set(sid, { active: true, ttl: 6 })
     }
 
-    const hasStoredCode = (rawCodeStore.get(sid) ?? []).length > 0
     const hasCode       = codeBlocks.length > 0 ||
-      (hasStoredCode && !BLOCK_CODE_DOMAINS.has(activeDomain))
-    const effectiveMatch = hasCode && !BLOCK_CODE_DOMAINS.has(activeDomain)
+      (hasStoredCode && !shouldBlockCode)
+    const effectiveMatch = hasCode && !shouldBlockCode
       ? retrieveRelevantCode(cleanedText, sid, tValue)
       : null
-    const codeRelated =
-      /اصلح|أصلح|عدل|تعديل|حلل|تحليل|analyze|fix|edit|refactor|review|debug|ثغرة|خطأ|مشكلة|improve|update|check|اختبر|وضح|explain/i.test(questionOnly)
-    const refRelated =
-      hasStoredCode && continuity > 0.20 &&
-      /هذا|هذه|ذلك|هنا|السابق|الكود|الملف|يعني|معنى|اشرح|وضح|this|that|previous|above/i.test(questionOnly)
     const shouldAttachStoredCode =
       hasStoredCode &&
-      !BLOCK_CODE_DOMAINS.has(activeDomain) &&
+      !shouldBlockCode &&
       (codeBlocks.length > 0 || codeRelated || refRelated)
     const storedRaw = effectiveMatch?.raw ?? (shouldAttachStoredCode ? (rawCodeStore.get(sid) ?? []).at(-1)?.raw ?? null : null)
 
@@ -484,10 +486,9 @@ router.post('/process-text', async (req, res) => {
 
     // -- MESSAGES
     const filteredHistory = filterStyleInstructions(history)
-    // activeDomain already computed above
     const historyMessages = buildHistoryLayer(filteredHistory, continuity, sid, false, activeDomain)
     const recCode         = typeof recoveredCode === 'string' && recoveredCode.length > 30
-      && !BLOCK_CODE_DOMAINS.has(activeDomain)
+      && !shouldBlockCode  // ② التعديل الثاني (recCode في messages)
       ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT)
       : null
     const questionText    = storedRaw ? (questionOnly || 'تعامل مع الكود المرفق حسب طلب المستخدم.') : cleanedText
@@ -554,7 +555,7 @@ router.post('/process-text', async (req, res) => {
 
     const msgCountAfter = (history?.length ?? 0) + 1
     let newSummary = null
-    if (msgCountAfter % SUMMARY_INTERVAL === 0) {
+    if (msgCountAfter >= 4) {  // ③ التعديل الثالث
       try {
         newSummary = await generateSessionSummary(sid, [...(history ?? []), { role: 'assistant', content: reply ?? '' }])
         if (newSummary) sessionSummaryStore.set(sid, newSummary)
