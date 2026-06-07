@@ -71,7 +71,7 @@ export function buildRoutingConstraints(anchors, fieldSignals) {
   const has = a => anchors.includes(a)
   const constraints = []
 
-  if (fs.includes('#code') || fs.includes('#code_recall'))
+  if (fs.includes('#code') || fs.includes('#code_summary') || fs.includes('#code_full'))
     constraints.push('If code is provided → analyze it directly without asking for it again.')
 
   if (has('@analysis_intent') && !has('@repair_intent'))
@@ -181,7 +181,13 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   if (/debug|trace|تتبع|يعمل.*لكن/i.test(questionOnly))                  add('::debug',          0.75)
 
   if (codeBlocks.length > 0)  add('#code',        0.80)
-  if (hasStoredCode)           add('#code_recall', 0.75)
+  if (hasStoredCode) {
+    const needsFullCode =
+      anchors.includes('@repair_intent') ||
+      anchors.includes('@analysis_intent') ||
+      /اصلح|أصلح|عدل|تعديل|حلل|analyze|fix|edit|refactor|review|debug|ثغرة|خطأ|مشكلة/i.test(questionOnly)
+    add(needsFullCode ? '#code_full' : '#code_summary', 0.75)
+  }
   if (/أنزله|انزله|نزله|أعطني.*كامل|اعطني.*كامل|الكود.*كامل|full.*file|complete.*code|اعطني الكود|كامل.*نهائي|download.*full|give.*full|كامل.*الكود/i.test(questionOnly)) add('#full_file', 0.92)
 
   const detectedDomain = classifyDomain(questionOnly)
@@ -215,7 +221,7 @@ export function computeAllowCodeSuggestion({ storedRaw, activeDomain, anchors, f
   const BLOCK_DOMAINS = new Set(['science', 'math', 'humanities'])
   const fs = String(fieldSignals || '')
   const hasCodeAnchor  = anchors.some(a => ['@repair_intent', '@build_intent'].includes(a))
-  const hasCodeSignal  = /(@intent\.fix|@intent\.build|#code\b)/.test(fs)
+  const hasCodeSignal  = /(@intent\.fix|@intent\.build|#code_full\b|#code\b)/.test(fs)
   const hasCodeIntent  = hasCodeAnchor || hasCodeSignal
   return !!storedRaw && hasCodeIntent && !BLOCK_DOMAINS.has(activeDomain)
 }
@@ -248,15 +254,11 @@ export function computeOutputShape({ questionOnly = '', anchors, fieldSignals, a
 }
 
 export function outputShapeHint(outputShape) {
-  if (outputShape === 'brief') {
+  if (outputShape === 'brief')
     return '[Output Shape]\nBe brief. Max 3 points. No preamble.'
-  }
-
-  if (outputShape === 'balanced') {
+  if (outputShape === 'balanced')
     return '[Output Shape]\nAnswer directly. No preamble. No repetition. If this is a follow-up, answer only the new point first. Keep enough detail for accuracy.'
-  }
-
-  return null // detailed / full — حر
+  return null  // detailed / full
 }
 
 // ───────────────────────────────────────────────────────────────
