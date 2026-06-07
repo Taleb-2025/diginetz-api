@@ -201,7 +201,6 @@ function buildAnchorContext(sid, domain = 'general') {
   return [{ role: 'user', content: `[persistent topics: ${top}]` }]
 }
 
-// ④ generateSessionSummary — يُدخل سؤال المستخدم الحالي في الملخص
 async function generateSessionSummary(sid, history, currentQuestion = '') {
   if (!history || history.length < 4) return null
   const recent    = history.slice(-16)
@@ -231,7 +230,7 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false, curre
 }
 
 function chooseMaxTokens(anchors, inputWords, hasCode, remaining) {
-  // maxTokens = سقف أمان واسع فقط — SS تتحكم في الاختصار عبر systemHint
+
   const cap = Math.min(8000, Math.max(2000, Math.floor(remaining * 0.45)))
   return cap
 }
@@ -301,12 +300,11 @@ function getSemanticState(sid) {
   return _semanticState.get(sid)
 }
 
-// ① updateSemanticState — يثبّت dominantDomain من أول domain حقيقي
 function updateSemanticState(sid, detectedDomain) {
   const state = getSemanticState(sid)
   if (detectedDomain !== 'general') {
     if (state.dominantDomain === 'general') {
-      // أول domain حقيقي يُثبَّت فوراً بدون انتظار driftCount
+
       state.dominantDomain = detectedDomain
       state.driftCount = 0
     } else if (detectedDomain !== state.dominantDomain) {
@@ -381,10 +379,8 @@ router.post('/process-text', async (req, res) => {
 
     const HARD_BLOCK_DOMAINS = new Set(['science','math','humanities'])
 
-    // ③ codeRelated — بدون explain/وضح العام (يُشغّل الكود بنية تعديل/إصلاح صريحة)
     const codeRelated = /اصلح|أصلح|عدل|تعديل|حلل|analyze|fix|edit|refactor|review|debug|ثغرة|خطأ|مشكلة|improve|update|check|اختبر/i.test(questionOnly)
 
-    // ② explainCodeRelated — شرح آمن: يسحب الكود فقط إذا ذُكر الكود صراحةً مع طلب الشرح
     const explainCodeRelated =
       /اشرح|شرح|وضح|explain/i.test(questionOnly) &&
       /كود|الكود|code|file|ملف|function|class|html|css|js|javascript/i.test(questionOnly)
@@ -472,7 +468,9 @@ router.post('/process-text', async (req, res) => {
       ? '[Output Shape]\nAnswer directly. No preamble. No repetition. If this is a follow-up, answer only the new point first. Keep enough detail for accuracy.'
       : null
 
+    const _today = new Date().toISOString().slice(0, 10)
     const systemParts = [_systemHint, outputShapeHint, styleHint].filter(Boolean)
+    systemParts.unshift(`Today: ${_today}`)
     if (activeSummary?.text) systemParts.unshift(`[session] ${isBrief ? activeSummary.text.slice(0, 60) : activeSummary.text}`)
     const systemHint = systemParts.join('\n') || null
 
@@ -546,7 +544,7 @@ router.post('/process-text', async (req, res) => {
     let newSummary = null
     if (msgCountAfter >= 4) {
       try {
-        // ④ تمرير questionOnly لـ generateSessionSummary
+
         newSummary = await generateSessionSummary(
           sid,
           [
