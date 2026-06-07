@@ -470,7 +470,7 @@ router.post('/process-text', async (req, res) => {
 
     const _today = new Date().toISOString().slice(0, 10)
     const systemParts = [_systemHint, outputShapeHint, styleHint].filter(Boolean)
-    systemParts.unshift(`Today: ${_today}`)
+    systemParts.unshift(`IMPORTANT: Today's date is ${_today}. Always use this when answering date or time questions.`)
     if (activeSummary?.text) systemParts.unshift(`[session] ${isBrief ? activeSummary.text.slice(0, 60) : activeSummary.text}`)
     const systemHint = systemParts.join('\n') || null
 
