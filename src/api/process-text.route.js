@@ -489,6 +489,7 @@ router.post('/process-text', async (req, res) => {
     try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large' }) }
 
     console.log('=== TO LLM ===', JSON.stringify({ system: systemHint, msgCount: messages.length, maxTokens, model }, null, 2))
+    console.log(`[${sid.slice(-8)}] → LLM | tokens_est:${inputEstimate} max:${maxTokens}`)
 
     let claudeData, reply = null, inputTokensTotal = 0, outputTokensTotal = 0
 
@@ -547,6 +548,7 @@ router.post('/process-text', async (req, res) => {
     }
 
     const costUSD = parseFloat(((inputTokensTotal/1_000_000)*1.0 + (outputTokensTotal/1_000_000)*5.0).toFixed(6))
+    console.log(`[${sid.slice(-8)}] ← LLM | in:${inputTokensTotal} out:${outputTokensTotal} total:${inputTokensTotal+outputTokensTotal} cost:$${costUSD} trunc:${isTruncated(claudeData)}`)
     metricsStore.set(sid, { sessionId: sid, inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, costUSD, maxTokens, payloadSize, updatedAt: new Date().toISOString() })
 
     return res.json({
