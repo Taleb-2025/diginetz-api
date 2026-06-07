@@ -419,15 +419,25 @@ router.post('/process-text', async (req, res) => {
       hasStoredCode && !shouldBlockCode &&
       (codeBlocks.length > 0 || codeRelated || explainCodeRelated || refRelated || hasCodeAnchor || codeSessionActive)
 
-    // ② recoveredCode → storedRaw عند الحاجة (إذا لا يوجد effectiveMatch ويوجد recoveredCode)
+    // needsFullCode — هل نرسل الكود كاملاً أم ملخصاً؟
+    const needsFullCode =
+      (codeBlocks.length > 0 || codeRelated || hasCodeAnchor) &&
+      !shouldBlockCode
+
+    // buildCodeSummary — ملخص خفيف من rawCodeStore
+    const _lastCtx = (rawCodeStore.get(sid) ?? []).at(-1)
+    const codeSummary = _lastCtx
+      ? `[code_summary] ${_lastCtx.summary} — ${Math.round(_lastCtx.raw.length / 1024 * 10) / 10}KB`
+      : null
+
+    // storedRaw: كامل عند needsFullCode، ملخص عند shouldAttachStoredCode فقط
     const storedRaw =
-      effectiveMatch?.raw ??
-      (shouldAttachStoredCode
-        ? (rawCodeStore.get(sid) ?? []).at(-1)?.raw ?? null
-        : null) ??
-      // fallback: إذا recoveredCode مؤهّل ولا يوجد أي كود مخزن محلياً، استخدمه مباشرة
+      (needsFullCode
+        ? (effectiveMatch?.raw ?? (shouldAttachStoredCode ? (rawCodeStore.get(sid) ?? []).at(-1)?.raw ?? null : null))
+        : (shouldAttachStoredCode ? codeSummary : null)) ??
+      // fallback: recoveredCode مباشرة إذا لا يوجد كود مخزن
       (recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode && !hasStoredCode
-        ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT)
+        ? (needsFullCode ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT) : `[code_summary] recovered code — ${Math.round(recoveredCode.length / 1024 * 10) / 10}KB`)
         : null)
 
     // ① finalHasCode — يشمل storedRaw من recoveredCode
