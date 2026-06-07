@@ -459,7 +459,20 @@ router.post('/process-text', async (req, res) => {
 
     const styleMap  = { concise:'Be concise.', detailed:'Be detailed.', arabic:'Respond in Arabic.', english:'Reply in English.', german:'Antworte auf Deutsch.' }
     const styleHint = activeStyle && styleMap[activeStyle] ? styleMap[activeStyle] : null
-    const systemParts = [_systemHint, styleHint].filter(Boolean)
+
+    // Output Shape System (OSS) — Default: concise. Override: detailed/full when explicitly needed.
+    const _wantsDetailed =
+      activeStyle === 'detailed' ||
+      (fieldSignals ?? '').includes('@depth.technical') ||
+      (fieldSignals ?? '').includes('#full_file') ||
+      anchors.includes('@repair_intent') ||
+      anchors.includes('@build_intent')
+
+    const outputShapeHint = _wantsDetailed
+      ? null   // لا قيد — الـ SS والـ style يتحكمان
+      : 'Be concise. No repetition. Answer only the new point. Max 5 items in any list. No preamble.'
+
+    const systemParts = [_systemHint, outputShapeHint, styleHint].filter(Boolean)
     if (activeSummary?.text) systemParts.unshift(`[session] ${activeSummary.text}`)
     const systemHint = systemParts.join('\n') || null
 
