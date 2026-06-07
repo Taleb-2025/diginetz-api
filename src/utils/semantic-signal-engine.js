@@ -248,13 +248,15 @@ export function computeOutputShape({ questionOnly = '', anchors, fieldSignals, a
 }
 
 export function outputShapeHint(outputShape) {
-  if (outputShape === 'brief')
-    return '[Output Shape]
-Be brief. Max 3 points. No preamble.'
-  if (outputShape === 'balanced')
-    return '[Output Shape]
-Answer directly. No preamble. No repetition. If this is a follow-up, answer only the new point first. Keep enough detail for accuracy.'
-  return null  // detailed / full — حر
+  if (outputShape === 'brief') {
+    return '[Output Shape]\nBe brief. Max 3 points. No preamble.'
+  }
+
+  if (outputShape === 'balanced') {
+    return '[Output Shape]\nAnswer directly. No preamble. No repetition. If this is a follow-up, answer only the new point first. Keep enough detail for accuracy.'
+  }
+
+  return null // detailed / full — حر
 }
 
 // ───────────────────────────────────────────────────────────────
