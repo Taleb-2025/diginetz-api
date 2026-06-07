@@ -419,28 +419,24 @@ router.post('/process-text', async (req, res) => {
       hasStoredCode && !shouldBlockCode &&
       (codeBlocks.length > 0 || codeRelated || explainCodeRelated || refRelated || hasCodeAnchor || codeSessionActive)
 
-    // needsFullCode — هل نرسل الكود كاملاً أم ملخصاً؟
     const needsFullCode =
+      !isBrief &&
       (codeBlocks.length > 0 || codeRelated || hasCodeAnchor) &&
       !shouldBlockCode
 
-    // buildCodeSummary — ملخص خفيف من rawCodeStore
     const _lastCtx = (rawCodeStore.get(sid) ?? []).at(-1)
     const codeSummary = _lastCtx
       ? `[code_summary] ${_lastCtx.summary} — ${Math.round(_lastCtx.raw.length / 1024 * 10) / 10}KB`
       : null
 
-    // storedRaw: كامل عند needsFullCode، ملخص عند shouldAttachStoredCode فقط
     const storedRaw =
       (needsFullCode
         ? (effectiveMatch?.raw ?? (shouldAttachStoredCode ? (rawCodeStore.get(sid) ?? []).at(-1)?.raw ?? null : null))
         : (shouldAttachStoredCode ? codeSummary : null)) ??
-      // fallback: recoveredCode مباشرة إذا لا يوجد كود مخزن
       (recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode && !hasStoredCode
         ? (needsFullCode ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT) : `[code_summary] recovered code — ${Math.round(recoveredCode.length / 1024 * 10) / 10}KB`)
         : null)
 
-    // ① finalHasCode — يشمل storedRaw من recoveredCode
     const finalHasCode = codeBlocks.length > 0 || !!storedRaw
 
     const { fieldSignals, systemHint: _systemHint, allowCodeSuggestion, outputShape } =
@@ -461,24 +457,24 @@ router.post('/process-text', async (req, res) => {
     if (!sessionSummaryStore.has(sid) && sessionSummary?.text) sessionSummaryStore.set(sid, sessionSummary)
     if (!resumeBootstrapped.has(sid) && sessionSummary?.text) resumeBootstrapped.add(sid)
     const activeSummary = sessionSummaryStore.get(sid) ?? null
+    const isBrief = outputShape === 'brief'
 
     const styleMap  = { concise:'Be concise.', detailed:'Be detailed.', arabic:'Respond in Arabic.', english:'Reply in English.', german:'Antworte auf Deutsch.' }
     const styleHint = activeStyle && styleMap[activeStyle] ? styleMap[activeStyle] : null
 
-    // OSS — القرار من SS، التطبيق هنا فقط
-    const outputShapeHint = outputShape === 'brief'
+    const outputShapeHint = isBrief
       ? '[Output Shape]\nBe brief. Max 3 points. No preamble.'
       : outputShape === 'balanced'
       ? '[Output Shape]\nAnswer directly. No preamble. No repetition. If this is a follow-up, answer only the new point first. Keep enough detail for accuracy.'
-      : null  // detailed / full — حر
+      : null
 
     const systemParts = [_systemHint, outputShapeHint, styleHint].filter(Boolean)
-    if (activeSummary?.text) systemParts.unshift(`[session] ${activeSummary.text}`)
+    if (activeSummary?.text) systemParts.unshift(`[session] ${isBrief ? activeSummary.text.slice(0, 60) : activeSummary.text}`)
     const systemHint = systemParts.join('\n') || null
 
-    const filteredHistory = filterStyleInstructions(history)
+    const filteredHistory = filterStyleInstructions(isBrief ? history.slice(-2) : history)
     const historyMessages = buildHistoryLayer(filteredHistory, continuity, sid, false, activeDomain)
-    const recCode         = typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode
+    const recCode         = !isBrief && typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode
       ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT)
       : null
     const questionText    = storedRaw ? (questionOnly || 'تعامل مع الكود المرفق حسب طلب المستخدم.') : cleanedText
