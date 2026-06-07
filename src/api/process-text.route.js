@@ -420,7 +420,6 @@ router.post('/process-text', async (req, res) => {
       (codeBlocks.length > 0 || codeRelated || explainCodeRelated || refRelated || hasCodeAnchor || codeSessionActive)
 
     const needsFullCode =
-      !isBrief &&
       (codeBlocks.length > 0 || codeRelated || hasCodeAnchor) &&
       !shouldBlockCode
 
@@ -429,15 +428,11 @@ router.post('/process-text', async (req, res) => {
       ? `[code_summary] ${_lastCtx.summary} — ${Math.round(_lastCtx.raw.length / 1024 * 10) / 10}KB`
       : null
 
-    const storedRaw =
-      (needsFullCode
-        ? (effectiveMatch?.raw ?? (shouldAttachStoredCode ? (rawCodeStore.get(sid) ?? []).at(-1)?.raw ?? null : null))
-        : (shouldAttachStoredCode ? codeSummary : null)) ??
-      (recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode && !hasStoredCode
-        ? (needsFullCode ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT) : `[code_summary] recovered code — ${Math.round(recoveredCode.length / 1024 * 10) / 10}KB`)
-        : null)
+    const _storedRawPreview = needsFullCode
+      ? (effectiveMatch?.raw ?? (shouldAttachStoredCode ? (rawCodeStore.get(sid) ?? []).at(-1)?.raw ?? null : null))
+      : (shouldAttachStoredCode ? codeSummary : null)
 
-    const finalHasCode = codeBlocks.length > 0 || !!storedRaw
+    const finalHasCode = codeBlocks.length > 0 || !!_storedRawPreview
 
     const { fieldSignals, systemHint: _systemHint, allowCodeSuggestion, outputShape } =
       buildSignalEngine({
@@ -447,17 +442,26 @@ router.post('/process-text', async (req, res) => {
         codeBlocks,
         continuity,
         anchors,
-        storedRaw,
+        storedRaw: _storedRawPreview,
         userIsArabic,
         semanticState: getSemanticState(sid),
         activeStyle,
       })
+
+    const isBrief = outputShape === 'brief'
+    const _wantsFull = needsFullCode && !isBrief
+    const storedRaw =
+      (_wantsFull
+        ? (effectiveMatch?.raw ?? (shouldAttachStoredCode ? (rawCodeStore.get(sid) ?? []).at(-1)?.raw ?? null : null))
+        : (shouldAttachStoredCode ? codeSummary : null)) ??
+      (recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode && !hasStoredCode
+        ? (_wantsFull ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT) : `[code_summary] recovered code — ${Math.round(recoveredCode.length / 1024 * 10) / 10}KB`)
+        : null)
     updateSemanticState(sid, activeDomain)
 
     if (!sessionSummaryStore.has(sid) && sessionSummary?.text) sessionSummaryStore.set(sid, sessionSummary)
     if (!resumeBootstrapped.has(sid) && sessionSummary?.text) resumeBootstrapped.add(sid)
     const activeSummary = sessionSummaryStore.get(sid) ?? null
-    const isBrief = outputShape === 'brief'
 
     const styleMap  = { concise:'Be concise.', detailed:'Be detailed.', arabic:'Respond in Arabic.', english:'Reply in English.', german:'Antworte auf Deutsch.' }
     const styleHint = activeStyle && styleMap[activeStyle] ? styleMap[activeStyle] : null
