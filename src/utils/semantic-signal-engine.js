@@ -121,18 +121,6 @@ export function buildDirectives(anchors, userIsArabic, fieldSignals) {
 
 // ───────────────────────────────────────────────────────────────
 //  FIELD SIGNALS BUILDER
-//  المدخلات: sid, celfResult, questionOnly, codeBlocks, continuity, anchors, hasStoredCode
-//  الإشارات حسب الصورتين:
-//
-//  @intent.*   ← النية (fix/refactor/analyze/build/explain/execute/review)
-//  @depth.*    ← العمق (technical/surface)
-//  @*_layer    ← الطبقة (identity/data/memory/interface/infra/realtime)
-//  @failure    ← حالة الفشل
-//  #*          ← المحتوى (code/code_recall/continuity/followup/...)
-//  ?*          ← التشخيص (failure/regression/performance/security/causal/ambiguous)
-//  !*          ← الأولوية (critical/blocked)
-//  ::*         ← المسار (backend/auth/database/api/gateway/infra/debug/...)
-//  depth/concise/step-by-step/explore ← سلوك الرد
 // ───────────────────────────────────────────────────────────────
 
 export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, continuity, anchors = [], hasStoredCode = false, semanticState = {}) {
@@ -140,7 +128,6 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   const novel  = field.noveltyPressure   ?? 0
   const coher  = field.semanticCoherence ?? 0
 
-  // ── Anchor → Intent (واحد فقط بأولوية)
   const ANCHOR_TO_INTENT = {
     '@repair_intent':   '@intent.fix',
     '@analysis_intent': '@intent.analyze',
@@ -148,7 +135,6 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
     '@verify_intent':   '@intent.review',
   }
 
-  // ── Anchor → Scope
   const ANCHOR_TO_SCOPE = {
     '@identity_layer':     '::backend/auth',
     '@data_store':         '::database',
@@ -164,49 +150,40 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   const weighted = []
   const add = (sig, w) => weighted.push({ text: sig, w })
 
-  // ── Intent (واحد فقط)
   const primaryIntent = INTENT_PRIORITY.find(a => anchors.includes(a))
   if (primaryIntent && ANCHOR_TO_INTENT[primaryIntent]) add(ANCHOR_TO_INTENT[primaryIntent], 0.90)
 
-  // ── Scope + State من anchors
   for (const a of anchors) {
     if (ANCHOR_TO_SCOPE[a]) add(ANCHOR_TO_SCOPE[a], 0.85)
     if (ANCHOR_TO_STATE[a]) add(ANCHOR_TO_STATE[a], 0.95)
   }
 
-  // ── Priority signals
   if (/critical|قاتل|خطير|urgent|عاجل/i.test(questionOnly))              add('!critical', 1.00)
   if (/موقوف|توقف|متوقف|stopped|blocked|cannot proceed|لا يعمل|انهار|crashed/i.test(questionOnly)) add('!blocked', 0.98)
 
-  // ── Diagnostic signals
   if (/كان يعمل|used to work|regression/i.test(questionOnly))             add('?regression',  0.90)
   if (/بطيء|slow|latency|performance|memory leak/i.test(questionOnly))    add('?performance', 0.90)
   if (/ثغرة|vulnerability|injection|xss|csrf/i.test(questionOnly))        add('?security',    0.92)
   if (/لماذا|why|warum/i.test(questionOnly))                               add('?causal',      0.60)
   if (/غامض|unclear|ambiguous|لا أفهم/i.test(questionOnly))               add('?ambiguous',   0.60)
 
-  // ── Content signals
   if (/رسم|diagram|chart|visualize/i.test(questionOnly))                  add('#diagram',  0.75)
   if (/اكتب.*اختبار|write.*test|generate.*test|test cases|أضف.*اختبار/i.test(questionOnly)) add('#tests', 0.75)
   if (/توثيق|documentation|docs|readme/i.test(questionOnly))              add('#docs',     0.75)
   if (/هذا.*الكود|ذلك.*الملف|this.*code|that.*function/i.test(questionOnly) && continuity > 0.30) add('#resolved_ref', 0.65)
   if (/مشروع|project|continuation/i.test(questionOnly) && continuity > 0.50) add('#project_continuation', 0.80)
 
-  // ── Depth signals
   if (/بالتفصيل|detailed|full|شامل|in depth/i.test(questionOnly))        add('@depth.technical', 0.70)
   if (/باختصار|brief|concise|بإيجاز/i.test(questionOnly))                add('@depth.surface',   0.70)
   if (/خطوة|step by step|بالترتيب/i.test(questionOnly))                   add('step-by-step',     0.70)
 
-  // ── Path signals
   if (/خوارزم|algorithm|sort|search|complexity/i.test(questionOnly))      add('::analysis/algo', 0.75)
   if (/debug|trace|تتبع|يعمل.*لكن/i.test(questionOnly))                  add('::debug',          0.75)
 
-  // ── Code signals
   if (codeBlocks.length > 0)  add('#code',        0.80)
   if (hasStoredCode)           add('#code_recall', 0.75)
   if (/أنزله|انزله|نزله|أعطني.*كامل|اعطني.*كامل|الكود.*كامل|full.*file|complete.*code|اعطني الكود|كامل.*نهائي|download.*full|give.*full|كامل.*الكود/i.test(questionOnly)) add('#full_file', 0.92)
 
-  // ── Domain signal (مع fallback من semanticState)
   const detectedDomain = classifyDomain(questionOnly)
   const dom =
     detectedDomain !== 'general'
@@ -214,7 +191,6 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
       : (semanticState?.dominantDomain ?? 'general')
   if (dom !== 'general') add(`::${dom}`, 0.72)
 
-  // ── Field/State signals
   const driftCount = semanticState?.driftCount ?? 0
   if (driftCount >= 2)                                   add('::reset',     0.85)
   if (novel > 0.70)                                      add('explore',     novel)
@@ -238,12 +214,34 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
 export function computeAllowCodeSuggestion({ storedRaw, activeDomain, anchors, fieldSignals }) {
   const BLOCK_DOMAINS = new Set(['science', 'math', 'humanities'])
   const fs = String(fieldSignals || '')
-  // ② #code_recall وحده لا يكفي — يحتاج anchor أو @intent.fix/build معه
   const hasCodeAnchor  = anchors.some(a => ['@repair_intent', '@build_intent'].includes(a))
   const hasCodeSignal  = /(@intent\.fix|@intent\.build|#code\b)/.test(fs)
   const hasCodeIntent  = hasCodeAnchor || hasCodeSignal
-  // يُسمح إذا: كود موجود + نية كودية حقيقية + ليس في domain علمي/إنساني
   return !!storedRaw && hasCodeIntent && !BLOCK_DOMAINS.has(activeDomain)
+}
+
+// ───────────────────────────────────────────────────────────────
+//  OUTPUT SHAPE COMPUTER
+//  يحدد شكل الرد: 'concise' | 'detailed' | 'full'
+//  القرار هنا في SS — الـ route يطبّق فقط
+// ───────────────────────────────────────────────────────────────
+
+export function computeOutputShape({ anchors, fieldSignals, activeStyle }) {
+  const fs = String(fieldSignals || '')
+
+  // full: طلب كامل صريح فقط
+  if (fs.includes('#full_file'))       return 'full'
+
+  // detailed: طلب تفصيل صريح من المستخدم أو SS
+  if (activeStyle === 'detailed')      return 'detailed'
+  if (fs.includes('@depth.technical')) return 'detailed'
+
+  // brief: طلب اختصار صريح
+  if (activeStyle === 'concise')       return 'brief'
+  if (fs.includes('@depth.surface'))   return 'brief'
+
+  // balanced: الافتراضي — كل شيء آخر
+  return 'balanced'
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -260,8 +258,8 @@ export function buildSignalEngine({
   storedRaw,
   userIsArabic,
   semanticState,
+  activeStyle = null,
 }) {
-  // ① fallback: إذا questionOnly قصير/عام → استخدم dominantDomain من الجلسة
   const detectedDomain = classifyDomain(questionOnly)
   const activeDomain   = detectedDomain !== 'general'
     ? detectedDomain
@@ -276,8 +274,6 @@ export function buildSignalEngine({
 
   const systemHint = buildDirectives(anchors, userIsArabic, fieldSignals)
 
-  // ③ storedRaw المُمرر هنا يجب أن يكون بعد فلتر codeRelated/refRelated من الـ route
-  //    buildSignalEngine لا تقرر — الـ route يقرر ما إذا يُمرر storedRaw أم null
   const allowCodeSuggestion = computeAllowCodeSuggestion({
     storedRaw,
     activeDomain,
@@ -285,5 +281,8 @@ export function buildSignalEngine({
     fieldSignals,
   })
 
-  return { fieldSignals, systemHint, allowCodeSuggestion, activeDomain }
+  // outputShape — القرار هنا، التطبيق في الـ route
+  const outputShape = computeOutputShape({ anchors, fieldSignals, activeStyle })
+
+  return { fieldSignals, systemHint, allowCodeSuggestion, activeDomain, outputShape }
 }
