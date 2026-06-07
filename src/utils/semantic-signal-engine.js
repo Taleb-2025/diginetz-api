@@ -226,22 +226,35 @@ export function computeAllowCodeSuggestion({ storedRaw, activeDomain, anchors, f
 //  القرار هنا في SS — الـ route يطبّق فقط
 // ───────────────────────────────────────────────────────────────
 
-export function computeOutputShape({ anchors, fieldSignals, activeStyle }) {
+export function computeOutputShape({ questionOnly = '', anchors, fieldSignals, activeStyle }) {
   const fs = String(fieldSignals || '')
+  const q  = String(questionOnly).toLowerCase()
 
   // full: طلب كامل صريح فقط
-  if (fs.includes('#full_file'))       return 'full'
+  if (fs.includes('#full_file'))                                    return 'full'
 
   // detailed: طلب تفصيل صريح من المستخدم أو SS
-  if (activeStyle === 'detailed')      return 'detailed'
-  if (fs.includes('@depth.technical')) return 'detailed'
+  if (activeStyle === 'detailed')                                   return 'detailed'
+  if (fs.includes('@depth.technical'))                              return 'detailed'
+  if (/بالتفصيل|تفصيل|شامل|in depth|detailed|اشرح كل/i.test(q))  return 'detailed'
 
   // brief: طلب اختصار صريح
-  if (activeStyle === 'concise')       return 'brief'
-  if (fs.includes('@depth.surface'))   return 'brief'
+  if (activeStyle === 'concise')                                    return 'brief'
+  if (fs.includes('@depth.surface'))                                return 'brief'
+  if (/باختصار|مختصر|brief|بإيجاز|بسرعة|tldr/i.test(q))          return 'brief'
 
-  // balanced: الافتراضي — كل شيء آخر
+  // balanced: الافتراضي
   return 'balanced'
+}
+
+export function outputShapeHint(outputShape) {
+  if (outputShape === 'brief')
+    return '[Output Shape]
+Be brief. Max 3 points. No preamble.'
+  if (outputShape === 'balanced')
+    return '[Output Shape]
+Answer directly. No preamble. No repetition. If this is a follow-up, answer only the new point first. Keep enough detail for accuracy.'
+  return null  // detailed / full — حر
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -282,7 +295,7 @@ export function buildSignalEngine({
   })
 
   // outputShape — القرار هنا، التطبيق في الـ route
-  const outputShape = computeOutputShape({ anchors, fieldSignals, activeStyle })
+  const outputShape = computeOutputShape({ questionOnly, anchors, fieldSignals, activeStyle })
 
   return { fieldSignals, systemHint, allowCodeSuggestion, activeDomain, outputShape }
 }
