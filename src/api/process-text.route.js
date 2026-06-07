@@ -439,7 +439,7 @@ router.post('/process-text', async (req, res) => {
     // ① finalHasCode — يشمل storedRaw من recoveredCode
     const finalHasCode = codeBlocks.length > 0 || !!storedRaw
 
-    const { fieldSignals, systemHint: _systemHint, allowCodeSuggestion } =
+    const { fieldSignals, systemHint: _systemHint, allowCodeSuggestion, outputShape } =
       buildSignalEngine({
         sid,
         celfResult: { field: { continuity, noveltyPressure: 0, semanticCoherence: 0 } },
@@ -449,7 +449,8 @@ router.post('/process-text', async (req, res) => {
         anchors,
         storedRaw,
         userIsArabic,
-        semanticState: getSemanticState(sid)
+        semanticState: getSemanticState(sid),
+        activeStyle,
       })
     updateSemanticState(sid, activeDomain)
 
@@ -460,17 +461,14 @@ router.post('/process-text', async (req, res) => {
     const styleMap  = { concise:'Be concise.', detailed:'Be detailed.', arabic:'Respond in Arabic.', english:'Reply in English.', german:'Antworte auf Deutsch.' }
     const styleHint = activeStyle && styleMap[activeStyle] ? styleMap[activeStyle] : null
 
-    // Output Shape System (OSS) — Default: concise. Override: detailed/full when explicitly needed.
-    const _wantsDetailed =
-      activeStyle === 'detailed' ||
-      (fieldSignals ?? '').includes('@depth.technical') ||
-      (fieldSignals ?? '').includes('#full_file') ||
-      anchors.includes('@repair_intent') ||
-      anchors.includes('@build_intent')
-
-    const outputShapeHint = _wantsDetailed
-      ? null   // لا قيد — الـ SS والـ style يتحكمان
-      : 'Be concise. No repetition. Answer only the new point. Max 5 items in any list. No preamble.'
+    // OSS — القرار من SS، التطبيق هنا فقط
+    const OUTPUT_HINTS = {
+      brief:    'Be brief. 3 points max. No preamble. No repetition.',
+      balanced: 'Answer directly. No preamble. No repetition.',
+      detailed: null,
+      full:     null,
+    }
+    const outputShapeHint = OUTPUT_HINTS[outputShape] ?? OUTPUT_HINTS.balanced
 
     const systemParts = [_systemHint, outputShapeHint, styleHint].filter(Boolean)
     if (activeSummary?.text) systemParts.unshift(`[session] ${activeSummary.text}`)
@@ -570,7 +568,7 @@ router.post('/process-text', async (req, res) => {
       nextSuggestion: null,
       celfVault: [],
       observer: null,
-      debug: { systemHint: systemHint ?? null, fieldSignals, anchors, continuity, allowCodeSuggestion, activeDomain, msgCount: messages.length, hasCode: finalHasCode, storedCode: !!storedRaw, maxTokens, model },
+      debug: { systemHint: systemHint ?? null, fieldSignals, anchors, continuity, allowCodeSuggestion, activeDomain, outputShape, msgCount: messages.length, hasCode: finalHasCode, storedCode: !!storedRaw, maxTokens, model },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, costUSD, maxTokens, model, payloadSize }
     })
 
