@@ -231,15 +231,9 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false, curre
 }
 
 function chooseMaxTokens(anchors, inputWords, hasCode, remaining) {
-  const has = a => anchors.includes(a)
-  const cap = Math.min(8000, Math.max(1000, Math.floor(remaining * 0.45)))
-  if (has('@repair_intent') || has('@build_intent')) return Math.min(cap, 6000)
-  if (has('@analysis_intent'))                        return cap
-  if (has('@verify_intent'))                          return Math.min(cap, 4000)
-  if (hasCode)                                        return Math.min(cap, 3000)
-  if (inputWords <= 5)                                return 1000
-  if (inputWords <= 15)                               return 2000
-  return Math.min(cap, 2500)
+  // maxTokens = سقف أمان واسع فقط — SS تتحكم في الاختصار عبر systemHint
+  const cap = Math.min(8000, Math.max(2000, Math.floor(remaining * 0.45)))
+  return cap
 }
 
 function checkPayload(systemHint, messages) {
@@ -462,13 +456,11 @@ router.post('/process-text', async (req, res) => {
     const styleHint = activeStyle && styleMap[activeStyle] ? styleMap[activeStyle] : null
 
     // OSS — القرار من SS، التطبيق هنا فقط
-    const OUTPUT_HINTS = {
-      brief:    'Be brief. 3 points max. No preamble. No repetition.',
-      balanced: 'Answer directly. No preamble. No repetition.',
-      detailed: null,
-      full:     null,
-    }
-    const outputShapeHint = OUTPUT_HINTS[outputShape] ?? OUTPUT_HINTS.balanced
+    const outputShapeHint = outputShape === 'brief'
+      ? '[Output Shape]\nBe brief. Max 3 points. No preamble.'
+      : outputShape === 'balanced'
+      ? '[Output Shape]\nAnswer directly. No preamble. No repetition. If this is a follow-up, answer only the new point first. Keep enough detail for accuracy.'
+      : null  // detailed / full — حر
 
     const systemParts = [_systemHint, outputShapeHint, styleHint].filter(Boolean)
     if (activeSummary?.text) systemParts.unshift(`[session] ${activeSummary.text}`)
