@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
-//  SEMANTIC SIGNAL ENGINE
-//  تحويل حالة CELF + Anchors + Code Context → Signals + systemHint
+//  SEMANTIC SIGNAL ENGINE — v2.1 (Calibration Fix)
+//  Fix 1: @build_intent priority over @analysis_intent
+//  Fix 2: CELF/SSE domain classification
 // ═══════════════════════════════════════════════════════════════
 
 // ───────────────────────────────────────────────────────────────
@@ -22,6 +23,10 @@ export function classifyDomain(text) {
   if (/فيزياء|physics|كيمياء|chemistry|بيولوجيا|biology|كوانتم|quantum|ذرة|atom|موجة|wave|تشابك|entanglement|نسبية|relativity|ميكانيكا|mechanics|طاقة|energy|جسيم|particle|نووي|nuclear/i.test(t)) return 'science'
   if (/رياضيات|math|جبر|algebra|هندسة|geometry|إحصاء|statistics|حساب|calculus|مبرهنة|theorem|معادلة|equation|تفاضل|differential|تكامل|integral/i.test(t)) return 'math'
   if (/تاريخ|history|جغرافيا|geography|فلسفة|philosophy|أدب|literature|لغة|language/i.test(t)) return 'humanities'
+
+  // ✅ Fix 2: CELF/SSE technical domain → backend بدل general
+  if (/celf|signal.engine|semantic.signal|anchor|field.signal|أوزان.*إشار|إشارات.*توجيه|محرك.*إشار|signal.weight/i.test(t)) return 'backend'
+
   return 'general'
 }
 
@@ -151,13 +156,18 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   }
 
   const ANCHOR_TO_STATE = { '@failure': '?failure' }
-  const INTENT_PRIORITY = ['@repair_intent', '@analysis_intent', '@build_intent', '@verify_intent']
+
+  // ✅ Fix 1: @build_intent أولوية أعلى من @analysis_intent
+  const INTENT_PRIORITY = ['@repair_intent', '@build_intent', '@analysis_intent', '@verify_intent']
 
   const weighted = []
   const add = (sig, w) => weighted.push({ text: sig, w })
 
   const primaryIntent = INTENT_PRIORITY.find(a => anchors.includes(a))
   if (primaryIntent && ANCHOR_TO_INTENT[primaryIntent]) add(ANCHOR_TO_INTENT[primaryIntent], 0.90)
+
+  if (/\b(ابنِ|ابن|انشئ|أنشئ|اصنع|أصنع|build|create|implement|scaffold|generate.*component|أضف.*feature|add.*feature)\b/i.test(questionOnly))
+    add('@intent.build', 0.93)
 
   for (const a of anchors) {
     if (ANCHOR_TO_SCOPE[a]) add(ANCHOR_TO_SCOPE[a], 0.85)
@@ -186,13 +196,15 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   if (/خوارزم|algorithm|sort|search|complexity/i.test(questionOnly))      add('::analysis/algo', 0.75)
   if (/debug|trace|تتبع|يعمل.*لكن/i.test(questionOnly))                  add('::debug',          0.75)
 
-  if (codeBlocks.length > 0)  add('#code',        0.80)
+  if (codeBlocks.length > 0)  add('#code', 0.80)
   if (hasStoredCode) {
-    const needsFullCode =
-      anchors.includes('@repair_intent') ||
-      anchors.includes('@analysis_intent') ||
-      /اصلح|أصلح|عدل|تعديل|حلل|analyze|fix|edit|refactor|review|debug|ثغرة|خطأ|مشكلة/i.test(questionOnly)
-    add(needsFullCode ? '#code_full' : '#code_summary', 0.75)
+    const wantsEdit    = /اصلح|أصلح|عدل|تعديل|fix|edit|refactor|debug|ثغرة|خطأ|مشكلة/i.test(questionOnly)
+    const wantsAnalyze = /حلل|analyze|review|افحص|inspect|check/i.test(questionOnly)
+    const wantsBuild   = /ابنِ|ابن|أنشئ|انشئ|build|implement|أضف|add/i.test(questionOnly)
+    const needsFullCode = anchors.includes('@repair_intent') || wantsEdit || wantsAnalyze || wantsBuild
+    const needsSummary  = !needsFullCode && (anchors.includes('@analysis_intent') || continuity > 0.20)
+    if (needsFullCode)       add('#code_full',    0.85)
+    else if (needsSummary)   add('#code_summary', 0.65)
   }
   if (/أنزله|انزله|نزله|أعطني.*كامل|اعطني.*كامل|الكود.*كامل|full.*file|complete.*code|اعطني الكود|كامل.*نهائي|download.*full|give.*full|كامل.*الكود/i.test(questionOnly)) add('#full_file', 0.92)
 
@@ -234,28 +246,20 @@ export function computeAllowCodeSuggestion({ storedRaw, activeDomain, anchors, f
 
 // ───────────────────────────────────────────────────────────────
 //  OUTPUT SHAPE COMPUTER
-//  يحدد شكل الرد: 'concise' | 'detailed' | 'full'
-//  القرار هنا في SS — الـ route يطبّق فقط
 // ───────────────────────────────────────────────────────────────
 
 export function computeOutputShape({ questionOnly = '', anchors, fieldSignals, activeStyle }) {
   const fs = String(fieldSignals || '')
   const q  = String(questionOnly).toLowerCase()
 
-  // full: طلب كامل صريح فقط
   if (fs.includes('#full_file'))                                    return 'full'
-
-  // detailed: طلب تفصيل صريح من المستخدم أو SS
   if (activeStyle === 'detailed')                                   return 'detailed'
   if (fs.includes('@depth.technical'))                              return 'detailed'
   if (/بالتفصيل|تفصيل|شامل|in depth|detailed|اشرح كل/i.test(q))  return 'detailed'
-
-  // brief: طلب اختصار صريح
   if (activeStyle === 'concise')                                    return 'brief'
   if (fs.includes('@depth.surface'))                                return 'brief'
   if (/باختصار|مختصر|brief|بإيجاز|بسرعة|tldr/i.test(q))          return 'brief'
 
-  // balanced: الافتراضي
   return 'balanced'
 }
 
@@ -264,7 +268,7 @@ export function outputShapeHint(outputShape) {
     return '[Output Shape]\nBe brief. Max 3 points. No preamble.'
   if (outputShape === 'balanced')
     return '[Output Shape]\nAnswer directly. No preamble. No repetition. If this is a follow-up, answer only the new point first. Keep enough detail for accuracy.'
-  return null  // detailed / full
+  return null
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -304,7 +308,6 @@ export function buildSignalEngine({
     fieldSignals,
   })
 
-  // outputShape — القرار هنا، التطبيق في الـ route
   const outputShape = computeOutputShape({ questionOnly, anchors, fieldSignals, activeStyle })
 
   return { fieldSignals, systemHint, allowCodeSuggestion, activeDomain, outputShape }
