@@ -231,10 +231,30 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false, curre
   return clean.slice(-limit).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : compressUserMessage(h.content) }))
 }
 
-function chooseMaxTokens(anchors, inputWords, hasCode, remaining) {
+// ── Route يقرأ إشارات SSE ويطبّق القرار ─────────────────────
+function resolveCodeStrategy(fieldSignals, _codeBase, questionOnly) {
+  const fs = String(fieldSignals || '')
 
-  const cap = Math.min(8000, Math.max(2000, Math.floor(remaining * 0.45)))
-  return cap
+  const needsRaw    = fs.includes('@input.raw_required')  || fs.includes('#code_full')
+  const needsSummary = fs.includes('@input.summary_ok')   || fs.includes('#code_summary')
+  const wantsReturn = fs.includes('@output.full_return')
+  const wantsReview = fs.includes('@output.focused_review')
+  const wantsFull   = fs.includes('#full_file')
+
+  return { needsRaw, needsSummary, wantsReturn, wantsReview, wantsFull }
+}
+
+function chooseMaxTokens(outputShape, wantsReturn, hasCode, remaining) {
+  const base = {
+    brief:    1200,
+    balanced: 2800,
+    detailed: 5000,
+    full:     8000,
+  }[outputShape] ?? 2800
+
+  const returnBonus = wantsReturn ? 4000 : 0
+  const codeBonus   = hasCode && !wantsReturn ? 800 : 0
+  return Math.min(base + returnBonus + codeBonus, remaining, 8000)
 }
 
 function checkPayload(systemHint, messages) {
@@ -306,7 +326,6 @@ function updateSemanticState(sid, detectedDomain) {
   const state = getSemanticState(sid)
   if (detectedDomain !== 'general') {
     if (state.dominantDomain === 'general') {
-
       state.dominantDomain = detectedDomain
       state.driftCount = 0
     } else if (detectedDomain !== state.dominantDomain) {
@@ -320,7 +339,7 @@ function updateSemanticState(sid, detectedDomain) {
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '12.1' })
+  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '13.0' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -382,7 +401,6 @@ router.post('/process-text', async (req, res) => {
     const HARD_BLOCK_DOMAINS = new Set(['science','math','humanities'])
 
     const codeRelated = /اصلح|أصلح|عدل|تعديل|حلل|analyze|fix|edit|refactor|review|debug|ثغرة|خطأ|مشكلة|improve|update|check|اختبر/i.test(questionOnly)
-
     const explainCodeRelated =
       /اشرح|شرح|وضح|explain/i.test(questionOnly) &&
       /كود|الكود|code|file|ملف|function|class|html|css|js|javascript/i.test(questionOnly)
@@ -418,23 +436,20 @@ router.post('/process-text', async (req, res) => {
       hasStoredCode && !shouldBlockCode &&
       (codeBlocks.length > 0 || codeRelated || explainCodeRelated || refRelated || hasCodeAnchor || codeSessionActive)
 
-    const _lastCtx  = (rawCodeStore.get(sid) ?? []).at(-1)
+    const _lastCtx    = (rawCodeStore.get(sid) ?? []).at(-1)
     const codeSummary = _lastCtx
       ? `[code_summary] ${_lastCtx.summary} — ${Math.round(_lastCtx.raw.length / 1024 * 10) / 10}KB`
       : null
     const _codeBase = effectiveMatch?.raw ?? _lastCtx?.raw ?? null
-
     const _codeHash = _lastCtx?.hash || null
     const _codeKey  = _codeHash ? `${sid}:${_codeHash}` : null
     const isFirstPass = !!_codeKey && !codeAnalysisStore.has(_codeKey)
 
-    const _historyChars  = JSON.stringify(history ?? []).length
+    const _historyChars   = JSON.stringify(history ?? []).length
     const _availableChars = Math.max(20000, 100000 - _historyChars)
     const firstPassLimit  = Math.min(80000, Math.floor(_availableChars * 0.8))
 
-    const _wantsFullFile = /أنزله|انزله|نزله|أعطني.*كامل|اعطني.*كامل|الكود.*كامل|full.*file|complete.*code|اعطني الكود|كامل.*نهائي|download.*full|give.*full|كامل.*الكود/i.test(questionOnly)
-    const wantsFull = !shouldBlockCode && (isFirstPass || _wantsFullFile)
-
+    // ── SSE يقرر — route يطبّق ──────────────────────────────────
     const { fieldSignals, systemHint: _systemHint, allowCodeSuggestion, outputShape } =
       buildSignalEngine({
         sid,
@@ -443,20 +458,32 @@ router.post('/process-text', async (req, res) => {
         codeBlocks,
         continuity,
         anchors,
-        storedRaw: wantsFull ? _codeBase : (shouldAttachStoredCode ? codeSummary : null),
+        storedRaw: shouldAttachStoredCode ? (_codeBase ?? codeSummary) : null,
         userIsArabic,
         semanticState: getSemanticState(sid),
         activeStyle,
       })
 
-    const isBrief   = outputShape === 'brief'
-    const mustSendFull = isFirstPass && !!_codeBase
-    const _codeBaseSliced = mustSendFull ? _codeBase?.slice(0, firstPassLimit) : _codeBase
-    const storedRaw =
-      ((mustSendFull || (wantsFull && !isBrief)) ? _codeBaseSliced : (shouldAttachStoredCode ? codeSummary : null)) ??
-      (recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode && !hasStoredCode
-        ? ((mustSendFull || (wantsFull && !isBrief)) ? recoveredCode.slice(0, mustSendFull ? firstPassLimit : RECOVERED_CODE_LIMIT) : `[code_summary] recovered code — ${Math.round(recoveredCode.length / 1024 * 10) / 10}KB`)
-        : null)
+    const strategy    = resolveCodeStrategy(fieldSignals, _codeBase, questionOnly)
+    const isBrief     = outputShape === 'brief'
+
+    let storedRaw = null
+    if (!shouldBlockCode) {
+      if (strategy.needsRaw && _codeBase) {
+        storedRaw = _codeBase
+      } else if (strategy.wantsFull && _codeBase) {
+        storedRaw = _codeBase
+      } else if (strategy.needsSummary && codeSummary) {
+        storedRaw = codeSummary
+      } else if (shouldAttachStoredCode && codeSummary) {
+        storedRaw = codeSummary
+      }
+      if (!storedRaw && recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30) {
+        storedRaw = strategy.needsRaw
+          ? recoveredCode.slice(0, firstPassLimit)
+          : `[code_summary] recovered code — ${Math.round(recoveredCode.length / 1024 * 10) / 10}KB`
+      }
+    }
 
     const finalHasCode = codeBlocks.length > 0 || !!storedRaw
     updateSemanticState(sid, activeDomain)
@@ -470,11 +497,15 @@ router.post('/process-text', async (req, res) => {
 
     const outputShapeHint = isBrief
       ? '[Output Shape]\nBe brief. Max 3 points. No preamble.'
+      : strategy.wantsReview
+      ? '[Output Shape]\nCode review format only:\n- Strengths (max 3)\n- Weaknesses (max 3)\n- Critical issues (if any)\nNo full code rewrite. No line-by-line explanation.'
+      : strategy.wantsReturn
+      ? '[Output Shape]\nReturn the complete modified code. No truncation. No explanation unless critical.'
       : outputShape === 'balanced'
       ? '[Output Shape]\nAnswer directly. No preamble. No repetition. If this is a follow-up, answer only the new point first. Keep enough detail for accuracy.'
       : null
 
-    const _today = new Date().toISOString().slice(0, 10)
+    const _today      = new Date().toISOString().slice(0, 10)
     const systemParts = [_systemHint, outputShapeHint, styleHint].filter(Boolean)
     systemParts.unshift(`IMPORTANT: Today's date is ${_today}. Always use this when answering date or time questions.`)
     if (activeSummary?.text) systemParts.unshift(`[session] ${isBrief ? activeSummary.text.slice(0, 60) : activeSummary.text}`)
@@ -498,14 +529,15 @@ router.post('/process-text', async (req, res) => {
 
     const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
     const remaining     = Math.max(1000, 180000 - inputEstimate)
-    const maxTokens     = chooseMaxTokens(anchors, wordCount, finalHasCode, remaining)
-    const model         = 'claude-haiku-4-5-20251001'
+
+    const maxTokens = chooseMaxTokens(outputShape, strategy.wantsReturn, finalHasCode, remaining)
+    const model     = 'claude-haiku-4-5-20251001'
 
     let payloadSize = 0
     try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large' }) }
 
-    console.log('=== TO LLM ===', JSON.stringify({ system: systemHint, msgCount: messages.length, maxTokens, model }, null, 2))
-    console.log(`[${sid.slice(-8)}] → LLM | tokens_est:${inputEstimate} max:${maxTokens}`)
+    const _strategyLabel = strategy.needsRaw ? 'raw' : strategy.needsSummary ? 'summary' : 'none'
+    console.log(`[${sid.slice(-8)}] → LLM | shape:${outputShape} strategy:${_strategyLabel} tokens_est:${inputEstimate} max:${maxTokens} domain:${activeDomain}`)
 
     let claudeData, reply = null, inputTokensTotal = 0, outputTokensTotal = 0
 
@@ -550,14 +582,9 @@ router.post('/process-text', async (req, res) => {
     let newSummary = null
     if (msgCountAfter >= 4) {
       try {
-
         newSummary = await generateSessionSummary(
           sid,
-          [
-            ...(history ?? []),
-            { role: 'user', content: cleanedText },
-            { role: 'assistant', content: reply ?? '' }
-          ],
+          [...(history ?? []), { role: 'user', content: cleanedText }, { role: 'assistant', content: reply ?? '' }],
           questionOnly
         )
         if (newSummary) sessionSummaryStore.set(sid, newSummary)
@@ -565,7 +592,7 @@ router.post('/process-text', async (req, res) => {
     }
 
     const costUSD = parseFloat(((inputTokensTotal/1_000_000)*1.0 + (outputTokensTotal/1_000_000)*5.0).toFixed(6))
-    console.log(`[${sid.slice(-8)}] ← LLM | in:${inputTokensTotal} out:${outputTokensTotal} total:${inputTokensTotal+outputTokensTotal} cost:$${costUSD} trunc:${isTruncated(claudeData)}`)
+    console.log(`[${sid.slice(-8)}] ← LLM | in:${inputTokensTotal} out:${outputTokensTotal} cost:$${costUSD} trunc:${isTruncated(claudeData)}`)
     metricsStore.set(sid, { sessionId: sid, inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, costUSD, maxTokens, payloadSize, updatedAt: new Date().toISOString() })
 
     return res.json({
@@ -574,7 +601,7 @@ router.post('/process-text', async (req, res) => {
       nextSuggestion: null,
       celfVault: [],
       observer: null,
-      debug: { systemHint: systemHint ?? null, fieldSignals, anchors, continuity, allowCodeSuggestion, activeDomain, outputShape, msgCount: messages.length, hasCode: finalHasCode, storedCode: !!storedRaw, maxTokens, model },
+      debug: { fieldSignals, anchors, continuity, allowCodeSuggestion, activeDomain, outputShape, msgCount: messages.length, hasCode: finalHasCode, storedCode: !!storedRaw, maxTokens, model },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, costUSD, maxTokens, model, payloadSize }
     })
 
