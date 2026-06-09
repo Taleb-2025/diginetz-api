@@ -26,6 +26,7 @@ const capsuleMemory       = new Map()
 const anchorMemory        = new Map()
 const metricsStore        = new Map()
 const _semanticState      = new Map()
+const codeAnalysisStore   = new Map()
 
 const classifyDomain = _classifyDomain
 
@@ -214,19 +215,20 @@ async function generateSessionSummary(sid, history, currentQuestion = '') {
   return { text: `${domain}: ${symbols || 'general'} - ${mainTopic}`.slice(0,200), generatedAt: Date.now() }
 }
 
-function buildHistoryLayer(history, continuity, sid, needsRawCode = false, currentDomain = 'general') {
+function buildHistoryLayer(history, continuity, sid, needsRawCode = false, currentDomain = 'general', maxHistory = 4) {
   const filtered = filterStyleInstructions(history)
   const clean    = filtered.filter(h => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string' && h.content.length > 0)
-  if (clean.length <= 4) return clean.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : h.content }))
+  const limit    = Math.min(maxHistory, 4)
+  if (clean.length <= limit) return clean.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : h.content }))
   if (continuity >= 0.70) {
-    return clean.slice(-4).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) }))
+    return clean.slice(-limit).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) }))
   }
   if (continuity >= 0.40) {
-    const msgs = clean.slice(-4).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) }))
+    const msgs = clean.slice(-limit).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) }))
     return [...msgs, ...buildCapsuleContext(sid, currentDomain)]
   }
   if (continuity >= 0.20) return [...buildCapsuleContext(sid, currentDomain), ...buildAnchorContext(sid, currentDomain)]
-  return clean.slice(-4).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : compressUserMessage(h.content) }))
+  return clean.slice(-limit).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : compressUserMessage(h.content) }))
 }
 
 function chooseMaxTokens(anchors, inputWords, hasCode, remaining) {
@@ -385,7 +387,7 @@ router.post('/process-text', async (req, res) => {
       /اشرح|شرح|وضح|explain/i.test(questionOnly) &&
       /كود|الكود|code|file|ملف|function|class|html|css|js|javascript/i.test(questionOnly)
 
-    const hasStoredCode     = (rawCodeStore.get(sid) ?? []).length > 0
+    let hasStoredCode       = (rawCodeStore.get(sid) ?? []).length > 0
     const codeSessionActive = codeSessionStore.get(sid)?.active === true
     const hasCodeAnchor     = anchors.some(a => ['@repair_intent','@build_intent','@analysis_intent'].includes(a))
     const refRelated        = hasStoredCode && continuity > 0.20 && /هذا|هذه|ذلك|هنا|السابق|الكود|الملف|يعني|معنى|اشرح|وضح|this|that|previous|above/i.test(questionOnly)
@@ -406,6 +408,7 @@ router.post('/process-text', async (req, res) => {
       codeSessionStore.set(sid, { active: true, ttl: 6 })
     }
 
+    hasStoredCode = (rawCodeStore.get(sid) ?? []).length > 0
     const hasCode        = codeBlocks.length > 0 || (hasStoredCode && !shouldBlockCode)
     const effectiveMatch = hasCode && !shouldBlockCode
       ? retrieveRelevantCode(cleanedText, sid, tValue)
@@ -415,20 +418,22 @@ router.post('/process-text', async (req, res) => {
       hasStoredCode && !shouldBlockCode &&
       (codeBlocks.length > 0 || codeRelated || explainCodeRelated || refRelated || hasCodeAnchor || codeSessionActive)
 
-    const needsFullCode =
-      (codeBlocks.length > 0 || codeRelated || hasCodeAnchor) &&
-      !shouldBlockCode
-
-    const _lastCtx = (rawCodeStore.get(sid) ?? []).at(-1)
+    const _lastCtx  = (rawCodeStore.get(sid) ?? []).at(-1)
     const codeSummary = _lastCtx
       ? `[code_summary] ${_lastCtx.summary} — ${Math.round(_lastCtx.raw.length / 1024 * 10) / 10}KB`
       : null
+    const _codeBase = effectiveMatch?.raw ?? _lastCtx?.raw ?? null
 
-    const _storedRawPreview = needsFullCode
-      ? (effectiveMatch?.raw ?? (shouldAttachStoredCode ? (rawCodeStore.get(sid) ?? []).at(-1)?.raw ?? null : null))
-      : (shouldAttachStoredCode ? codeSummary : null)
+    const _codeHash = _lastCtx?.hash || null
+    const _codeKey  = _codeHash ? `${sid}:${_codeHash}` : null
+    const isFirstPass = !!_codeKey && !codeAnalysisStore.has(_codeKey)
 
-    const finalHasCode = codeBlocks.length > 0 || !!_storedRawPreview
+    const _historyChars  = JSON.stringify(history ?? []).length
+    const _availableChars = Math.max(20000, 100000 - _historyChars)
+    const firstPassLimit  = Math.min(80000, Math.floor(_availableChars * 0.8))
+
+    const _wantsFullFile = /أنزله|انزله|نزله|أعطني.*كامل|اعطني.*كامل|الكود.*كامل|full.*file|complete.*code|اعطني الكود|كامل.*نهائي|download.*full|give.*full|كامل.*الكود/i.test(questionOnly)
+    const wantsFull = !shouldBlockCode && (isFirstPass || _wantsFullFile)
 
     const { fieldSignals, systemHint: _systemHint, allowCodeSuggestion, outputShape } =
       buildSignalEngine({
@@ -438,21 +443,22 @@ router.post('/process-text', async (req, res) => {
         codeBlocks,
         continuity,
         anchors,
-        storedRaw: _storedRawPreview,
+        storedRaw: wantsFull ? _codeBase : (shouldAttachStoredCode ? codeSummary : null),
         userIsArabic,
         semanticState: getSemanticState(sid),
         activeStyle,
       })
 
-    const isBrief = outputShape === 'brief'
-    const _wantsFull = needsFullCode && !isBrief
+    const isBrief   = outputShape === 'brief'
+    const mustSendFull = isFirstPass && !!_codeBase
+    const _codeBaseSliced = mustSendFull ? _codeBase?.slice(0, firstPassLimit) : _codeBase
     const storedRaw =
-      (_wantsFull
-        ? (effectiveMatch?.raw ?? (shouldAttachStoredCode ? (rawCodeStore.get(sid) ?? []).at(-1)?.raw ?? null : null))
-        : (shouldAttachStoredCode ? codeSummary : null)) ??
+      ((mustSendFull || (wantsFull && !isBrief)) ? _codeBaseSliced : (shouldAttachStoredCode ? codeSummary : null)) ??
       (recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode && !hasStoredCode
-        ? (_wantsFull ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT) : `[code_summary] recovered code — ${Math.round(recoveredCode.length / 1024 * 10) / 10}KB`)
+        ? ((mustSendFull || (wantsFull && !isBrief)) ? recoveredCode.slice(0, mustSendFull ? firstPassLimit : RECOVERED_CODE_LIMIT) : `[code_summary] recovered code — ${Math.round(recoveredCode.length / 1024 * 10) / 10}KB`)
         : null)
+
+    const finalHasCode = codeBlocks.length > 0 || !!storedRaw
     updateSemanticState(sid, activeDomain)
 
     if (!sessionSummaryStore.has(sid) && sessionSummary?.text) sessionSummaryStore.set(sid, sessionSummary)
@@ -474,8 +480,7 @@ router.post('/process-text', async (req, res) => {
     if (activeSummary?.text) systemParts.unshift(`[session] ${isBrief ? activeSummary.text.slice(0, 60) : activeSummary.text}`)
     const systemHint = systemParts.join('\n') || null
 
-    const filteredHistory = filterStyleInstructions(isBrief ? history.slice(-2) : history)
-    const historyMessages = buildHistoryLayer(filteredHistory, continuity, sid, false, activeDomain)
+    const historyMessages = buildHistoryLayer(history, continuity, sid, false, activeDomain, isBrief ? 2 : 4)
     const recCode         = !isBrief && typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode
       ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT)
       : null
@@ -510,6 +515,7 @@ router.post('/process-text', async (req, res) => {
       claudeData           = await claudeResponse.json()
       if (!claudeResponse.ok) throw new Error(`Claude error: ${claudeData?.error?.message ?? claudeResponse.status}`)
       reply             = claudeData?.content?.filter(c => c.type === 'text').map(c => c.text).join('\n').trim() || null
+      if (isFirstPass && reply) codeAnalysisStore.set(_codeKey, true)
       inputTokensTotal  = claudeData?.usage?.input_tokens  ?? 0
       outputTokensTotal = claudeData?.usage?.output_tokens ?? 0
 
@@ -592,6 +598,7 @@ router.delete('/session/:id', (req, res) => {
   processingLock.delete(id); _semanticState.delete(id); rawCodeStore.delete(id)
   codeSessionStore.delete(id); resumeBootstrapped.delete(id); capsuleMemory.delete(id)
   anchorMemory.delete(id); sessionSummaryStore.delete(id)
+  for (const [k] of codeAnalysisStore) { if (k.startsWith(`${id}:`)) codeAnalysisStore.delete(k) }
   return res.json({ ok: true })
 })
 
