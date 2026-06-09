@@ -231,27 +231,19 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false, curre
   return clean.slice(-limit).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : compressUserMessage(h.content) }))
 }
 
-// ── Route يقرأ إشارات SSE ويطبّق القرار ─────────────────────
-function resolveCodeStrategy(fieldSignals, _codeBase, questionOnly) {
+function resolveCodeStrategy(fieldSignals) {
   const fs = String(fieldSignals || '')
-
-  const needsRaw    = fs.includes('@input.raw_required')  || fs.includes('#code_full')
-  const needsSummary = fs.includes('@input.summary_ok')   || fs.includes('#code_summary')
-  const wantsReturn = fs.includes('@output.full_return')
-  const wantsReview = fs.includes('@output.focused_review')
-  const wantsFull   = fs.includes('#full_file')
-
-  return { needsRaw, needsSummary, wantsReturn, wantsReview, wantsFull }
+  return {
+    needsRaw:    fs.includes('@input.raw_required') || fs.includes('#code_full'),
+    needsSummary: fs.includes('@input.summary_ok')  || fs.includes('#code_summary'),
+    wantsReturn: fs.includes('@output.full_return'),
+    wantsReview: fs.includes('@output.focused_review'),
+    wantsFull:   fs.includes('#full_file'),
+  }
 }
 
 function chooseMaxTokens(outputShape, wantsReturn, hasCode, remaining) {
-  const base = {
-    brief:    1200,
-    balanced: 2800,
-    detailed: 5000,
-    full:     8000,
-  }[outputShape] ?? 2800
-
+  const base = { brief: 1200, balanced: 2800, detailed: 5000, full: 8000 }[outputShape] ?? 2800
   const returnBonus = wantsReturn ? 4000 : 0
   const codeBonus   = hasCode && !wantsReturn ? 800 : 0
   return Math.min(base + returnBonus + codeBonus, remaining, 8000)
@@ -339,7 +331,7 @@ function updateSemanticState(sid, detectedDomain) {
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '13.0' })
+  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '13.1' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -400,7 +392,7 @@ router.post('/process-text', async (req, res) => {
 
     const HARD_BLOCK_DOMAINS = new Set(['science','math','humanities'])
 
-    const codeRelated = /اصلح|أصلح|عدل|تعديل|حلل|analyze|fix|edit|refactor|review|debug|ثغرة|خطأ|مشكلة|improve|update|check|اختبر/i.test(questionOnly)
+    const codeRelated = /اصلح|أصلح|عدل|تعديل|حلل|اشرح|وضح|analyze|explain|fix|edit|refactor|review|debug|ثغرة|خطأ|مشكلة|improve|update|check|اختبر/i.test(questionOnly)
     const explainCodeRelated =
       /اشرح|شرح|وضح|explain/i.test(questionOnly) &&
       /كود|الكود|code|file|ملف|function|class|html|css|js|javascript/i.test(questionOnly)
@@ -420,17 +412,14 @@ router.post('/process-text', async (req, res) => {
       if (cs?.active) { cs.ttl--; if (cs.ttl <= 0) cs.active = false }
     }
 
-    if (!rawCodeStore.has(sid) && recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30
-        && !shouldBlockCode) {
+    if (!rawCodeStore.has(sid) && recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode) {
       storeCodeContext(sid, [recoveredCode], tValue)
       codeSessionStore.set(sid, { active: true, ttl: 6 })
     }
 
     hasStoredCode = (rawCodeStore.get(sid) ?? []).length > 0
     const hasCode        = codeBlocks.length > 0 || (hasStoredCode && !shouldBlockCode)
-    const effectiveMatch = hasCode && !shouldBlockCode
-      ? retrieveRelevantCode(cleanedText, sid, tValue)
-      : null
+    const effectiveMatch = hasCode && !shouldBlockCode ? retrieveRelevantCode(cleanedText, sid, tValue) : null
 
     const shouldAttachStoredCode =
       hasStoredCode && !shouldBlockCode &&
@@ -440,16 +429,15 @@ router.post('/process-text', async (req, res) => {
     const codeSummary = _lastCtx
       ? `[code_summary] ${_lastCtx.summary} — ${Math.round(_lastCtx.raw.length / 1024 * 10) / 10}KB`
       : null
-    const _codeBase = effectiveMatch?.raw ?? _lastCtx?.raw ?? null
-    const _codeHash = _lastCtx?.hash || null
-    const _codeKey  = _codeHash ? `${sid}:${_codeHash}` : null
+    const _codeBase   = effectiveMatch?.raw ?? _lastCtx?.raw ?? null
+    const _codeHash   = _lastCtx?.hash || null
+    const _codeKey    = _codeHash ? `${sid}:${_codeHash}` : null
     const isFirstPass = !!_codeKey && !codeAnalysisStore.has(_codeKey)
 
     const _historyChars   = JSON.stringify(history ?? []).length
     const _availableChars = Math.max(20000, 100000 - _historyChars)
     const firstPassLimit  = Math.min(80000, Math.floor(_availableChars * 0.8))
 
-    // ── SSE يقرر — route يطبّق ──────────────────────────────────
     const { fieldSignals, systemHint: _systemHint, allowCodeSuggestion, outputShape } =
       buildSignalEngine({
         sid,
@@ -464,20 +452,15 @@ router.post('/process-text', async (req, res) => {
         activeStyle,
       })
 
-    const strategy    = resolveCodeStrategy(fieldSignals, _codeBase, questionOnly)
-    const isBrief     = outputShape === 'brief'
+    const strategy = resolveCodeStrategy(fieldSignals)
+    const isBrief  = outputShape === 'brief'
 
     let storedRaw = null
     if (!shouldBlockCode) {
-      if (strategy.needsRaw && _codeBase) {
-        storedRaw = _codeBase
-      } else if (strategy.wantsFull && _codeBase) {
-        storedRaw = _codeBase
-      } else if (strategy.needsSummary && codeSummary) {
-        storedRaw = codeSummary
-      } else if (shouldAttachStoredCode && codeSummary) {
-        storedRaw = codeSummary
-      }
+      if (strategy.needsRaw && _codeBase)        storedRaw = _codeBase
+      else if (strategy.wantsFull && _codeBase)  storedRaw = _codeBase
+      else if (strategy.needsSummary && codeSummary) storedRaw = codeSummary
+      else if (shouldAttachStoredCode && codeSummary) storedRaw = codeSummary
       if (!storedRaw && recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30) {
         storedRaw = strategy.needsRaw
           ? recoveredCode.slice(0, firstPassLimit)
@@ -515,8 +498,8 @@ router.post('/process-text', async (req, res) => {
     const recCode         = !isBrief && typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode
       ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT)
       : null
-    const questionText    = storedRaw ? (questionOnly || 'تعامل مع الكود المرفق حسب طلب المستخدم.') : cleanedText
-    const userContent     = hasImage
+    const questionText = storedRaw ? (questionOnly || 'تعامل مع الكود المرفق حسب طلب المستخدم.') : cleanedText
+    const userContent  = hasImage
       ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: questionText }] : [])]
       : questionText
 
@@ -529,15 +512,14 @@ router.post('/process-text', async (req, res) => {
 
     const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
     const remaining     = Math.max(1000, 180000 - inputEstimate)
-
-    const maxTokens = chooseMaxTokens(outputShape, strategy.wantsReturn, finalHasCode, remaining)
-    const model     = 'claude-haiku-4-5-20251001'
+    const maxTokens     = chooseMaxTokens(outputShape, strategy.wantsReturn, finalHasCode, remaining)
+    const model         = 'claude-haiku-4-5-20251001'
 
     let payloadSize = 0
     try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large' }) }
 
-    const _strategyLabel = strategy.needsRaw ? 'raw' : strategy.needsSummary ? 'summary' : 'none'
-    console.log(`[${sid.slice(-8)}] → LLM | shape:${outputShape} strategy:${_strategyLabel} max:${maxTokens} domain:${activeDomain} signals:${fieldSignals ?? 'none'}`)
+    const _sl = strategy.needsRaw ? 'raw' : strategy.needsSummary ? 'sum' : 'none'
+    console.log(`[${sid.slice(-8)}] → shape:${outputShape} st:${_sl} max:${maxTokens} dom:${activeDomain} sig:${fieldSignals ?? '-'}`)
 
     let claudeData, reply = null, inputTokensTotal = 0, outputTokensTotal = 0
 
@@ -592,7 +574,7 @@ router.post('/process-text', async (req, res) => {
     }
 
     const costUSD = parseFloat(((inputTokensTotal/1_000_000)*1.0 + (outputTokensTotal/1_000_000)*5.0).toFixed(6))
-    console.log(`[${sid.slice(-8)}] ← LLM | in:${inputTokensTotal} out:${outputTokensTotal} cost:$${costUSD} trunc:${isTruncated(claudeData)}`)
+    console.log(`[${sid.slice(-8)}] ← in:${inputTokensTotal} out:${outputTokensTotal} $${costUSD}`)
     metricsStore.set(sid, { sessionId: sid, inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, costUSD, maxTokens, payloadSize, updatedAt: new Date().toISOString() })
 
     return res.json({
