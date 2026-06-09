@@ -498,11 +498,11 @@ router.post('/process-text', async (req, res) => {
     const outputShapeHint = isBrief
       ? '[Output Shape]\nBe brief. Max 3 points. No preamble.'
       : strategy.wantsReview
-      ? '[Output Shape]\nCode review format only:\n- Strengths (max 3)\n- Weaknesses (max 3)\n- Critical issues (if any)\nNo full code rewrite. No line-by-line explanation.'
+      ? '[Output Shape]\nRespond in this exact format only:\n**What it does:** 1 sentence.\n**Strengths:** max 2 bullet points.\n**Weaknesses:** max 2 bullet points.\n**Critical:** only if exists.\nNo code. No explanations. No preamble.'
       : strategy.wantsReturn
-      ? '[Output Shape]\nReturn the complete modified code. No truncation. No explanation unless critical.'
+      ? '[Output Shape]\nReturn complete modified code only. No explanation. No preamble.'
       : outputShape === 'balanced'
-      ? '[Output Shape]\nAnswer directly. No preamble. No repetition. If this is a follow-up, answer only the new point first. Keep enough detail for accuracy.'
+      ? '[Output Shape]\nAnswer in max 3 sentences or 3 bullet points. No preamble. Direct answer only.'
       : null
 
     const _today      = new Date().toISOString().slice(0, 10)
@@ -537,7 +537,7 @@ router.post('/process-text', async (req, res) => {
     try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large' }) }
 
     const _strategyLabel = strategy.needsRaw ? 'raw' : strategy.needsSummary ? 'summary' : 'none'
-    console.log(`[${sid.slice(-8)}] → LLM | shape:${outputShape} strategy:${_strategyLabel} tokens_est:${inputEstimate} max:${maxTokens} domain:${activeDomain}`)
+    console.log(`[${sid.slice(-8)}] → LLM | shape:${outputShape} strategy:${_strategyLabel} max:${maxTokens} domain:${activeDomain} signals:${fieldSignals ?? 'none'}`)
 
     let claudeData, reply = null, inputTokensTotal = 0, outputTokensTotal = 0
 
