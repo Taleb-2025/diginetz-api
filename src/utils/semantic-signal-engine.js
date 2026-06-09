@@ -198,13 +198,24 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
 
   if (codeBlocks.length > 0)  add('#code', 0.80)
   if (hasStoredCode) {
-    const wantsEdit    = /اصلح|أصلح|عدل|تعديل|fix|edit|refactor|debug|ثغرة|خطأ|مشكلة/i.test(questionOnly)
-    const wantsAnalyze = /حلل|analyze|review|افحص|inspect|check/i.test(questionOnly)
+    const wantsEdit    = /اصلح|أصلح|عدل|تعديل|fix|edit|refactor|debug|ثغرة|خطأ|مشكلة|حسّن|improve/i.test(questionOnly)
+    const wantsAnalyze = /حلل|analyze|review|افحص|inspect|check|قيّم/i.test(questionOnly)
     const wantsBuild   = /ابنِ|ابن|أنشئ|انشئ|build|implement|أضف|add/i.test(questionOnly)
-    const needsFullCode = anchors.includes('@repair_intent') || wantsEdit || wantsAnalyze || wantsBuild
-    const needsSummary  = !needsFullCode && (anchors.includes('@analysis_intent') || continuity > 0.20)
-    if (needsFullCode)       add('#code_full',    0.85)
-    else if (needsSummary)   add('#code_summary', 0.65)
+
+    if (wantsEdit) {
+      add('@intent.modify',      0.95)
+      add('@input.raw_required', 0.95)
+      add('@output.full_return', 0.95)
+      add('#code_full',          0.88)
+    } else if (wantsAnalyze) {
+      add('@input.raw_required',  0.92)
+      add('@output.focused_review', 0.92)
+      add('#code_full',           0.88)
+    } else {
+      add('@input.summary_ok',   0.80)
+      add('@output.direct_answer', 0.75)
+      add('#code_summary',       0.65)
+    }
   }
   if (/أنزله|انزله|نزله|أعطني.*كامل|اعطني.*كامل|الكود.*كامل|full.*file|complete.*code|اعطني الكود|كامل.*نهائي|download.*full|give.*full|كامل.*الكود/i.test(questionOnly)) add('#full_file', 0.92)
 
@@ -221,7 +232,7 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   if (continuity > 0.35)                                 add('#continuity', continuity + coher + 0.3)
   if (continuity > 0.20 && driftCount === 0)             add('#followup',   0.60)
 
-  const MAX_SIGNALS = 7
+  const MAX_SIGNALS = 10
   const top = weighted
     .filter((s, i, arr) => arr.findIndex(x => x.text === s.text) === i)
     .sort((a, b) => b.w - a.w)
