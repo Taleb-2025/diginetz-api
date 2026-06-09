@@ -71,11 +71,15 @@ export function buildRoutingConstraints(anchors, fieldSignals) {
   const has = a => anchors.includes(a)
   const constraints = []
 
-  if (fs.includes('#code') || fs.includes('#code_summary') || fs.includes('#code_full'))
+  if (fs.includes('#code_full'))
+    constraints.push('Code provided — analyze it directly. Do not ask for it again.')
+  if (fs.includes('#code_summary'))
+    constraints.push('You have prior context on this code. Answer using what you know. Reference by function/class name — do not re-describe structure.')
+  if (fs.includes('#code') && !fs.includes('#code_full') && !fs.includes('#code_summary'))
     constraints.push('If code is provided → analyze it directly without asking for it again.')
 
   if (has('@analysis_intent') && !has('@repair_intent'))
-    constraints.push('Output: concise findings — overview, key issues, recommendations. No full rewrite.')
+    constraints.push('Output format: [issue] → [impact] → [fix]. Max 5 findings. No narrative. No re-describing structure.')
 
   if (has('@repair_intent') && !fs.includes('#full_file'))
     constraints.push('Output: targeted fix only. Do not rewrite unrelated parts.')
@@ -86,7 +90,9 @@ export function buildRoutingConstraints(anchors, fieldSignals) {
   if (has('@build_intent'))
     constraints.push('Output: structured implementation. Define contracts before code.')
 
-  if (fs.includes('#continuity') || fs.includes('#followup'))
+  if (fs.includes('#followup'))
+    constraints.push('Answer the new point only. Reference prior work by name — do not re-explain it.')
+  if (fs.includes('#continuity') && !fs.includes('#followup'))
     constraints.push('Build on prior context. Do not repeat what was already addressed.')
 
   if (has('@repair_intent') || has('@build_intent')) {
