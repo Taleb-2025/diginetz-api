@@ -199,7 +199,7 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   if (codeBlocks.length > 0)  add('#code', 0.80)
   if (hasStoredCode) {
     const wantsEdit    = /اصلح|أصلح|عدل|تعديل|fix|edit|refactor|debug|ثغرة|خطأ|مشكلة|حسّن|improve/i.test(questionOnly)
-    const wantsAnalyze = /حلل|analyze|review|افحص|inspect|check|قيّم/i.test(questionOnly)
+    const wantsAnalyze = /حلل|اشرح|وضح|فسّر|analyze|explain|review|افحص|inspect|check|قيّم/i.test(questionOnly)
     const wantsBuild   = /ابنِ|ابن|أنشئ|انشئ|build|implement|أضف|add/i.test(questionOnly)
 
     if (wantsEdit) {
