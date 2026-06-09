@@ -1,311 +1,605 @@
-// ═══════════════════════════════════════════════════════════════
-//  SEMANTIC SIGNAL ENGINE
-//  تحويل حالة CELF + Anchors + Code Context → Signals + systemHint
-// ═══════════════════════════════════════════════════════════════
+import express from 'express'
+import { resolveConceptAnchors } from '../utils/concept-anchor.js'
+import { cleanInput, filterStyleInstructions, detectStyleInstruction } from '../utils/context-builder.js'
+import { buildSignalEngine, classifyDomain as _classifyDomain } from '../utils/semantic-signal-engine.js'
 
-// ───────────────────────────────────────────────────────────────
-//  DOMAIN CLASSIFIER
-// ───────────────────────────────────────────────────────────────
+const router = express.Router()
 
-export function classifyDomain(text) {
-  if (!text || typeof text !== 'string') return 'general'
-  const t = text.toLowerCase()
-  if (/error|bug|crash|exception|debug|fix|مشكلة|خطأ|لا يعمل|fail/i.test(t))              return 'debugging'
-  if (/backend|express|fastapi|django|flask|server|api|route|endpoint/i.test(t))           return 'backend'
-  if (/frontend|react|vue|angular|html|css|dom|component|ui/i.test(t))                     return 'frontend'
-  if (/database|redis|postgres|mysql|mongodb|sql|query|schema/i.test(t))                   return 'database'
-  if (/auth|jwt|token|oauth|session|login|password/i.test(t))                              return 'security'
-  if (/docker|railway|nginx|kubernetes|deploy|cloud/i.test(t))                             return 'devops'
-  if (/algorithm|sort|search|graph|tree|dynamic|recursion/i.test(t))                       return 'algorithms'
-  if (/test|jest|mocha|cypress|spec|unit|mock|coverage/i.test(t))                          return 'testing'
-  if (/const|let|var|function|class|import|export|async/.test(t) && t.length > 80)         return 'code'
-  if (/فيزياء|physics|كيمياء|chemistry|بيولوجيا|biology|كوانتم|quantum|ذرة|atom|موجة|wave|تشابك|entanglement|نسبية|relativity|ميكانيكا|mechanics|طاقة|energy|جسيم|particle|نووي|nuclear/i.test(t)) return 'science'
-  if (/رياضيات|math|جبر|algebra|هندسة|geometry|إحصاء|statistics|حساب|calculus|مبرهنة|theorem|معادلة|equation|تفاضل|differential|تكامل|integral/i.test(t)) return 'math'
-  if (/تاريخ|history|جغرافيا|geography|فلسفة|philosophy|أدب|literature|لغة|language/i.test(t)) return 'humanities'
-  return 'general'
+const MAX_INPUT_CHARS      = 40000
+const MAX_TEXT_MAP         = 300
+const RECOVERED_CODE_LIMIT = 14000
+
+const FILLERS = new Set([
+  'the','and','or','but','is','are','was','were','a','an','in','on','at','to','for',
+  'ich','bin','ein','eine','der','die','das','und','wie','mit','von','auf','bei','fuer',
+  'هل','في','من','على','مع','هو','هي','كان','لا','أو','و','ما','هذا','ذلك'
+])
+
+const processingLock      = new Set()
+const semanticTextMaps    = new Map()
+const styleStore          = new Map()
+const rawCodeStore        = new Map()
+const codeSessionStore    = new Map()
+const sessionSummaryStore = new Map()
+const resumeBootstrapped  = new Set()
+const capsuleMemory       = new Map()
+const anchorMemory        = new Map()
+const metricsStore        = new Map()
+const _semanticState      = new Map()
+const codeAnalysisStore   = new Map()
+
+const classifyDomain = _classifyDomain
+
+function semanticHash(text) {
+  const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 200)
+  let h = 2166136261
+  for (let i = 0; i < normalized.length; i++) { h ^= normalized.charCodeAt(i); h = Math.imul(h, 16777619) }
+  return (Math.abs(h >>> 0)).toString(36)
 }
 
-// ───────────────────────────────────────────────────────────────
-//  SEMANTIC PATTERN BUILDER
-// ───────────────────────────────────────────────────────────────
-
-export function buildSemanticPattern(anchors) {
-  if (!anchors?.length) return null
-  const has = a => anchors.includes(a)
-
-  if (has('@repair_intent') && has('@failure') && has('@identity_layer'))
-    return '[pattern: diagnose_auth_failure] [step: identify_root_cause → locate_auth_flow → apply_fix → verify]'
-  if (has('@repair_intent') && has('@failure') && has('@data_store'))
-    return '[pattern: diagnose_db_failure] [step: check_query → check_connection → check_schema → fix]'
-  if (has('@repair_intent') && has('@failure'))
-    return '[pattern: diagnose_then_fix] [step: identify_root_cause → isolate_issue → apply_targeted_fix]'
-  if (has('@repair_intent') && has('@identity_layer'))
-    return '[pattern: fix_auth] [step: review_auth_flow → identify_gap → patch_securely]'
-  if (has('@repair_intent') && has('@interface_layer'))
-    return '[pattern: fix_api] [step: trace_route → check_handler → fix_response]'
-  if (has('@analysis_intent') && has('@data_store'))
-    return '[pattern: analyze_db] [step: inspect_schema → check_queries → identify_bottlenecks]'
-  if (has('@analysis_intent') && has('@identity_layer'))
-    return '[pattern: audit_auth] [step: review_flow → check_vulnerabilities → suggest_improvements]'
-  if (has('@build_intent') && has('@interface_layer'))
-    return '[pattern: build_api] [step: define_contract → implement_handler → validate_response]'
-  if (has('@build_intent') && has('@identity_layer'))
-    return '[pattern: build_auth] [step: define_flow → implement_securely → test_edge_cases]'
-  if (has('@analysis_intent'))
-    return '[pattern: code_analysis] [step: understand_purpose → identify_issues → suggest_next]'
-  if (has('@repair_intent'))
-    return '[pattern: generic_fix] [step: locate_issue → apply_fix → verify]'
-  if (has('@build_intent'))
-    return '[pattern: generic_build] [step: plan → implement → validate]'
-  if (has('@verify_intent'))
-    return '[pattern: verify] [step: define_cases → test → report_results]'
-  return null
+function semanticCompress(text, maxWords = 12) {
+  const cleaned = String(text ?? '').replace(/```[\s\S]*?```/g, '').trim()
+  const words   = cleaned.split(/\s+/).filter(w => w.length > 2 && !FILLERS.has(w.toLowerCase()))
+  return words.slice(0, maxWords).join(' ')
 }
 
-// ───────────────────────────────────────────────────────────────
-//  ROUTING CONSTRAINTS BUILDER
-// ───────────────────────────────────────────────────────────────
+function jaccardSimilarity(textA, textB) {
+  const setA = new Set(textA.toLowerCase().split(/\s+/).filter(w => w.length > 2))
+  const setB = new Set(textB.toLowerCase().split(/\s+/).filter(w => w.length > 2))
+  if (!setA.size || !setB.size) return 0
+  let overlap = 0
+  for (const w of setA) if (setB.has(w)) overlap++
+  return (setA.size + setB.size - overlap) > 0 ? overlap / (setA.size + setB.size - overlap) : 0
+}
 
-export function buildRoutingConstraints(anchors, fieldSignals) {
-  const fs  = String(fieldSignals || '')
-  const has = a => anchors.includes(a)
-  const constraints = []
-
-  if (fs.includes('#code_full'))
-    constraints.push('Code provided — analyze it directly. Do not ask for it again.')
-  if (fs.includes('#code_summary'))
-    constraints.push('You have prior context on this code. Answer using what you know. Reference by function/class name — do not re-describe structure.')
-  if (fs.includes('#code') && !fs.includes('#code_full') && !fs.includes('#code_summary'))
-    constraints.push('If code is provided → analyze it directly without asking for it again.')
-
-  if (has('@analysis_intent') && !has('@repair_intent'))
-    constraints.push('Output format: [issue] → [impact] → [fix]. Max 5 findings. No narrative. No re-describing structure.')
-
-  if (has('@repair_intent') && !fs.includes('#full_file'))
-    constraints.push('Output: targeted fix only. Do not rewrite unrelated parts.')
-
-  if (fs.includes('#full_file'))
-    constraints.push('Output: complete working file. Include all code. No truncation.')
-
-  if (has('@build_intent'))
-    constraints.push('Output: structured implementation. Define contracts before code.')
-
-  if (fs.includes('#followup'))
-    constraints.push('Answer the new point only. Reference prior work by name — do not re-explain it.')
-  if (fs.includes('#continuity') && !fs.includes('#followup'))
-    constraints.push('Build on prior context. Do not repeat what was already addressed.')
-
-  if (has('@repair_intent') || has('@build_intent')) {
-    constraints.push('Always wrap code in fenced blocks with language tag — e.g. ```html ... ``` or ```javascript ... ```.')
-    constraints.push('Use textContent or createElement instead of innerHTML when inserting user data.')
-    constraints.push('Only claim a fix is applied if the actual code change is present in your output.')
-    constraints.push('Do not mention improvements that are not reflected in the code you return.')
+function extractSymbols(raw) {
+  const symbols  = []
+  const patterns = [
+    /function\s+(\w+)/g, /class\s+(\w+)/g, /const\s+(\w+)\s*=/g,
+    /router\.(get|post|put|delete|patch)\(['"](\/[^'"]*)['"]/g,
+    /import\s+.*\s+from\s+['"]([^'"]+)['"]/g,
+    /export\s+(class|function|const)\s+(\w+)/g
+  ]
+  for (const pat of patterns) {
+    let m; pat.lastIndex = 0
+    while ((m = pat.exec(raw)) !== null) {
+      const sym = m[2] || m[1]
+      if (sym && sym.length > 2) symbols.push(sym.toLowerCase())
+    }
   }
-
-  return constraints.length > 0 ? '[Routing Constraints]\n' + constraints.join('\n') : null
+  return [...new Set(symbols)].slice(0, 25)
 }
 
-// ───────────────────────────────────────────────────────────────
-//  DIRECTIVES BUILDER
-// ───────────────────────────────────────────────────────────────
-
-export function buildDirectives(anchors, userIsArabic, fieldSignals) {
-  const lang        = userIsArabic ? '[lang: Arabic]' : '[lang: same_as_user]'
-  const pattern     = buildSemanticPattern(anchors)
-  const signals     = fieldSignals ?? null
-  const constraints = buildRoutingConstraints(anchors, fieldSignals)
-  const fs          = String(fieldSignals || '')
-
-  const parts = []
-  const directivesPart = [lang, pattern].filter(Boolean).join('\n')
-  if (directivesPart) parts.push('[Routing Directives]\n' + directivesPart)
-  if (signals)        parts.push('[Routing Signals]\n' + signals)
-  if (constraints)    parts.push(constraints)
-  if (fs.includes('@depth.surface')) parts.push('concise')
-  return parts.join('\n') || null
-}
-
-// ───────────────────────────────────────────────────────────────
-//  FIELD SIGNALS BUILDER
-// ───────────────────────────────────────────────────────────────
-
-export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, continuity, anchors = [], hasStoredCode = false, semanticState = {}) {
-  const field  = celfResult?.field ?? {}
-  const novel  = field.noveltyPressure   ?? 0
-  const coher  = field.semanticCoherence ?? 0
-
-  const ANCHOR_TO_INTENT = {
-    '@repair_intent':   '@intent.fix',
-    '@analysis_intent': '@intent.analyze',
-    '@build_intent':    '@intent.build',
-    '@verify_intent':   '@intent.review',
+function detectCodeBlocks(text) {
+  const blocks = []
+  const fenced = /```(?:[a-zA-Z0-9_+-]*)?(?: |\n)([\s\S]*?)```/gi
+  let match
+  while ((match = fenced.exec(text)) !== null) {
+    const code = match[1].trim()
+    if (code.length > 30) blocks.push(code)
   }
-
-  const ANCHOR_TO_SCOPE = {
-    '@identity_layer':     '::backend/auth',
-    '@data_store':         '::database',
-    '@memory_layer':       '::backend/cache',
-    '@interface_layer':    '::api/gateway',
-    '@infra_layer':        '::infra',
-    '@realtime_transport': '::backend/realtime',
+  if (blocks.length === 0) {
+    const codeSignals = [
+      /^(import|export|const|let|var|function|class|async)\s/m,
+      /=>\s*\{/, /\bthis\.\w+\s*=/, /<(!DOCTYPE|html|head|body)/i
+    ]
+    if (codeSignals.filter(p => p.test(text)).length >= 2 && text.length > 50) blocks.push(text)
   }
+  return blocks
+}
 
-  const ANCHOR_TO_STATE = { '@failure': '?failure' }
-  const INTENT_PRIORITY = ['@repair_intent', '@analysis_intent', '@build_intent', '@verify_intent']
-
-  const weighted = []
-  const add = (sig, w) => weighted.push({ text: sig, w })
-
-  const primaryIntent = INTENT_PRIORITY.find(a => anchors.includes(a))
-  if (primaryIntent && ANCHOR_TO_INTENT[primaryIntent]) add(ANCHOR_TO_INTENT[primaryIntent], 0.90)
-
-  for (const a of anchors) {
-    if (ANCHOR_TO_SCOPE[a]) add(ANCHOR_TO_SCOPE[a], 0.85)
-    if (ANCHOR_TO_STATE[a]) add(ANCHOR_TO_STATE[a], 0.95)
+function compressAssistantMessage(content) {
+  if (typeof content !== 'string') return content
+  const codeBlockPattern = /```(\w*)\n?([\s\S]*?)```/g
+  const parts = []; let lastIndex = 0; let match
+  codeBlockPattern.lastIndex = 0
+  while ((match = codeBlockPattern.exec(content)) !== null) {
+    const textBefore = content.slice(lastIndex, match.index)
+    const lang       = match[1]?.trim() || 'code'
+    if (textBefore.trim()) parts.push({ type: 'text', content: textBefore.trim() })
+    parts.push({ type: 'label', content: `[${lang} implementation]` })
+    lastIndex = match.index + match[0].length
   }
+  const textAfter = content.slice(lastIndex).trim()
+  if (textAfter) parts.push({ type: 'text', content: textAfter })
+  if (!parts.length) return '[response provided]'
+  const textParts  = parts.filter(p => p.type === 'text').map(p => p.content.slice(0, 200))
+  const labelParts = parts.filter(p => p.type === 'label').map(p => p.content)
+  return [textParts.join('\n').trim(), labelParts.join(', ')].filter(Boolean).join('\n') || '[response provided]'
+}
 
-  if (/critical|قاتل|خطير|urgent|عاجل/i.test(questionOnly))              add('!critical', 1.00)
-  if (/موقوف|توقف|متوقف|stopped|blocked|cannot proceed|لا يعمل|انهار|crashed/i.test(questionOnly)) add('!blocked', 0.98)
+function compressUserMessage(content) {
+  if (typeof content !== 'string') return ''
+  const hasCode = /```[\s\S]*?```/.test(content) || /export\s+class\s+\w+/.test(content)
+  if (!hasCode) return content.slice(0, 400)
+  return content.replace(/```[\s\S]*?```/g, '[code attached]').replace(/\s{2,}/g, ' ').trim().slice(0, 300) || '[code message]'
+}
 
-  if (/كان يعمل|used to work|regression/i.test(questionOnly))             add('?regression',  0.90)
-  if (/بطيء|slow|latency|performance|memory leak/i.test(questionOnly))    add('?performance', 0.90)
-  if (/ثغرة|vulnerability|injection|xss|csrf/i.test(questionOnly))        add('?security',    0.92)
-  if (/لماذا|why|warum/i.test(questionOnly))                               add('?causal',      0.60)
-  if (/غامض|unclear|ambiguous|لا أفهم/i.test(questionOnly))               add('?ambiguous',   0.60)
-
-  if (/رسم|diagram|chart|visualize/i.test(questionOnly))                  add('#diagram',  0.75)
-  if (/اكتب.*اختبار|write.*test|generate.*test|test cases|أضف.*اختبار/i.test(questionOnly)) add('#tests', 0.75)
-  if (/توثيق|documentation|docs|readme/i.test(questionOnly))              add('#docs',     0.75)
-  if (/هذا.*الكود|ذلك.*الملف|this.*code|that.*function/i.test(questionOnly) && continuity > 0.30) add('#resolved_ref', 0.65)
-  if (/مشروع|project|continuation/i.test(questionOnly) && continuity > 0.50) add('#project_continuation', 0.80)
-
-  if (/بالتفصيل|detailed|full|شامل|in depth/i.test(questionOnly))        add('@depth.technical', 0.70)
-  if (/باختصار|brief|concise|بإيجاز/i.test(questionOnly))                add('@depth.surface',   0.70)
-  if (/خطوة|step by step|بالترتيب/i.test(questionOnly))                   add('step-by-step',     0.70)
-
-  if (/خوارزم|algorithm|sort|search|complexity/i.test(questionOnly))      add('::analysis/algo', 0.75)
-  if (/debug|trace|تتبع|يعمل.*لكن/i.test(questionOnly))                  add('::debug',          0.75)
-
-  if (codeBlocks.length > 0)  add('#code',        0.80)
-  if (hasStoredCode) {
-    const needsFullCode =
-      anchors.includes('@repair_intent') ||
-      anchors.includes('@analysis_intent') ||
-      /اصلح|أصلح|عدل|تعديل|حلل|analyze|fix|edit|refactor|review|debug|ثغرة|خطأ|مشكلة/i.test(questionOnly)
-    add(needsFullCode ? '#code_full' : '#code_summary', 0.75)
+function storeSemanticEntry(sid, t, text) {
+  const map        = semanticTextMaps.get(sid) ?? new Map()
+  const compressed = semanticCompress(text, 15)
+  if (!compressed) return
+  const hash = semanticHash(compressed)
+  for (const [, entry] of map) {
+    if (entry.hash === hash) return
+    if (jaccardSimilarity(entry.text, compressed) >= 0.72) return
   }
-  if (/أنزله|انزله|نزله|أعطني.*كامل|اعطني.*كامل|الكود.*كامل|full.*file|complete.*code|اعطني الكود|كامل.*نهائي|download.*full|give.*full|كامل.*الكود/i.test(questionOnly)) add('#full_file', 0.92)
-
-  const detectedDomain = classifyDomain(questionOnly)
-  const dom =
-    detectedDomain !== 'general'
-      ? detectedDomain
-      : (semanticState?.dominantDomain ?? 'general')
-  if (dom !== 'general') add(`::${dom}`, 0.72)
-
-  const driftCount = semanticState?.driftCount ?? 0
-  if (driftCount >= 2)                                   add('::reset',     0.85)
-  if (novel > 0.70)                                      add('explore',     novel)
-  if (continuity > 0.35)                                 add('#continuity', continuity + coher + 0.3)
-  if (continuity > 0.20 && driftCount === 0)             add('#followup',   0.60)
-
-  const MAX_SIGNALS = 7
-  const top = weighted
-    .filter((s, i, arr) => arr.findIndex(x => x.text === s.text) === i)
-    .sort((a, b) => b.w - a.w)
-    .slice(0, MAX_SIGNALS)
-    .map(s => s.text)
-
-  return top.length ? top.join(' ') : null
+  map.set(t, { hash, text: compressed })
+  if (map.size > MAX_TEXT_MAP) map.delete(map.keys().next().value)
+  semanticTextMaps.set(sid, map)
 }
 
-// ───────────────────────────────────────────────────────────────
-//  ALLOW CODE SUGGESTION
-// ───────────────────────────────────────────────────────────────
-
-export function computeAllowCodeSuggestion({ storedRaw, activeDomain, anchors, fieldSignals }) {
-  const BLOCK_DOMAINS = new Set(['science', 'math', 'humanities'])
-  const fs = String(fieldSignals || '')
-  const hasCodeAnchor  = anchors.some(a => ['@repair_intent', '@build_intent'].includes(a))
-  const hasCodeSignal  = /(@intent\.fix|@intent\.build|#code_full\b|#code\b)/.test(fs)
-  const hasCodeIntent  = hasCodeAnchor || hasCodeSignal
-  return !!storedRaw && hasCodeIntent && !BLOCK_DOMAINS.has(activeDomain)
+function storeCodeContext(sid, rawArr, tValue) {
+  const contexts = rawCodeStore.get(sid) ?? []
+  for (const raw of rawArr) {
+    if (!raw || raw.length < 30) continue
+    let cs = 2166136261
+    for (let i = 0; i < raw.length; i++) { cs ^= raw.charCodeAt(i); cs = Math.imul(cs, 16777619) }
+    const hash     = Math.abs(cs >>> 0).toString(16)
+    const existing = contexts.find(c => c.hash === hash)
+    if (existing) { existing.updatedAt = Date.now(); existing.msgIndex = tValue; continue }
+    const symbols = extractSymbols(raw)
+    const summary = `${classifyDomain(raw)} code: ${symbols.slice(0,6).join(', ') || 'general'}`
+    contexts.push({ id: `ctx_${tValue}_${hash.slice(0,6)}`, raw, symbols, summary, domain: classifyDomain(raw), hash, createdAt: Date.now(), updatedAt: Date.now(), msgIndex: tValue })
+  }
+  if (contexts.length > 10) contexts.splice(0, contexts.length - 10)
+  rawCodeStore.set(sid, contexts)
 }
 
-// ───────────────────────────────────────────────────────────────
-//  OUTPUT SHAPE COMPUTER
-//  يحدد شكل الرد: 'concise' | 'detailed' | 'full'
-//  القرار هنا في SS — الـ route يطبّق فقط
-// ───────────────────────────────────────────────────────────────
-
-export function computeOutputShape({ questionOnly = '', anchors, fieldSignals, activeStyle }) {
-  const fs = String(fieldSignals || '')
-  const q  = String(questionOnly).toLowerCase()
-
-  // full: طلب كامل صريح فقط
-  if (fs.includes('#full_file'))                                    return 'full'
-
-  // detailed: طلب تفصيل صريح من المستخدم أو SS
-  if (activeStyle === 'detailed')                                   return 'detailed'
-  if (fs.includes('@depth.technical'))                              return 'detailed'
-  if (/بالتفصيل|تفصيل|شامل|in depth|detailed|اشرح كل/i.test(q))  return 'detailed'
-
-  // brief: طلب اختصار صريح
-  if (activeStyle === 'concise')                                    return 'brief'
-  if (fs.includes('@depth.surface'))                                return 'brief'
-  if (/باختصار|مختصر|brief|بإيجاز|بسرعة|tldr/i.test(q))          return 'brief'
-
-  // balanced: الافتراضي
-  return 'balanced'
+function retrieveRelevantCode(questionText, sid, currentMsgIndex) {
+  const contexts = rawCodeStore.get(sid) ?? []
+  if (!contexts.length) return null
+  let best = null, bestScore = 0
+  const qLower = questionText.toLowerCase()
+  for (const ctx of contexts) {
+    const symbolBoost = (ctx.symbols ?? []).filter(s => qLower.includes(s)).length * 0.15
+    const domainMatch = classifyDomain(questionText) === ctx.domain ? 0.30 : 0
+    const msgAge      = Math.max(0, currentMsgIndex - ctx.msgIndex)
+    const freshness   = Math.max(0, 1 - msgAge / 20)
+    const finalScore  = symbolBoost * 0.50 + domainMatch * 0.35 + freshness * 0.15
+    if (finalScore > bestScore && finalScore > 0.10) { bestScore = finalScore; best = ctx }
+  }
+  return best
 }
 
-export function outputShapeHint(outputShape) {
-  if (outputShape === 'brief')
-    return '[Output Shape]\nBe brief. Max 3 points. No preamble.'
-  if (outputShape === 'balanced')
-    return '[Output Shape]\nAnswer directly. No preamble. No repetition. If this is a follow-up, answer only the new point first. Keep enough detail for accuracy.'
-  return null  // detailed / full
+function updateAnchors(sid, topicText, weight, domain = 'general') {
+  if (!topicText || weight < 0.3) return
+  const sessionAnchors = anchorMemory.get(sid) instanceof Map ? anchorMemory.get(sid) : new Map()
+  const store    = sessionAnchors.get(domain) ?? []
+  const existing = store.find(a => a.concept === topicText)
+  if (existing) { existing.weight = Math.min(1, existing.weight * 0.9 + weight * 0.1) }
+  else { store.push({ concept: topicText, weight, t: Date.now() }) }
+  store.sort((a, b) => b.weight - a.weight)
+  if (store.length > 5) store.pop()
+  sessionAnchors.set(domain, store)
+  anchorMemory.set(sid, sessionAnchors)
 }
 
-// ───────────────────────────────────────────────────────────────
-//  MAIN BUILD FUNCTION
-// ───────────────────────────────────────────────────────────────
-
-export function buildSignalEngine({
-  sid,
-  celfResult,
-  questionOnly,
-  codeBlocks,
-  continuity,
-  anchors,
-  storedRaw,
-  userIsArabic,
-  semanticState,
-  activeStyle = null,
-}) {
-  const detectedDomain = classifyDomain(questionOnly)
-  const activeDomain   = detectedDomain !== 'general'
-    ? detectedDomain
-    : (semanticState?.dominantDomain ?? 'general')
-
-  const hasStoredCode = !!storedRaw
-
-  const fieldSignals = buildFieldSignals(
-    sid, celfResult, questionOnly, codeBlocks,
-    continuity, anchors, hasStoredCode, semanticState
-  )
-
-  const systemHint = buildDirectives(anchors, userIsArabic, fieldSignals)
-
-  const allowCodeSuggestion = computeAllowCodeSuggestion({
-    storedRaw,
-    activeDomain,
-    anchors,
-    fieldSignals,
+function buildCapsuleContext(sid, domain = 'general') {
+  const sessionCaps = capsuleMemory.get(sid)
+  if (!sessionCaps) return []
+  const domainCaps  = sessionCaps.get(domain) ?? []
+  const generalCaps = domain !== 'general' ? (sessionCaps.get('general') ?? []) : []
+  const caps = [...domainCaps.slice(-2), ...generalCaps.slice(-1)]
+  if (!caps.length) return []
+  const lines = caps.map(c => {
+    const parts = [`topic:${c.topic}`]
+    if (c.covered?.length) parts.push(`covered:${c.covered.slice(0,3).join(',')}`)
+    if (c.pending?.length) parts.push(`pending:${c.pending.slice(0,2).join(',')}`)
+    return parts.join(' | ')
   })
-
-  // outputShape — القرار هنا، التطبيق في الـ route
-  const outputShape = computeOutputShape({ questionOnly, anchors, fieldSignals, activeStyle })
-
-  return { fieldSignals, systemHint, allowCodeSuggestion, activeDomain, outputShape }
+  return [{ role: 'user', content: `[memory]\n${lines.join('\n')}` }]
 }
+
+function buildAnchorContext(sid, domain = 'general') {
+  const sessionAnchors = anchorMemory.get(sid)
+  if (!sessionAnchors) return []
+  const anchors = sessionAnchors instanceof Map
+    ? [...(sessionAnchors.get(domain) ?? []), ...(domain !== 'general' ? (sessionAnchors.get('general') ?? []) : [])]
+    : sessionAnchors
+  if (!anchors.length) return []
+  const top = anchors.slice(0, 3).map(a => `${a.concept}(${Math.round(a.weight*100)}%)`).join(', ')
+  return [{ role: 'user', content: `[persistent topics: ${top}]` }]
+}
+
+async function generateSessionSummary(sid, history, currentQuestion = '') {
+  if (!history || history.length < 4) return null
+  const recent    = history.slice(-16)
+  const domain    = classifyDomain(recent.filter(h => h.role === 'user').map(h => h.content).join(' '))
+  const symbols   = (recent.map(h => h.content).join(' ').match(/[a-zA-Z][a-zA-Z0-9]{2,}/g) ?? []).slice(0, 6).join(', ')
+  const mainTopic = (
+    currentQuestion.replace(/```[\s\S]*?```/g,'').trim().slice(0, 80) ||
+    recent.filter(h => h.role === 'user')[0]?.content?.replace(/```[\s\S]*?```/g,'').trim().slice(0,80) ||
+    'general'
+  )
+  return { text: `${domain}: ${symbols || 'general'} - ${mainTopic}`.slice(0,200), generatedAt: Date.now() }
+}
+
+function buildHistoryLayer(history, continuity, sid, needsRawCode = false, currentDomain = 'general', maxHistory = 4) {
+  const filtered = filterStyleInstructions(history)
+  const clean    = filtered.filter(h => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string' && h.content.length > 0)
+  const limit    = Math.min(maxHistory, 4)
+  if (clean.length <= limit) return clean.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : h.content }))
+  if (continuity >= 0.70) {
+    return clean.slice(-limit).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) }))
+  }
+  if (continuity >= 0.40) {
+    const msgs = clean.slice(-limit).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) }))
+    return [...msgs, ...buildCapsuleContext(sid, currentDomain)]
+  }
+  if (continuity >= 0.20) return [...buildCapsuleContext(sid, currentDomain), ...buildAnchorContext(sid, currentDomain)]
+  return clean.slice(-limit).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : compressUserMessage(h.content) }))
+}
+
+function chooseMaxTokens(anchors, inputWords, hasCode, remaining) {
+
+  const cap = Math.min(8000, Math.max(2000, Math.floor(remaining * 0.45)))
+  return cap
+}
+
+function checkPayload(systemHint, messages) {
+  const size = JSON.stringify({ system: systemHint, messages }).length
+  if (size > 120000) throw new Error('prompt_too_large')
+  return size
+}
+
+function buildClaudeBody(model, maxTokens, systemHint, messages) {
+  const body = { model, max_tokens: maxTokens, messages }
+  if (systemHint && String(systemHint).trim()) body.system = String(systemHint).trim()
+  return body
+}
+
+async function fetchClaude(body, timeoutMs = 120000) {
+  const controller = new AbortController()
+  const timer      = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify(body), signal: controller.signal
+    })
+  } finally { clearTimeout(timer) }
+}
+
+function isTruncated(data) { return data?.stop_reason === 'max_tokens' }
+
+function removeOverlap(existing, continuation) {
+  const checkLen = Math.min(120, continuation.length)
+  const tail     = existing.slice(-checkLen * 2)
+  const head     = continuation.slice(0, checkLen)
+  for (let len = checkLen; len >= 20; len--) {
+    const fragment = head.slice(0, len)
+    if (tail.includes(fragment)) return continuation.slice(continuation.indexOf(fragment) + fragment.length)
+  }
+  return continuation
+}
+
+async function continuationCall(currentText, partialReply, systemHint, model = 'claude-haiku-4-5-20251001') {
+  const hasOpenCode    = (partialReply.match(/```/g) ?? []).length % 2 !== 0
+  const continuePrompt = hasOpenCode
+    ? 'continue exactly from where you stopped - complete the open code block, do not repeat what was already written'
+    : 'continue exactly from where you stopped - do not repeat what was already written'
+  const body = buildClaudeBody(model, 4096, systemHint, [
+    { role: 'user', content: currentText },
+    { role: 'assistant', content: partialReply },
+    { role: 'user', content: continuePrompt }
+  ])
+  const response = await fetchClaude(body, 30000)
+  return await response.json()
+}
+
+function setStyle(sid, style, ttl) { styleStore.set(sid, { style, ttl }) }
+function getAndTickStyle(sid) {
+  const entry = styleStore.get(sid)
+  if (!entry) return null
+  if (entry.ttl <= 0) { styleStore.delete(sid); return null }
+  entry.ttl--
+  return entry.style
+}
+
+function getSemanticState(sid) {
+  if (!_semanticState.has(sid)) _semanticState.set(sid, { dominantDomain: 'general', driftCount: 0 })
+  return _semanticState.get(sid)
+}
+
+function updateSemanticState(sid, detectedDomain) {
+  const state = getSemanticState(sid)
+  if (detectedDomain !== 'general') {
+    if (state.dominantDomain === 'general') {
+
+      state.dominantDomain = detectedDomain
+      state.driftCount = 0
+    } else if (detectedDomain !== state.dominantDomain) {
+      state.driftCount++
+      if (state.driftCount >= 3) { state.dominantDomain = detectedDomain; state.driftCount = 0 }
+    } else {
+      state.driftCount = 0
+    }
+  }
+  return state
+}
+
+router.get('/process-text', (_req, res) => {
+  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '12.1' })
+})
+
+router.post('/process-text', async (req, res) => {
+  const {
+    text = '', sessionId, history = [], image = null, imageMimeType = 'image/jpeg',
+    recoveredCode = null, sessionSummary = null,
+  } = req.body
+
+  const hasText  = typeof text  === 'string' && text.trim().length > 0
+  const hasImage = typeof image === 'string' && image.length > 0
+
+  if (!hasText && !hasImage) return res.status(400).json({ error: 'missing_input' })
+  if (!sessionId)            return res.status(400).json({ error: 'missing_session_id' })
+  if (processingLock.has(sessionId)) return res.status(429).json({ error: 'request_in_progress', retry: true })
+  processingLock.add(sessionId)
+
+  const sid = sessionId
+
+  try {
+    const rawText     = hasText && text.length > MAX_INPUT_CHARS ? text.slice(0, MAX_INPUT_CHARS) + '\n\n[truncated]' : text
+    const cleanedText = hasText ? cleanInput(rawText) : rawText
+
+    if (hasText) {
+      const styleDetected = detectStyleInstruction(cleanedText)
+      if (styleDetected) setStyle(sid, styleDetected.style, styleDetected.ttl)
+    }
+    const activeStyle  = getAndTickStyle(sid)
+    const userIsArabic = /[\u0600-\u06FF]/.test(cleanedText || '')
+    const wordCount    = cleanedText.trim().split(/\s+/).length
+    const codeBlocks   = detectCodeBlocks(text || cleanedText)
+
+    const tValue     = (history?.length ?? 0) + 1
+    const continuity = Math.min(1, (history?.length ?? 0) / 10)
+
+    storeSemanticEntry(sid, tValue, cleanedText.replace(/```[\s\S]*?```/g,'').replace(/\s{2,}/g,' ').trim())
+
+    const questionOnly = cleanedText
+      .replace(/```[\s\S]*?```/g, '')
+      .split('\n')
+      .filter(line => {
+        const l = line.trim()
+        if (!l) return false
+        if (/^\s*(import|export|const|let|var|function|class|async|return|if|for|while|try|catch)/i.test(l)) return false
+        if (/[{};]/.test(l) && l.length > 30) return false
+        return true
+      })
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 500) || cleanedText.slice(0, 200)
+
+    const { anchors } = resolveConceptAnchors(questionOnly)
+
+    const _detectedDomain = classifyDomain(questionOnly)
+    const activeDomain = _detectedDomain !== 'general'
+      ? _detectedDomain
+      : (getSemanticState(sid).dominantDomain ?? 'general')
+
+    const HARD_BLOCK_DOMAINS = new Set(['science','math','humanities'])
+
+    const codeRelated = /اصلح|أصلح|عدل|تعديل|حلل|analyze|fix|edit|refactor|review|debug|ثغرة|خطأ|مشكلة|improve|update|check|اختبر/i.test(questionOnly)
+
+    const explainCodeRelated =
+      /اشرح|شرح|وضح|explain/i.test(questionOnly) &&
+      /كود|الكود|code|file|ملف|function|class|html|css|js|javascript/i.test(questionOnly)
+
+    let hasStoredCode       = (rawCodeStore.get(sid) ?? []).length > 0
+    const codeSessionActive = codeSessionStore.get(sid)?.active === true
+    const hasCodeAnchor     = anchors.some(a => ['@repair_intent','@build_intent','@analysis_intent'].includes(a))
+    const refRelated        = hasStoredCode && continuity > 0.20 && /هذا|هذه|ذلك|هنا|السابق|الكود|الملف|يعني|معنى|اشرح|وضح|this|that|previous|above/i.test(questionOnly)
+    const generalAllowsCode = activeDomain === 'general' && (hasCodeAnchor || codeSessionActive || codeRelated || explainCodeRelated || refRelated || codeBlocks.length > 0)
+    const shouldBlockCode   = HARD_BLOCK_DOMAINS.has(activeDomain) || (activeDomain === 'general' && !generalAllowsCode)
+
+    if (codeBlocks.length > 0) {
+      storeCodeContext(sid, codeBlocks, tValue)
+      codeSessionStore.set(sid, { active: true, ttl: 6 })
+    } else {
+      const cs = codeSessionStore.get(sid)
+      if (cs?.active) { cs.ttl--; if (cs.ttl <= 0) cs.active = false }
+    }
+
+    if (!rawCodeStore.has(sid) && recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30
+        && !shouldBlockCode) {
+      storeCodeContext(sid, [recoveredCode], tValue)
+      codeSessionStore.set(sid, { active: true, ttl: 6 })
+    }
+
+    hasStoredCode = (rawCodeStore.get(sid) ?? []).length > 0
+    const hasCode        = codeBlocks.length > 0 || (hasStoredCode && !shouldBlockCode)
+    const effectiveMatch = hasCode && !shouldBlockCode
+      ? retrieveRelevantCode(cleanedText, sid, tValue)
+      : null
+
+    const shouldAttachStoredCode =
+      hasStoredCode && !shouldBlockCode &&
+      (codeBlocks.length > 0 || codeRelated || explainCodeRelated || refRelated || hasCodeAnchor || codeSessionActive)
+
+    const _lastCtx  = (rawCodeStore.get(sid) ?? []).at(-1)
+    const codeSummary = _lastCtx
+      ? `[code_summary] ${_lastCtx.summary} — ${Math.round(_lastCtx.raw.length / 1024 * 10) / 10}KB`
+      : null
+    const _codeBase = effectiveMatch?.raw ?? _lastCtx?.raw ?? null
+
+    const _codeHash = _lastCtx?.hash || null
+    const _codeKey  = _codeHash ? `${sid}:${_codeHash}` : null
+    const isFirstPass = !!_codeKey && !codeAnalysisStore.has(_codeKey)
+
+    const _historyChars  = JSON.stringify(history ?? []).length
+    const _availableChars = Math.max(20000, 100000 - _historyChars)
+    const firstPassLimit  = Math.min(80000, Math.floor(_availableChars * 0.8))
+
+    const _wantsFullFile = /أنزله|انزله|نزله|أعطني.*كامل|اعطني.*كامل|الكود.*كامل|full.*file|complete.*code|اعطني الكود|كامل.*نهائي|download.*full|give.*full|كامل.*الكود/i.test(questionOnly)
+    const wantsFull = !shouldBlockCode && (isFirstPass || _wantsFullFile)
+
+    const { fieldSignals, systemHint: _systemHint, allowCodeSuggestion, outputShape } =
+      buildSignalEngine({
+        sid,
+        celfResult: { field: { continuity, noveltyPressure: 0, semanticCoherence: 0 } },
+        questionOnly,
+        codeBlocks,
+        continuity,
+        anchors,
+        storedRaw: wantsFull ? _codeBase : (shouldAttachStoredCode ? codeSummary : null),
+        userIsArabic,
+        semanticState: getSemanticState(sid),
+        activeStyle,
+      })
+
+    const isBrief   = outputShape === 'brief'
+    const mustSendFull = isFirstPass && !!_codeBase
+    const _codeBaseSliced = mustSendFull ? _codeBase?.slice(0, firstPassLimit) : _codeBase
+    const storedRaw =
+      ((mustSendFull || (wantsFull && !isBrief)) ? _codeBaseSliced : (shouldAttachStoredCode ? codeSummary : null)) ??
+      (recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode && !hasStoredCode
+        ? ((mustSendFull || (wantsFull && !isBrief)) ? recoveredCode.slice(0, mustSendFull ? firstPassLimit : RECOVERED_CODE_LIMIT) : `[code_summary] recovered code — ${Math.round(recoveredCode.length / 1024 * 10) / 10}KB`)
+        : null)
+
+    const finalHasCode = codeBlocks.length > 0 || !!storedRaw
+    updateSemanticState(sid, activeDomain)
+
+    if (!sessionSummaryStore.has(sid) && sessionSummary?.text) sessionSummaryStore.set(sid, sessionSummary)
+    if (!resumeBootstrapped.has(sid) && sessionSummary?.text) resumeBootstrapped.add(sid)
+    const activeSummary = sessionSummaryStore.get(sid) ?? null
+
+    const styleMap  = { concise:'Be concise.', detailed:'Be detailed.', arabic:'Respond in Arabic.', english:'Reply in English.', german:'Antworte auf Deutsch.' }
+    const styleHint = activeStyle && styleMap[activeStyle] ? styleMap[activeStyle] : null
+
+    const outputShapeHint = isBrief
+      ? '[Output Shape]\nBe brief. Max 3 points. No preamble.'
+      : outputShape === 'balanced'
+      ? '[Output Shape]\nAnswer directly. No preamble. No repetition. If this is a follow-up, answer only the new point first. Keep enough detail for accuracy.'
+      : null
+
+    const _today = new Date().toISOString().slice(0, 10)
+    const systemParts = [_systemHint, outputShapeHint, styleHint].filter(Boolean)
+    systemParts.unshift(`IMPORTANT: Today's date is ${_today}. Always use this when answering date or time questions.`)
+    if (activeSummary?.text) systemParts.unshift(`[session] ${isBrief ? activeSummary.text.slice(0, 60) : activeSummary.text}`)
+    const systemHint = systemParts.join('\n') || null
+
+    const historyMessages = buildHistoryLayer(history, continuity, sid, false, activeDomain, isBrief ? 2 : 4)
+    const recCode         = !isBrief && typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode
+      ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT)
+      : null
+    const questionText    = storedRaw ? (questionOnly || 'تعامل مع الكود المرفق حسب طلب المستخدم.') : cleanedText
+    const userContent     = hasImage
+      ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: questionText }] : [])]
+      : questionText
+
+    const messages = [
+      ...(recCode && !storedRaw ? [{ role: 'user', content: recCode }] : []),
+      ...(storedRaw ? [{ role: 'user', content: storedRaw }] : []),
+      ...historyMessages,
+      { role: 'user', content: userContent }
+    ]
+
+    const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
+    const remaining     = Math.max(1000, 180000 - inputEstimate)
+    const maxTokens     = chooseMaxTokens(anchors, wordCount, finalHasCode, remaining)
+    const model         = 'claude-haiku-4-5-20251001'
+
+    let payloadSize = 0
+    try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large' }) }
+
+    console.log('=== TO LLM ===', JSON.stringify({ system: systemHint, msgCount: messages.length, maxTokens, model }, null, 2))
+    console.log(`[${sid.slice(-8)}] → LLM | tokens_est:${inputEstimate} max:${maxTokens}`)
+
+    let claudeData, reply = null, inputTokensTotal = 0, outputTokensTotal = 0
+
+    try {
+      const claudeBody     = buildClaudeBody(model, maxTokens, systemHint, messages)
+      const claudeResponse = await fetchClaude(claudeBody)
+      claudeData           = await claudeResponse.json()
+      if (!claudeResponse.ok) throw new Error(`Claude error: ${claudeData?.error?.message ?? claudeResponse.status}`)
+      reply             = claudeData?.content?.filter(c => c.type === 'text').map(c => c.text).join('\n').trim() || null
+      if (isFirstPass && reply) codeAnalysisStore.set(_codeKey, true)
+      inputTokensTotal  = claudeData?.usage?.input_tokens  ?? 0
+      outputTokensTotal = claudeData?.usage?.output_tokens ?? 0
+
+      let continuationCount = 0
+      while (reply && isTruncated(claudeData) && continuationCount < 2) {
+        continuationCount++
+        if (outputTokensTotal >= 4096) break
+        const contData = await continuationCall(questionText, reply, systemHint, model)
+        if (!contData?.content?.[0]?.text) break
+        reply             += removeOverlap(reply, contData.content[0].text)
+        inputTokensTotal  += contData?.usage?.input_tokens  ?? 0
+        outputTokensTotal += contData?.usage?.output_tokens ?? 0
+        claudeData         = contData
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') return res.status(504).json({ error: 'claude_timeout' })
+      throw err
+    }
+
+    const currentDomain = classifyDomain(questionOnly || cleanedText)
+    updateAnchors(sid, cleanedText.slice(0,80), 0.5, currentDomain)
+
+    if (reply && fieldSignals?.includes('#full_file')) {
+      const replyBlocks = detectCodeBlocks(reply)
+      if (replyBlocks.length > 0 && replyBlocks[0].length > 200) {
+        storeCodeContext(sid, replyBlocks, tValue + 0.9)
+        codeSessionStore.set(sid, { active: true, ttl: 6 })
+      }
+    }
+
+    const msgCountAfter = (history?.length ?? 0) + 1
+    let newSummary = null
+    if (msgCountAfter >= 4) {
+      try {
+
+        newSummary = await generateSessionSummary(
+          sid,
+          [
+            ...(history ?? []),
+            { role: 'user', content: cleanedText },
+            { role: 'assistant', content: reply ?? '' }
+          ],
+          questionOnly
+        )
+        if (newSummary) sessionSummaryStore.set(sid, newSummary)
+      } catch {}
+    }
+
+    const costUSD = parseFloat(((inputTokensTotal/1_000_000)*1.0 + (outputTokensTotal/1_000_000)*5.0).toFixed(6))
+    console.log(`[${sid.slice(-8)}] ← LLM | in:${inputTokensTotal} out:${outputTokensTotal} total:${inputTokensTotal+outputTokensTotal} cost:$${costUSD} trunc:${isTruncated(claudeData)}`)
+    metricsStore.set(sid, { sessionId: sid, inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, costUSD, maxTokens, payloadSize, updatedAt: new Date().toISOString() })
+
+    return res.json({
+      reply,
+      newSummary: newSummary ?? null,
+      nextSuggestion: null,
+      celfVault: [],
+      observer: null,
+      debug: { systemHint: systemHint ?? null, fieldSignals, anchors, continuity, allowCodeSuggestion, activeDomain, outputShape, msgCount: messages.length, hasCode: finalHasCode, storedCode: !!storedRaw, maxTokens, model },
+      metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, costUSD, maxTokens, model, payloadSize }
+    })
+
+  } catch (err) {
+    console.error('[process-text] error:', err.message)
+    return res.status(500).json({ error: 'llm_failed', detail: err.message })
+  } finally {
+    processingLock.delete(sid)
+  }
+})
+
+router.get('/metrics/:id', (req, res) => {
+  const m = metricsStore.get(req.params.id)
+  if (!m) return res.status(404).json({ error: 'metrics_not_found' })
+  return res.json(m)
+})
+
+router.delete('/session/:id', (req, res) => {
+  const id = req.params.id
+  metricsStore.delete(id); semanticTextMaps.delete(id); styleStore.delete(id)
+  processingLock.delete(id); _semanticState.delete(id); rawCodeStore.delete(id)
+  codeSessionStore.delete(id); resumeBootstrapped.delete(id); capsuleMemory.delete(id)
+  anchorMemory.delete(id); sessionSummaryStore.delete(id)
+  for (const [k] of codeAnalysisStore) { if (k.startsWith(`${id}:`)) codeAnalysisStore.delete(k) }
+  return res.json({ ok: true })
+})
+
+export default router
