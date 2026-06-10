@@ -518,8 +518,11 @@ router.post('/process-text', async (req, res) => {
     let payloadSize = 0
     try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large' }) }
 
-    const _sl = strategy.needsRaw ? 'raw' : strategy.needsSummary ? 'sum' : 'none'
-    console.log(`[${sid.slice(-8)}] → shape:${outputShape} st:${_sl} max:${maxTokens} dom:${activeDomain} sig:${fieldSignals ?? '-'}`)
+    const _sl          = strategy.needsRaw ? 'raw' : strategy.needsSummary ? 'sum' : 'none'
+    const _hintPreview = _systemHint?.split('\n').filter(l => l.startsWith('[')).join(' | ').slice(0, 120) ?? '-'
+    console.log(`[${sid.slice(-8)}] → shape:${outputShape} st:${_sl} max:${maxTokens} dom:${activeDomain}`)
+    console.log(`[${sid.slice(-8)}]   sig:${fieldSignals ?? '-'}`)
+    console.log(`[${sid.slice(-8)}]   hint:${_hintPreview}`)
 
     let claudeData, reply = null, inputTokensTotal = 0, outputTokensTotal = 0
 
