@@ -3,10 +3,6 @@
 //  Question Type → Signal Set → SystemHint
 // ═══════════════════════════════════════════════════════════════
 
-// ───────────────────────────────────────────────────────────────
-//  DOMAIN CLASSIFIER
-// ───────────────────────────────────────────────────────────────
-
 export function classifyDomain(text) {
   if (!text || typeof text !== 'string') return 'general'
   const t = text.toLowerCase()
@@ -22,21 +18,13 @@ export function classifyDomain(text) {
   if (/فيزياء|physics|كيمياء|chemistry|بيولوجيا|biology|كوانتم|quantum|ذرة|atom|موجة|wave|تشابك|entanglement|نسبية|relativity|ميكانيكا|mechanics|طاقة|energy|جسيم|particle|نووي|nuclear/i.test(t)) return 'science'
   if (/رياضيات|math|جبر|algebra|هندسة|geometry|إحصاء|statistics|حساب|calculus|مبرهنة|theorem|معادلة|equation|تفاضل|differential|تكامل|integral/i.test(t)) return 'math'
   if (/تاريخ|history|جغرافيا|geography|فلسفة|philosophy|أدب|literature|لغة|language/i.test(t)) return 'humanities'
-
-  // ✅ Fix 2: CELF/SSE technical domain → backend بدل general
   if (/celf|signal.engine|semantic.signal|anchor|field.signal|أوزان.*إشار|إشارات.*توجيه|محرك.*إشار|signal.weight/i.test(t)) return 'backend'
-
   return 'general'
 }
-
-// ───────────────────────────────────────────────────────────────
-//  SEMANTIC PATTERN BUILDER
-// ───────────────────────────────────────────────────────────────
 
 export function buildSemanticPattern(anchors) {
   if (!anchors?.length) return null
   const has = a => anchors.includes(a)
-
   if (has('@repair_intent') && has('@failure') && has('@identity_layer'))
     return '[pattern: diagnose_auth_failure] [step: identify_root_cause → locate_auth_flow → apply_fix → verify]'
   if (has('@repair_intent') && has('@failure') && has('@data_store'))
@@ -66,13 +54,10 @@ export function buildSemanticPattern(anchors) {
   return null
 }
 
-// ───────────────────────────────────────────────────────────────
-//  ROUTING CONSTRAINTS BUILDER
-// ───────────────────────────────────────────────────────────────
-
 export function buildRoutingConstraints(anchors, fieldSignals, questionOnly = '', hasStoredCode = false, continuity = 0, hasCodeBlocks = false) {
-  const fs  = String(fieldSignals || '')
-  const has = a => anchors.includes(a)
+  const fs          = String(fieldSignals || '')
+  const safeAnchors = anchors ?? []
+  const has         = a => safeAnchors.includes(a)
   const constraints = []
 
   const setConstraints = getSignalSetConstraints(questionOnly, hasStoredCode, continuity, hasCodeBlocks)
@@ -96,10 +81,6 @@ export function buildRoutingConstraints(anchors, fieldSignals, questionOnly = ''
   return constraints.length > 0 ? '[Routing Constraints]\n' + constraints.join('\n') : null
 }
 
-// ───────────────────────────────────────────────────────────────
-//  DIRECTIVES BUILDER
-// ───────────────────────────────────────────────────────────────
-
 export function buildDirectives(anchors, userIsArabic, fieldSignals, questionOnly = '', hasStoredCode = false, continuity = 0, hasCodeBlocks = false) {
   const lang        = userIsArabic ? '[lang: Arabic]' : '[lang: same_as_user]'
   const pattern     = buildSemanticPattern(anchors)
@@ -116,16 +97,15 @@ export function buildDirectives(anchors, userIsArabic, fieldSignals, questionOnl
   return parts.join('\n') || null
 }
 
-// ───────────────────────────────────────────────────────────────
-//  QUESTION TYPE CLASSIFIER
-// ───────────────────────────────────────────────────────────────
-
 export function classifyQuestionType(q, hasStoredCode = false, continuity = 0, hasCodeBlocks = false) {
   if (!q) return 'general'
   const t = q.toLowerCase()
 
   if (/checkpoint|وين وصلنا|ما الذي تغير|ملخص.*قرار|what changed|status.*session/i.test(t))
     return 'checkpoint'
+
+  if (/ربط|تكامل|يستدعي|يستورد|cross.*module|dependency|depend|كيف.*يتواصل|كيف.*يتصل|imports.*exports|how.*modules.*connect/i.test(t))
+    return 'project_integration'
 
   if (hasStoredCode || hasCodeBlocks) {
     if (/اصلح|أصلح|عدل|تعديل|حسّن|fix|edit|refactor|debug|improve|ثغرة|خطأ|مشكلة/i.test(t))
@@ -156,10 +136,6 @@ export function classifyQuestionType(q, hasStoredCode = false, continuity = 0, h
 
   return 'general'
 }
-
-// ───────────────────────────────────────────────────────────────
-//  SIGNAL SETS — كل نوع سؤال له مجموعة محددة
-// ───────────────────────────────────────────────────────────────
 
 const SIGNAL_SETS = {
   code_fix: {
@@ -244,6 +220,25 @@ const SIGNAL_SETS = {
       'If the reference is unclear, ask one clarification question.',
     ],
   },
+  project_integration: {
+    base: [
+      '#project_context',
+      '@context.project_map',
+      '@context.related_files',
+      '@signal.cross_module',
+      '@dependency.trace',
+      '@integration.required',
+      '@input.related_code_required',
+      '@output.integration_review',
+    ],
+    constraints: [
+      'Use the Project Context Map to identify related files.',
+      'Do not analyze files in isolation.',
+      'Trace imports, exports, function calls, and shared state.',
+      'Send only the related files or summaries needed.',
+      'Explain how modules connect before suggesting changes.',
+    ],
+  },
   checkpoint: {
     base:        ['@mode.checkpoint', '@context.original_goal', '@context.current_state', '@output.decision_summary'],
     constraints: [
@@ -257,17 +252,14 @@ const SIGNAL_SETS = {
   },
 }
 
-// ───────────────────────────────────────────────────────────────
-//  FIELD SIGNALS BUILDER — v3: Question Type → Signal Set
-// ───────────────────────────────────────────────────────────────
-
 export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, continuity, anchors = [], hasStoredCode = false, semanticState = {}) {
   const field      = celfResult?.field ?? {}
   const novel      = field.noveltyPressure   ?? 0
   const coher      = field.semanticCoherence ?? 0
   const driftCount = semanticState?.driftCount ?? 0
+  const qText      = String(questionOnly || '')
 
-  const questionType = classifyQuestionType(questionOnly, hasStoredCode, continuity, codeBlocks.length > 0)
+  const questionType = classifyQuestionType(qText, hasStoredCode, continuity, (codeBlocks?.length ?? 0) > 0)
   const signalSet    = SIGNAL_SETS[questionType] ?? SIGNAL_SETS.general
 
   const weighted = []
@@ -275,17 +267,17 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
 
   signalSet.base.forEach((s, i) => add(s, 1.0 - i * 0.02))
 
-  if (/critical|قاتل|خطير|urgent|عاجل/i.test(questionOnly))              add('!critical', 1.00)
-  if (/موقوف|توقف|blocked|cannot proceed|انهار|crashed/i.test(questionOnly)) add('!blocked', 0.98)
-  if (/كان يعمل|used to work|regression/i.test(questionOnly))             add('?regression',  0.90)
-  if (/بطيء|slow|latency|performance|memory leak/i.test(questionOnly))    add('?performance', 0.90)
-  if (/ثغرة|vulnerability|injection|xss|csrf/i.test(questionOnly))        add('?security',    0.92)
-  if (/لماذا|why/i.test(questionOnly))                                     add('?causal',      0.60)
-  if (/بالتفصيل|detailed|شامل|in depth/i.test(questionOnly))              add('@depth.technical', 0.70)
-  if (/باختصار|brief|بإيجاز/i.test(questionOnly))                         add('@depth.surface',   0.70)
-  if (/خطوة|step by step/i.test(questionOnly))                             add('step-by-step',     0.70)
+  if (/critical|قاتل|خطير|urgent|عاجل/i.test(qText))              add('!critical', 1.00)
+  if (/موقوف|توقف|blocked|cannot proceed|انهار|crashed/i.test(qText)) add('!blocked', 0.98)
+  if (/كان يعمل|used to work|regression/i.test(qText))             add('?regression',  0.90)
+  if (/بطيء|slow|latency|performance|memory leak/i.test(qText))    add('?performance', 0.90)
+  if (/ثغرة|vulnerability|injection|xss|csrf/i.test(qText))        add('?security',    0.92)
+  if (/لماذا|why/i.test(qText))                                     add('?causal',      0.60)
+  if (/بالتفصيل|detailed|شامل|in depth/i.test(qText))              add('@depth.technical', 0.70)
+  if (/باختصار|brief|بإيجاز/i.test(qText))                         add('@depth.surface',   0.70)
+  if (/خطوة|step by step/i.test(qText))                             add('step-by-step',     0.70)
 
-  const detectedDomain = classifyDomain(questionOnly)
+  const detectedDomain = classifyDomain(qText)
   const dom = detectedDomain !== 'general' ? detectedDomain : (semanticState?.dominantDomain ?? 'general')
   if (dom !== 'general') add(`::${dom}`, 0.72)
 
@@ -308,10 +300,6 @@ export function getSignalSetConstraints(questionOnly, hasStoredCode = false, con
   return SIGNAL_SETS[qt]?.constraints ?? []
 }
 
-// ───────────────────────────────────────────────────────────────
-//  ALLOW CODE SUGGESTION
-// ───────────────────────────────────────────────────────────────
-
 export function computeAllowCodeSuggestion({ storedRaw, activeDomain, anchors, fieldSignals }) {
   const BLOCK_DOMAINS = new Set(['science', 'math', 'humanities'])
   const fs = String(fieldSignals || '')
@@ -320,10 +308,6 @@ export function computeAllowCodeSuggestion({ storedRaw, activeDomain, anchors, f
   const hasCodeIntent  = hasCodeAnchor || hasCodeSignal
   return !!storedRaw && hasCodeIntent && !BLOCK_DOMAINS.has(activeDomain)
 }
-
-// ───────────────────────────────────────────────────────────────
-//  OUTPUT SHAPE COMPUTER
-// ───────────────────────────────────────────────────────────────
 
 export function computeOutputShape({ questionOnly = '', anchors, fieldSignals, activeStyle }) {
   const fs = String(fieldSignals || '')
@@ -347,10 +331,6 @@ export function outputShapeHint(outputShape) {
     return '[Output Shape]\nAnswer directly. No preamble. No repetition. If this is a follow-up, answer only the new point first. Keep enough detail for accuracy.'
   return null
 }
-
-// ───────────────────────────────────────────────────────────────
-//  MAIN BUILD FUNCTION
-// ───────────────────────────────────────────────────────────────
 
 export function buildSignalEngine({
   sid,
@@ -376,7 +356,7 @@ export function buildSignalEngine({
     continuity, anchors, hasStoredCode, semanticState
   )
 
-  const systemHint = buildDirectives(anchors, userIsArabic, fieldSignals, questionOnly, hasStoredCode, continuity, codeBlocks.length > 0)
+  const systemHint = buildDirectives(anchors, userIsArabic, fieldSignals, questionOnly, hasStoredCode, continuity, (codeBlocks?.length ?? 0) > 0)
 
   const allowCodeSuggestion = computeAllowCodeSuggestion({
     storedRaw,
@@ -386,7 +366,7 @@ export function buildSignalEngine({
   })
 
   const outputShape  = computeOutputShape({ questionOnly, anchors, fieldSignals, activeStyle })
-  const questionType = classifyQuestionType(questionOnly, hasStoredCode, continuity, codeBlocks.length > 0)
+  const questionType = classifyQuestionType(questionOnly, hasStoredCode, continuity, (codeBlocks?.length ?? 0) > 0)
 
   return { fieldSignals, systemHint, allowCodeSuggestion, activeDomain, outputShape, questionType }
 }
