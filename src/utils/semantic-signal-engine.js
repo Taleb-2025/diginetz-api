@@ -223,10 +223,25 @@ const SIGNAL_SETS = {
     ],
   },
   followup: {
-    base:        ['#continuity', '#followup'],
+    base: [
+      '#continuity',
+      '#followup',
+      '#last_turn',
+      '@context.previous_answer',
+      '@context.current_topic',
+      '@goal.preserve',
+      '@output.delta_only',
+      '@output.no_recap',
+      '@output.no_repetition',
+      '?ambiguous_followup',
+    ],
     constraints: [
-      'Answer the new point only.',
+      'Use the previous assistant answer as reference.',
+      'Answer only the new point.',
+      'Preserve the current session goal.',
+      'Do not recap prior explanation.',
       'Do not repeat what was already addressed.',
+      'If the reference is unclear, ask one clarification question.',
     ],
   },
   checkpoint: {
