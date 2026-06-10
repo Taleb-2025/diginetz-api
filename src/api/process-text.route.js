@@ -331,7 +331,7 @@ function updateSemanticState(sid, detectedDomain) {
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '13.1' })
+  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '13.3' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -446,7 +446,7 @@ router.post('/process-text', async (req, res) => {
         codeBlocks,
         continuity,
         anchors,
-        storedRaw: shouldAttachStoredCode ? (_codeBase ?? codeSummary) : null,
+        storedRaw: shouldAttachStoredCode ? codeSummary : null,
         userIsArabic,
         semanticState: getSemanticState(sid),
         activeStyle,
@@ -457,12 +457,11 @@ router.post('/process-text', async (req, res) => {
 
     let storedRaw = null
     if (!shouldBlockCode) {
-      if (strategy.needsRaw && _codeBase)        storedRaw = _codeBase
-      else if (strategy.wantsFull && _codeBase)  storedRaw = _codeBase
-      else if (strategy.needsSummary && codeSummary) storedRaw = codeSummary
-      else if (shouldAttachStoredCode && codeSummary) storedRaw = codeSummary
+      if (isFirstPass && _codeBase)              storedRaw = _codeBase
+      else if (strategy.needsRaw && _codeBase)   storedRaw = _codeBase
+      else if (shouldAttachStoredCode)           storedRaw = codeSummary
       if (!storedRaw && recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30) {
-        storedRaw = strategy.needsRaw
+        storedRaw = (isFirstPass || strategy.needsRaw)
           ? recoveredCode.slice(0, firstPassLimit)
           : `[code_summary] recovered code — ${Math.round(recoveredCode.length / 1024 * 10) / 10}KB`
       }
@@ -480,6 +479,8 @@ router.post('/process-text', async (req, res) => {
 
     const outputShapeHint = isBrief
       ? '[Output Shape]\nBe brief. Max 3 points. No preamble.'
+      : isFirstPass
+      ? '[Output Shape]\nRespond in this exact format only:\n**What it does:** 1 sentence.\n**Strengths:** max 2 bullet points.\n**Weaknesses:** max 2 bullet points.\n**Critical:** only if exists.\nNo code. No explanations. No preamble.'
       : strategy.wantsReview
       ? '[Output Shape]\nRespond in this exact format only:\n**What it does:** 1 sentence.\n**Strengths:** max 2 bullet points.\n**Weaknesses:** max 2 bullet points.\n**Critical:** only if exists.\nNo code. No explanations. No preamble.'
       : strategy.wantsReturn
