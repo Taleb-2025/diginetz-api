@@ -2,6 +2,7 @@ import express from 'express'
 import { resolveConceptAnchors } from '../utils/concept-anchor.js'
 import { cleanInput, filterStyleInstructions, detectStyleInstruction } from '../utils/context-builder.js'
 import { buildSignalEngine, classifyDomain as _classifyDomain } from '../utils/semantic-signal-engine.js'
+import { buildSavedContextLayer, recordDecision, recordBoundary, clearSavedContext } from '../utils/celf-saved-context-layer.js'
 
 const router = express.Router()
 
@@ -234,11 +235,11 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false, curre
 function resolveCodeStrategy(fieldSignals) {
   const fs = String(fieldSignals || '')
   return {
-    needsRaw:    fs.includes('@input.raw_required') || fs.includes('#code_full'),
-    needsSummary: fs.includes('@input.summary_ok')  || fs.includes('#code_summary'),
-    wantsReturn: fs.includes('@output.full_return'),
-    wantsReview: fs.includes('@output.focused_review'),
-    wantsFull:   fs.includes('#full_file'),
+    needsRaw:     fs.includes('@input.raw_required') || fs.includes('#code_full'),
+    needsSummary: fs.includes('@input.summary_ok')   || fs.includes('#code_summary'),
+    wantsReturn:  fs.includes('@output.full_return'),
+    wantsReview:  fs.includes('@output.focused_review'),
+    wantsFull:    fs.includes('#full_file'),
   }
 }
 
@@ -331,7 +332,7 @@ function updateSemanticState(sid, detectedDomain) {
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '13.3' })
+  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '13.5' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -438,7 +439,7 @@ router.post('/process-text', async (req, res) => {
     const _availableChars = Math.max(20000, 100000 - _historyChars)
     const firstPassLimit  = Math.min(80000, Math.floor(_availableChars * 0.8))
 
-    const { fieldSignals, systemHint: _systemHint, allowCodeSuggestion, outputShape } =
+    const { fieldSignals, systemHint: _systemHint, allowCodeSuggestion, outputShape, questionType } =
       buildSignalEngine({
         sid,
         celfResult: { field: { continuity, noveltyPressure: 0, semanticCoherence: 0 } },
@@ -452,14 +453,15 @@ router.post('/process-text', async (req, res) => {
         activeStyle,
       })
 
-    const strategy = resolveCodeStrategy(fieldSignals)
-    const isBrief  = outputShape === 'brief'
+    const needsWebSearch = fieldSignals?.includes('@tool.web_required') ?? false
+    const strategy       = resolveCodeStrategy(fieldSignals)
+    const isBrief        = outputShape === 'brief'
 
     let storedRaw = null
     if (!shouldBlockCode) {
-      if (isFirstPass && _codeBase)              storedRaw = _codeBase
-      else if (strategy.needsRaw && _codeBase)   storedRaw = _codeBase
-      else if (shouldAttachStoredCode)           storedRaw = codeSummary
+      if (isFirstPass && _codeBase)            storedRaw = _codeBase
+      else if (strategy.needsRaw && _codeBase) storedRaw = _codeBase
+      else if (shouldAttachStoredCode)         storedRaw = codeSummary
       if (!storedRaw && recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30) {
         storedRaw = (isFirstPass || strategy.needsRaw)
           ? recoveredCode.slice(0, firstPassLimit)
@@ -521,7 +523,7 @@ router.post('/process-text', async (req, res) => {
 
     const _sl          = strategy.needsRaw ? 'raw' : strategy.needsSummary ? 'sum' : 'none'
     const _hintPreview = _systemHint?.split('\n').filter(l => l.startsWith('[')).join(' | ').slice(0, 120) ?? '-'
-    console.log(`[${sid.slice(-8)}] → shape:${outputShape} st:${_sl} max:${maxTokens} dom:${activeDomain}`)
+    console.log(`[${sid.slice(-8)}] → shape:${outputShape} st:${_sl} max:${maxTokens} dom:${activeDomain} type:${questionType ?? '-'}${needsWebSearch ? ' 🌐web' : ''}`)
     console.log(`[${sid.slice(-8)}]   sig:${fieldSignals ?? '-'}`)
     console.log(`[${sid.slice(-8)}]   hint:${_hintPreview}`)
 
@@ -587,7 +589,7 @@ router.post('/process-text', async (req, res) => {
       nextSuggestion: null,
       celfVault: [],
       observer: null,
-      debug: { fieldSignals, anchors, continuity, allowCodeSuggestion, activeDomain, outputShape, msgCount: messages.length, hasCode: finalHasCode, storedCode: !!storedRaw, maxTokens, model },
+      debug: { fieldSignals, anchors, continuity, allowCodeSuggestion, activeDomain, outputShape, questionType, needsWebSearch, msgCount: messages.length, hasCode: finalHasCode, storedCode: !!storedRaw, maxTokens, model },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, costUSD, maxTokens, model, payloadSize }
     })
 
@@ -611,6 +613,7 @@ router.delete('/session/:id', (req, res) => {
   processingLock.delete(id); _semanticState.delete(id); rawCodeStore.delete(id)
   codeSessionStore.delete(id); resumeBootstrapped.delete(id); capsuleMemory.delete(id)
   anchorMemory.delete(id); sessionSummaryStore.delete(id)
+  clearSavedContext(id)
   for (const [k] of codeAnalysisStore) { if (k.startsWith(`${id}:`)) codeAnalysisStore.delete(k) }
   return res.json({ ok: true })
 })
