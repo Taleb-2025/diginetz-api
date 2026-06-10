@@ -1,7 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
-//  SEMANTIC SIGNAL ENGINE — v2.1 (Calibration Fix)
-//  Fix 1: @build_intent priority over @analysis_intent
-//  Fix 2: CELF/SSE domain classification
+//  SEMANTIC SIGNAL ENGINE — v3.0
+//  Question Type → Signal Set → SystemHint
 // ═══════════════════════════════════════════════════════════════
 
 // ───────────────────────────────────────────────────────────────
@@ -71,41 +70,28 @@ export function buildSemanticPattern(anchors) {
 //  ROUTING CONSTRAINTS BUILDER
 // ───────────────────────────────────────────────────────────────
 
-export function buildRoutingConstraints(anchors, fieldSignals) {
+export function buildRoutingConstraints(anchors, fieldSignals, questionOnly = '', hasStoredCode = false, continuity = 0, hasCodeBlocks = false) {
   const fs  = String(fieldSignals || '')
   const has = a => anchors.includes(a)
   const constraints = []
 
-  if (fs.includes('#code_full'))
+  const setConstraints = getSignalSetConstraints(questionOnly, hasStoredCode, continuity, hasCodeBlocks)
+  constraints.push(...setConstraints)
+
+  if (fs.includes('#code_full') && !setConstraints.length)
     constraints.push('Code provided — analyze it directly. Do not ask for it again.')
   if (fs.includes('#code_summary'))
-    constraints.push('You have prior context on this code. Answer using what you know. Reference by function/class name — do not re-describe structure.')
-  if (fs.includes('#code') && !fs.includes('#code_full') && !fs.includes('#code_summary'))
-    constraints.push('If code is provided → analyze it directly without asking for it again.')
-
-  if (has('@analysis_intent') && !has('@repair_intent'))
-    constraints.push('Output format: [issue] → [impact] → [fix]. Max 5 findings. No narrative. No re-describing structure.')
-
-  if (has('@repair_intent') && !fs.includes('#full_file'))
-    constraints.push('Output: targeted fix only. Do not rewrite unrelated parts.')
-
-  if (fs.includes('#full_file'))
-    constraints.push('Output: complete working file. Include all code. No truncation.')
-
-  if (has('@build_intent'))
-    constraints.push('Output: structured implementation. Define contracts before code.')
-
-  if (fs.includes('#followup'))
-    constraints.push('Answer the new point only. Reference prior work by name — do not re-explain it.')
-  if (fs.includes('#continuity') && !fs.includes('#followup'))
-    constraints.push('Build on prior context. Do not repeat what was already addressed.')
+    constraints.push('You have prior context on this code. Reference by function/class name.')
 
   if (has('@repair_intent') || has('@build_intent')) {
-    constraints.push('Always wrap code in fenced blocks with language tag — e.g. ```html ... ``` or ```javascript ... ```.')
-    constraints.push('Use textContent or createElement instead of innerHTML when inserting user data.')
-    constraints.push('Only claim a fix is applied if the actual code change is present in your output.')
-    constraints.push('Do not mention improvements that are not reflected in the code you return.')
+    if (!constraints.some(c => c.includes('fenced')))
+      constraints.push('Always wrap code in fenced blocks with language tag.')
   }
+
+  if (fs.includes('#followup') && !setConstraints.some(c => c.includes('new point')))
+    constraints.push('Answer the new point only. Reference prior work by name.')
+  if (fs.includes('#continuity') && !fs.includes('#followup'))
+    constraints.push('Build on prior context. Do not repeat what was already addressed.')
 
   return constraints.length > 0 ? '[Routing Constraints]\n' + constraints.join('\n') : null
 }
@@ -114,11 +100,11 @@ export function buildRoutingConstraints(anchors, fieldSignals) {
 //  DIRECTIVES BUILDER
 // ───────────────────────────────────────────────────────────────
 
-export function buildDirectives(anchors, userIsArabic, fieldSignals) {
+export function buildDirectives(anchors, userIsArabic, fieldSignals, questionOnly = '', hasStoredCode = false, continuity = 0, hasCodeBlocks = false) {
   const lang        = userIsArabic ? '[lang: Arabic]' : '[lang: same_as_user]'
   const pattern     = buildSemanticPattern(anchors)
   const signals     = fieldSignals ?? null
-  const constraints = buildRoutingConstraints(anchors, fieldSignals)
+  const constraints = buildRoutingConstraints(anchors, fieldSignals, questionOnly, hasStoredCode, continuity, hasCodeBlocks)
   const fs          = String(fieldSignals || '')
 
   const parts = []
@@ -131,106 +117,166 @@ export function buildDirectives(anchors, userIsArabic, fieldSignals) {
 }
 
 // ───────────────────────────────────────────────────────────────
-//  FIELD SIGNALS BUILDER
+//  QUESTION TYPE CLASSIFIER
+// ───────────────────────────────────────────────────────────────
+
+export function classifyQuestionType(q, hasStoredCode = false, continuity = 0, hasCodeBlocks = false) {
+  if (!q) return 'general'
+  const t = q.toLowerCase()
+
+  if (/checkpoint|وين وصلنا|ما الذي تغير|ملخص.*قرار|what changed|status.*session/i.test(t))
+    return 'checkpoint'
+
+  if (hasStoredCode || hasCodeBlocks) {
+    if (/اصلح|أصلح|عدل|تعديل|حسّن|fix|edit|refactor|debug|improve|ثغرة|خطأ|مشكلة/i.test(t))
+      return 'code_fix'
+    if (/حلل|اشرح|وضح|فسّر|analyze|explain|review|افحص|inspect|check|قيّم/i.test(t))
+      return 'code_analyze'
+    if (/ابنِ|ابن|أنشئ|انشئ|build|implement|أضف.*feature|add.*feature/i.test(t))
+      return 'code_build'
+  }
+
+  if (/أحدث|أخير|آخر|جديد|الآن|اليوم|هذا العام|recent|latest|current|today|now|this year/i.test(t))
+    return 'current_info'
+
+  if (/ما الفرق|فرق بين|مقارنة|compare|difference|vs\b|versus/i.test(t))
+    return 'comparison'
+
+  if (/كيف.*يعمل|كيف.*يتم|كيف.*تعمل|ما هو|ما هي|اشرح|what is|how does|explain/i.test(t) && !hasStoredCode)
+    return 'conceptual'
+
+  if (/اكتب.*اختبار|write.*test|generate.*test|أضف.*اختبار/i.test(t))
+    return 'test_gen'
+
+  if (/توثيق|documentation|docs|readme|اكتب.*docs/i.test(t))
+    return 'docs'
+
+  if (continuity > 0.20)
+    return 'followup'
+
+  return 'general'
+}
+
+// ───────────────────────────────────────────────────────────────
+//  SIGNAL SETS — كل نوع سؤال له مجموعة محددة
+// ───────────────────────────────────────────────────────────────
+
+const SIGNAL_SETS = {
+  code_fix: {
+    base:        ['@intent.fix', '@intent.modify', '@input.raw_required', '@output.full_return', '#code_full'],
+    constraints: [
+      'Output: complete modified code. No truncation.',
+      'Wrap code in fenced blocks with language tag.',
+      'Only claim a fix is applied if the code change is present.',
+      'Do not modify unrelated parts.',
+    ],
+  },
+  code_analyze: {
+    base:        ['@intent.analyze', '@input.raw_required', '@output.focused_review', '#code_full'],
+    constraints: [
+      'Output format: **What it does** · **Strengths** · **Weaknesses** · **Critical**.',
+      'No code rewrite. No line-by-line explanation.',
+    ],
+  },
+  code_build: {
+    base:        ['@intent.build', '@input.raw_required', '@output.full_return', '#code_full'],
+    constraints: [
+      'Output: structured implementation. Define contracts before code.',
+      'Wrap code in fenced blocks with language tag.',
+    ],
+  },
+  current_info: {
+    base:        ['@intent.current_info', '@freshness.required', '@tool.web_required', '@output.brief_ranked_list'],
+    constraints: [
+      'Use recent information if available.',
+      'Answer as a ranked brief list.',
+      'Avoid unsupported claims.',
+    ],
+  },
+  comparison: {
+    base:        ['@intent.compare', '@output.structured_diff'],
+    constraints: [
+      'Use a table or side-by-side format.',
+      'Focus on practical differences only.',
+      'Max 5 comparison points.',
+    ],
+  },
+  conceptual: {
+    base:        ['@intent.explain', '@output.layered_explanation'],
+    constraints: [
+      'Start with 1-sentence summary.',
+      'Then detail. No preamble.',
+    ],
+  },
+  test_gen: {
+    base:        ['@intent.build', '#tests', '@input.raw_required', '#code_full'],
+    constraints: [
+      'Generate test cases only. No explanation.',
+      'Cover edge cases and happy path.',
+    ],
+  },
+  docs: {
+    base:        ['@intent.build', '#docs', '@input.summary_ok'],
+    constraints: [
+      'Generate documentation only.',
+      'Use standard doc format for the language.',
+    ],
+  },
+  followup: {
+    base:        ['#continuity', '#followup'],
+    constraints: [
+      'Answer the new point only.',
+      'Do not repeat what was already addressed.',
+    ],
+  },
+  checkpoint: {
+    base:        ['@mode.checkpoint', '@context.original_goal', '@context.current_state', '@output.decision_summary'],
+    constraints: [
+      'Format: Original Goal · What Changed · Still Uncertain · On Track · Next Step.',
+      'No code. No suggestions beyond next step.',
+    ],
+  },
+  general: {
+    base:        [],
+    constraints: [],
+  },
+}
+
+// ───────────────────────────────────────────────────────────────
+//  FIELD SIGNALS BUILDER — v3: Question Type → Signal Set
 // ───────────────────────────────────────────────────────────────
 
 export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, continuity, anchors = [], hasStoredCode = false, semanticState = {}) {
-  const field  = celfResult?.field ?? {}
-  const novel  = field.noveltyPressure   ?? 0
-  const coher  = field.semanticCoherence ?? 0
+  const field      = celfResult?.field ?? {}
+  const novel      = field.noveltyPressure   ?? 0
+  const coher      = field.semanticCoherence ?? 0
+  const driftCount = semanticState?.driftCount ?? 0
 
-  const ANCHOR_TO_INTENT = {
-    '@repair_intent':   '@intent.fix',
-    '@analysis_intent': '@intent.analyze',
-    '@build_intent':    '@intent.build',
-    '@verify_intent':   '@intent.review',
-  }
-
-  const ANCHOR_TO_SCOPE = {
-    '@identity_layer':     '::backend/auth',
-    '@data_store':         '::database',
-    '@memory_layer':       '::backend/cache',
-    '@interface_layer':    '::api/gateway',
-    '@infra_layer':        '::infra',
-    '@realtime_transport': '::backend/realtime',
-  }
-
-  const ANCHOR_TO_STATE = { '@failure': '?failure' }
-
-  // ✅ Fix 1: @build_intent أولوية أعلى من @analysis_intent
-  const INTENT_PRIORITY = ['@repair_intent', '@build_intent', '@analysis_intent', '@verify_intent']
+  const questionType = classifyQuestionType(questionOnly, hasStoredCode, continuity, codeBlocks.length > 0)
+  const signalSet    = SIGNAL_SETS[questionType] ?? SIGNAL_SETS.general
 
   const weighted = []
   const add = (sig, w) => weighted.push({ text: sig, w })
 
-  const primaryIntent = INTENT_PRIORITY.find(a => anchors.includes(a))
-  if (primaryIntent && ANCHOR_TO_INTENT[primaryIntent]) add(ANCHOR_TO_INTENT[primaryIntent], 0.90)
-
-  if (/\b(ابنِ|ابن|انشئ|أنشئ|اصنع|أصنع|build|create|implement|scaffold|generate.*component|أضف.*feature|add.*feature)\b/i.test(questionOnly))
-    add('@intent.build', 0.93)
-
-  for (const a of anchors) {
-    if (ANCHOR_TO_SCOPE[a]) add(ANCHOR_TO_SCOPE[a], 0.85)
-    if (ANCHOR_TO_STATE[a]) add(ANCHOR_TO_STATE[a], 0.95)
-  }
+  signalSet.base.forEach((s, i) => add(s, 1.0 - i * 0.02))
 
   if (/critical|قاتل|خطير|urgent|عاجل/i.test(questionOnly))              add('!critical', 1.00)
-  if (/موقوف|توقف|متوقف|stopped|blocked|cannot proceed|لا يعمل|انهار|crashed/i.test(questionOnly)) add('!blocked', 0.98)
-
+  if (/موقوف|توقف|blocked|cannot proceed|انهار|crashed/i.test(questionOnly)) add('!blocked', 0.98)
   if (/كان يعمل|used to work|regression/i.test(questionOnly))             add('?regression',  0.90)
   if (/بطيء|slow|latency|performance|memory leak/i.test(questionOnly))    add('?performance', 0.90)
   if (/ثغرة|vulnerability|injection|xss|csrf/i.test(questionOnly))        add('?security',    0.92)
-  if (/لماذا|why|warum/i.test(questionOnly))                               add('?causal',      0.60)
-  if (/غامض|unclear|ambiguous|لا أفهم/i.test(questionOnly))               add('?ambiguous',   0.60)
-
-  if (/رسم|diagram|chart|visualize/i.test(questionOnly))                  add('#diagram',  0.75)
-  if (/اكتب.*اختبار|write.*test|generate.*test|test cases|أضف.*اختبار/i.test(questionOnly)) add('#tests', 0.75)
-  if (/توثيق|documentation|docs|readme/i.test(questionOnly))              add('#docs',     0.75)
-  if (/هذا.*الكود|ذلك.*الملف|this.*code|that.*function/i.test(questionOnly) && continuity > 0.30) add('#resolved_ref', 0.65)
-  if (/مشروع|project|continuation/i.test(questionOnly) && continuity > 0.50) add('#project_continuation', 0.80)
-
-  if (/بالتفصيل|detailed|full|شامل|in depth/i.test(questionOnly))        add('@depth.technical', 0.70)
-  if (/باختصار|brief|concise|بإيجاز/i.test(questionOnly))                add('@depth.surface',   0.70)
-  if (/خطوة|step by step|بالترتيب/i.test(questionOnly))                   add('step-by-step',     0.70)
-
-  if (/خوارزم|algorithm|sort|search|complexity/i.test(questionOnly))      add('::analysis/algo', 0.75)
-  if (/debug|trace|تتبع|يعمل.*لكن/i.test(questionOnly))                  add('::debug',          0.75)
-
-  if (codeBlocks.length > 0)  add('#code', 0.80)
-  if (hasStoredCode) {
-    const wantsEdit    = /اصلح|أصلح|عدل|تعديل|fix|edit|refactor|debug|ثغرة|خطأ|مشكلة|حسّن|improve/i.test(questionOnly)
-    const wantsAnalyze = /حلل|اشرح|وضح|فسّر|analyze|explain|review|افحص|inspect|check|قيّم/i.test(questionOnly)
-    const wantsBuild   = /ابنِ|ابن|أنشئ|انشئ|build|implement|أضف|add/i.test(questionOnly)
-
-    if (wantsEdit) {
-      add('@intent.modify',      0.95)
-      add('@input.raw_required', 0.95)
-      add('@output.full_return', 0.95)
-      add('#code_full',          0.88)
-    } else if (wantsAnalyze) {
-      add('@input.raw_required',  0.92)
-      add('@output.focused_review', 0.92)
-      add('#code_full',           0.88)
-    } else {
-      add('@input.summary_ok',   0.80)
-      add('@output.direct_answer', 0.75)
-      add('#code_summary',       0.65)
-    }
-  }
-  if (/أنزله|انزله|نزله|أعطني.*كامل|اعطني.*كامل|الكود.*كامل|full.*file|complete.*code|اعطني الكود|كامل.*نهائي|download.*full|give.*full|كامل.*الكود/i.test(questionOnly)) add('#full_file', 0.92)
+  if (/لماذا|why/i.test(questionOnly))                                     add('?causal',      0.60)
+  if (/بالتفصيل|detailed|شامل|in depth/i.test(questionOnly))              add('@depth.technical', 0.70)
+  if (/باختصار|brief|بإيجاز/i.test(questionOnly))                         add('@depth.surface',   0.70)
+  if (/خطوة|step by step/i.test(questionOnly))                             add('step-by-step',     0.70)
 
   const detectedDomain = classifyDomain(questionOnly)
-  const dom =
-    detectedDomain !== 'general'
-      ? detectedDomain
-      : (semanticState?.dominantDomain ?? 'general')
+  const dom = detectedDomain !== 'general' ? detectedDomain : (semanticState?.dominantDomain ?? 'general')
   if (dom !== 'general') add(`::${dom}`, 0.72)
 
-  const driftCount = semanticState?.driftCount ?? 0
-  if (driftCount >= 2)                                   add('::reset',     0.85)
-  if (novel > 0.70)                                      add('explore',     novel)
-  if (continuity > 0.35)                                 add('#continuity', continuity + coher + 0.3)
-  if (continuity > 0.20 && driftCount === 0)             add('#followup',   0.60)
+  if (driftCount >= 2)                         add('::reset',     0.85)
+  if (novel > 0.70)                            add('explore',     novel)
+  if (continuity > 0.35 && questionType !== 'followup') add('#continuity', continuity + coher + 0.3)
 
   const MAX_SIGNALS = 10
   const top = weighted
@@ -240,6 +286,11 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
     .map(s => s.text)
 
   return top.length ? top.join(' ') : null
+}
+
+export function getSignalSetConstraints(questionOnly, hasStoredCode = false, continuity = 0, hasCodeBlocks = false) {
+  const qt = classifyQuestionType(questionOnly, hasStoredCode, continuity, hasCodeBlocks)
+  return SIGNAL_SETS[qt]?.constraints ?? []
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -310,7 +361,7 @@ export function buildSignalEngine({
     continuity, anchors, hasStoredCode, semanticState
   )
 
-  const systemHint = buildDirectives(anchors, userIsArabic, fieldSignals)
+  const systemHint = buildDirectives(anchors, userIsArabic, fieldSignals, questionOnly, hasStoredCode, continuity, codeBlocks.length > 0)
 
   const allowCodeSuggestion = computeAllowCodeSuggestion({
     storedRaw,
@@ -319,7 +370,8 @@ export function buildSignalEngine({
     fieldSignals,
   })
 
-  const outputShape = computeOutputShape({ questionOnly, anchors, fieldSignals, activeStyle })
+  const outputShape  = computeOutputShape({ questionOnly, anchors, fieldSignals, activeStyle })
+  const questionType = classifyQuestionType(questionOnly, hasStoredCode, continuity, codeBlocks.length > 0)
 
-  return { fieldSignals, systemHint, allowCodeSuggestion, activeDomain, outputShape }
+  return { fieldSignals, systemHint, allowCodeSuggestion, activeDomain, outputShape, questionType }
 }
