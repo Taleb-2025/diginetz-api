@@ -353,7 +353,7 @@ function updateSemanticState(sid, detectedDomain) {
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '13.8' })
+  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '13.9' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -468,6 +468,8 @@ router.post('/process-text', async (req, res) => {
     const _availableChars = Math.max(20000, 100000 - _historyChars)
     const firstPassLimit  = Math.min(80000, Math.floor(_availableChars * 0.8))
 
+    const hasCodeContext = Boolean(_codeBase || codeSummary)
+
     const { fieldSignals, systemHint: _systemHint, allowCodeSuggestion, outputShape, questionType } =
       buildSignalEngine({
         sid,
@@ -477,6 +479,7 @@ router.post('/process-text', async (req, res) => {
         continuity,
         anchors,
         storedRaw: shouldAttachStoredCode ? codeSummary : null,
+        hasCodeContext,
         userIsArabic,
         semanticState: getSemanticState(sid),
         activeStyle,
@@ -497,7 +500,6 @@ router.post('/process-text', async (req, res) => {
           : `[code_summary] recovered code — ${Math.round(recoveredCode.length / 1024 * 10) / 10}KB`
       }
     }
-
     const finalHasCode = codeBlocks.length > 0 || !!storedRaw
     updateSemanticState(sid, activeDomain)
 
