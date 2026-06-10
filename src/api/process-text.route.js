@@ -3,6 +3,7 @@ import { resolveConceptAnchors } from '../utils/concept-anchor.js'
 import { cleanInput, filterStyleInstructions, detectStyleInstruction } from '../utils/context-builder.js'
 import { buildSignalEngine, classifyDomain as _classifyDomain } from '../utils/semantic-signal-engine.js'
 import { buildSavedContextLayer, recordDecision, recordBoundary, clearSavedContext } from '../utils/celf-saved-context-layer.js'
+import { buildProjectContextHint, registerFile, clearProjectMap } from '../utils/celf-project-context-map.js'
 
 const router = express.Router()
 
@@ -16,18 +17,19 @@ const FILLERS = new Set([
   'هل','في','من','على','مع','هو','هي','كان','لا','أو','و','ما','هذا','ذلك'
 ])
 
-const processingLock      = new Set()
-const semanticTextMaps    = new Map()
-const styleStore          = new Map()
-const rawCodeStore        = new Map()
-const codeSessionStore    = new Map()
-const sessionSummaryStore = new Map()
-const resumeBootstrapped  = new Set()
-const capsuleMemory       = new Map()
-const anchorMemory        = new Map()
-const metricsStore        = new Map()
-const _semanticState      = new Map()
-const codeAnalysisStore   = new Map()
+const processingLock       = new Set()
+const semanticTextMaps     = new Map()
+const styleStore           = new Map()
+const rawCodeStore         = new Map()
+const codeSessionStore     = new Map()
+const sessionSummaryStore  = new Map()
+const resumeBootstrapped   = new Set()
+const capsuleMemory        = new Map()
+const anchorMemory         = new Map()
+const metricsStore         = new Map()
+const _semanticState       = new Map()
+const codeAnalysisStore    = new Map()
+const sessionLanguageStore = new Map()
 
 const classifyDomain = _classifyDomain
 
@@ -285,7 +287,7 @@ async function fetchWebResults(query, maxResults = 5) {
       body:    JSON.stringify({ q: query, num: maxResults, gl: 'us', hl: 'ar' })
     })
     if (!res.ok) return null
-    const data = await res.json()
+    const data  = await res.json()
     const items = data.organic ?? []
     if (!items.length) return null
     return items
@@ -351,7 +353,7 @@ function updateSemanticState(sid, detectedDomain) {
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '13.6' })
+  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '13.8' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -378,10 +380,9 @@ router.post('/process-text', async (req, res) => {
       const styleDetected = detectStyleInstruction(cleanedText)
       if (styleDetected) setStyle(sid, styleDetected.style, styleDetected.ttl)
     }
-    const activeStyle  = getAndTickStyle(sid)
-    const userIsArabic = /[\u0600-\u06FF]/.test(cleanedText || '')
-    const wordCount    = cleanedText.trim().split(/\s+/).length
-    const codeBlocks   = detectCodeBlocks(text || cleanedText)
+    const activeStyle = getAndTickStyle(sid)
+    const wordCount   = cleanedText.trim().split(/\s+/).length
+    const codeBlocks  = detectCodeBlocks(text || cleanedText)
 
     const tValue     = (history?.length ?? 0) + 1
     const continuity = Math.min(1, (history?.length ?? 0) / 10)
@@ -402,6 +403,15 @@ router.post('/process-text', async (req, res) => {
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 500) || cleanedText.slice(0, 200)
+
+    // ── sessionLanguage: تُحسب مرة واحدة من أول نص طبيعي ──────
+    const userIsArabic = (() => {
+      if (sessionLanguageStore.has(sid)) return sessionLanguageStore.get(sid)
+      if (!questionOnly) return false
+      const detected = /[\u0600-\u06FF]/.test(questionOnly)
+      sessionLanguageStore.set(sid, detected)
+      return detected
+    })()
 
     const { anchors } = resolveConceptAnchors(questionOnly)
 
@@ -511,7 +521,8 @@ router.post('/process-text', async (req, res) => {
       : null
 
     const _today      = new Date().toISOString().slice(0, 10)
-    const systemParts = [_systemHint, outputShapeHint, styleHint].filter(Boolean)
+    const _pcmHint    = buildProjectContextHint(sid, fieldSignals ?? '', questionOnly)
+    const systemParts = [_systemHint, _pcmHint, outputShapeHint, styleHint].filter(Boolean)
     systemParts.unshift(`IMPORTANT: Today's date is ${_today}. Always use this when answering date or time questions.`)
     if (activeSummary?.text) systemParts.unshift(`[session] ${isBrief ? activeSummary.text.slice(0, 60) : activeSummary.text}`)
     const systemHint = systemParts.join('\n') || null
@@ -646,6 +657,8 @@ router.delete('/session/:id', (req, res) => {
   codeSessionStore.delete(id); resumeBootstrapped.delete(id); capsuleMemory.delete(id)
   anchorMemory.delete(id); sessionSummaryStore.delete(id)
   clearSavedContext(id)
+  clearProjectMap(id)
+  sessionLanguageStore.delete(id)
   for (const [k] of codeAnalysisStore) { if (k.startsWith(`${id}:`)) codeAnalysisStore.delete(k) }
   return res.json({ ok: true })
 })
