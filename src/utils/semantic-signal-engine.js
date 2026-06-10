@@ -340,6 +340,7 @@ export function buildSignalEngine({
   continuity,
   anchors,
   storedRaw,
+  hasCodeContext = false,
   userIsArabic,
   semanticState,
   activeStyle = null,
@@ -349,7 +350,7 @@ export function buildSignalEngine({
     ? detectedDomain
     : (semanticState?.dominantDomain ?? 'general')
 
-  const hasStoredCode = !!storedRaw
+  const hasStoredCode = hasCodeContext || !!storedRaw || ((codeBlocks?.length ?? 0) > 0)
 
   const fieldSignals = buildFieldSignals(
     sid, celfResult, questionOnly, codeBlocks,
