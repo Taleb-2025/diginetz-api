@@ -276,6 +276,25 @@ async function fetchClaude(body, timeoutMs = 120000) {
 
 function isTruncated(data) { return data?.stop_reason === 'max_tokens' }
 
+async function fetchWebResults(query, maxResults = 5) {
+  if (!process.env.SERPER_API_KEY) return null
+  try {
+    const res = await fetch('https://google.serper.dev/search', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-KEY': process.env.SERPER_API_KEY },
+      body:    JSON.stringify({ q: query, num: maxResults, gl: 'us', hl: 'ar' })
+    })
+    if (!res.ok) return null
+    const data = await res.json()
+    const items = data.organic ?? []
+    if (!items.length) return null
+    return items
+      .slice(0, maxResults)
+      .map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet ?? ''}\n${r.link}`)
+      .join('\n\n')
+  } catch { return null }
+}
+
 function removeOverlap(existing, continuation) {
   const checkLen = Math.min(120, continuation.length)
   const tail     = existing.slice(-checkLen * 2)
@@ -332,7 +351,7 @@ function updateSemanticState(sid, detectedDomain) {
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '13.5' })
+  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '13.6' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -512,6 +531,19 @@ router.post('/process-text', async (req, res) => {
       ...historyMessages,
       { role: 'user', content: userContent }
     ]
+
+    if (needsWebSearch) {
+      const webResults = await fetchWebResults(questionOnly)
+      if (webResults) {
+        messages.splice(messages.length - 1, 0, {
+          role: 'user',
+          content: `[Web Search Results]\n${webResults}`
+        })
+        console.log(`[${sid.slice(-8)}]   🌐 web results injected (${webResults.length} chars)`)
+      } else {
+        console.log(`[${sid.slice(-8)}]   🌐 web search skipped (no SERPER_API_KEY or no results)`)
+      }
+    }
 
     const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
     const remaining     = Math.max(1000, 180000 - inputEstimate)
