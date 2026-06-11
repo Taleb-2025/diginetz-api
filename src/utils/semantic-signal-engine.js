@@ -60,6 +60,8 @@ export function buildRoutingConstraints(anchors, fieldSignals, questionOnly = ''
   const has         = a => safeAnchors.includes(a)
   const constraints = []
 
+  constraints.push('Do not invent numeric percentages, benchmarks, savings, performance claims, or syntax errors unless explicitly present in metrics, logs, or provided code.')
+
   const setConstraints = getSignalSetConstraints(questionOnly, hasStoredCode, continuity, hasCodeBlocks)
   constraints.push(...setConstraints)
 
@@ -302,10 +304,11 @@ export function getSignalSetConstraints(questionOnly, hasStoredCode = false, con
 
 export function computeAllowCodeSuggestion({ storedRaw, activeDomain, anchors, fieldSignals }) {
   const BLOCK_DOMAINS = new Set(['science', 'math', 'humanities'])
-  const fs = String(fieldSignals || '')
-  const hasCodeAnchor  = anchors.some(a => ['@repair_intent', '@build_intent'].includes(a))
-  const hasCodeSignal  = /(@intent\.fix|@intent\.build|#code_full\b|#code\b)/.test(fs)
-  const hasCodeIntent  = hasCodeAnchor || hasCodeSignal
+  const fs            = String(fieldSignals || '')
+  const safeAnchors   = anchors ?? []
+  const hasCodeAnchor = safeAnchors.some(a => ['@repair_intent', '@build_intent'].includes(a))
+  const hasCodeSignal = /(@intent\.fix|@intent\.build|#code_full\b|#code\b)/.test(fs)
+  const hasCodeIntent = hasCodeAnchor || hasCodeSignal
   return !!storedRaw && hasCodeIntent && !BLOCK_DOMAINS.has(activeDomain)
 }
 
