@@ -97,9 +97,9 @@ export function buildDirectives(anchors, userIsArabic, fieldSignals, questionOnl
   if (constraints)    parts.push(constraints)
   if (fs.includes('@depth.surface')) parts.push('concise')
 
-  const hasCelfSignals = fs.includes('@depth.contextual') || fs.includes('@accuracy.scientific_caution') || fs.includes('@facts.no_overclaim') || fs.includes('@output.list_with_context')
+  const hasCelfSignals = fs.includes('@depth.contextual') || fs.includes('@accuracy.scientific_caution') || fs.includes('@facts.no_overclaim') || fs.includes('@output.list_with_context') || fs.includes('@scope.')
   if (hasCelfSignals)
-    parts.push('[CELF_RUNTIME_RULE]\nExecute all signals literally. Do not ignore @accuracy, @depth, @facts, or @output signals.')
+    parts.push('[CELF_RUNTIME_RULE]\nExecute all signals literally. Do not ignore @accuracy, @depth, @facts, @output, or @scope signals.')
 
   return parts.join('\n') || null
 }
@@ -298,10 +298,18 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
     add('@facts.no_overclaim',          0.85)
   }
 
-  if (/من هم|ما هي|ماهي|قائمة|أبرز|أهم|أكبر|أشهر|تجارب|علماء|عبر التاريخ|فسر|تفسير|who are|what are|list|top|best|greatest|famous|experiments|scientists|throughout history|interpret/i.test(qText))
+  if (/من هم|ما هي|ماهي|قائمة|أبرز|أهم|أكبر|أشهر|تجارب|علماء|عبر التاريخ|who are|what are|list|top|best|greatest|famous|experiments|scientists|throughout history/i.test(qText))
     add('@output.list_with_context', 0.78)
 
-  const MAX_SIGNALS = 16
+  if (/عبر التاريخ|throughout history|تاريخياً|historically|منذ|since|عبر العصور|across centuries/i.test(qText))
+    add('@scope.broaden_historical', 0.82)
+
+  if (questionType === 'followup')
+    add('@scope.current_topic', 0.82)
+
+  add('@scope.user_requested_scope', 0.72)
+
+  const MAX_SIGNALS = 18
   const top = weighted
     .filter((s, i, arr) => arr.findIndex(x => x.text === s.text) === i)
     .sort((a, b) => b.w - a.w)
