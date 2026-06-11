@@ -286,19 +286,19 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
 
   const detectedDomain = classifyDomain(qText)
   const dom = detectedDomain !== 'general' ? detectedDomain : (semanticState?.dominantDomain ?? 'general')
-  if (dom !== 'general') add(`::${dom}`, 0.72)
+  if (dom !== 'general') add(`::${dom}`, 0.75)
 
   if (driftCount >= 2)                         add('::reset',     0.85)
   if (novel > 0.70)                            add('explore',     novel)
   if (continuity > 0.35 && questionType !== 'followup') add('#continuity', continuity + coher + 0.3)
 
-  if (dom === 'science' || dom === 'math') {
+  if (dom === 'science' || dom === 'math' || dom === 'humanities') {
     add('@depth.contextual',            0.80)
     add('@accuracy.scientific_caution', 0.85)
     add('@facts.no_overclaim',          0.85)
   }
 
-  if (/من هم|قائمة|أبرز|أهم|أكبر|أشهر|تجارب|علماء|who are|list|top|best|greatest|famous|experiments|scientists/i.test(qText))
+  if (/من هم|ما هي|ماهي|قائمة|أبرز|أهم|أكبر|أشهر|تجارب|علماء|عبر التاريخ|فسر|تفسير|who are|what are|list|top|best|greatest|famous|experiments|scientists|throughout history|interpret/i.test(qText))
     add('@output.list_with_context', 0.78)
 
   const MAX_SIGNALS = 14
