@@ -222,12 +222,12 @@ function buildHistoryLayer(history, continuity, sid, needsRawCode = false, curre
   const filtered = filterStyleInstructions(history)
   const clean    = filtered.filter(h => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string' && h.content.length > 0)
   const limit    = Math.min(maxHistory, 4)
-  if (clean.length <= limit) return clean.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : h.content }))
+  if (clean.length <= limit) return clean.map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : compressUserMessage(h.content) }))
   if (continuity >= 0.70) {
-    return clean.slice(-limit).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) }))
+    return clean.slice(-limit).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : compressUserMessage(h.content) }))
   }
   if (continuity >= 0.40) {
-    const msgs = clean.slice(-limit).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : needsRawCode ? h.content : compressUserMessage(h.content) }))
+    const msgs = clean.slice(-limit).map(h => ({ role: h.role, content: h.role === 'assistant' ? compressAssistantMessage(h.content) : compressUserMessage(h.content) }))
     return [...msgs, ...buildCapsuleContext(sid, currentDomain)]
   }
   if (continuity >= 0.20) return [...buildCapsuleContext(sid, currentDomain), ...buildAnchorContext(sid, currentDomain)]
@@ -246,15 +246,16 @@ function resolveCodeStrategy(fieldSignals) {
 }
 
 function chooseMaxTokens(outputShape, wantsReturn, hasCode, remaining) {
-  const base = { brief: 1200, balanced: 2800, detailed: 5000, full: 8000 }[outputShape] ?? 2800
-  const returnBonus = wantsReturn ? 4000 : 0
-  const codeBonus   = hasCode && !wantsReturn ? 800 : 0
-  return Math.min(base + returnBonus + codeBonus, remaining, 8000)
+  if (wantsReturn) return Math.min(64000, remaining)
+  const base      = { brief: 1200, balanced: 2800, detailed: 5000, full: 8000 }[outputShape] ?? 2800
+  const codeBonus = hasCode ? 800 : 0
+  return Math.min(base + codeBonus, remaining, 8000)
 }
 
-function checkPayload(systemHint, messages) {
-  const size = JSON.stringify({ system: systemHint, messages }).length
-  if (size > 120000) throw new Error('prompt_too_large')
+function checkPayload(systemHint, messages, wantsReturn = false) {
+  const size  = JSON.stringify({ system: systemHint, messages }).length
+  const limit = wantsReturn ? 200000 : 120000
+  if (size > limit) throw new Error('prompt_too_large')
   return size
 }
 
@@ -353,7 +354,7 @@ function updateSemanticState(sid, detectedDomain) {
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '13.9' })
+  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '14.3' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -561,10 +562,12 @@ router.post('/process-text', async (req, res) => {
     const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
     const remaining     = Math.max(1000, 180000 - inputEstimate)
     const maxTokens     = chooseMaxTokens(outputShape, strategy.wantsReturn, finalHasCode, remaining)
-    const model         = 'claude-haiku-4-5-20251001'
+    const model = strategy.wantsReturn
+      ? 'claude-sonnet-4-20250514'
+      : 'claude-haiku-4-5-20251001'
 
     let payloadSize = 0
-    try { payloadSize = checkPayload(systemHint, messages) } catch (e) { return res.status(413).json({ error: 'prompt_too_large' }) }
+    try { payloadSize = checkPayload(systemHint, messages, strategy.wantsReturn) } catch (e) { return res.status(413).json({ error: 'prompt_too_large' }) }
 
     const _sl          = strategy.needsRaw ? 'raw' : strategy.needsSummary ? 'sum' : 'none'
     const _hintPreview = _systemHint?.split('\n').filter(l => l.startsWith('[')).join(' | ').slice(0, 120) ?? '-'
@@ -578,22 +581,35 @@ router.post('/process-text', async (req, res) => {
       const claudeBody     = buildClaudeBody(model, maxTokens, systemHint, messages)
       const claudeResponse = await fetchClaude(claudeBody)
       claudeData           = await claudeResponse.json()
-      if (!claudeResponse.ok) throw new Error(`Claude error: ${claudeData?.error?.message ?? claudeResponse.status}`)
-      reply             = claudeData?.content?.filter(c => c.type === 'text').map(c => c.text).join('\n').trim() || null
-      if (isFirstPass && reply) codeAnalysisStore.set(_codeKey, true)
-      inputTokensTotal  = claudeData?.usage?.input_tokens  ?? 0
-      outputTokensTotal = claudeData?.usage?.output_tokens ?? 0
+      if (!claudeResponse.ok) {
+        if (strategy.wantsReturn) {
+          reply = '[CELF_LIMIT]\nFile too large or output budget exceeded.\nSplit the file or reduce the change scope.'
+          inputTokensTotal  = claudeData?.usage?.input_tokens  ?? 0
+          outputTokensTotal = claudeData?.usage?.output_tokens ?? 0
+        } else {
+          throw new Error(`Claude error: ${claudeData?.error?.message ?? claudeResponse.status}`)
+        }
+      } else {
+        reply             = claudeData?.content?.filter(c => c.type === 'text').map(c => c.text).join('\n').trim() || null
+        if (isFirstPass && reply) codeAnalysisStore.set(_codeKey, true)
+        inputTokensTotal  = claudeData?.usage?.input_tokens  ?? 0
+        outputTokensTotal = claudeData?.usage?.output_tokens ?? 0
 
-      let continuationCount = 0
-      while (reply && isTruncated(claudeData) && continuationCount < 2) {
-        continuationCount++
-        if (outputTokensTotal >= 4096) break
-        const contData = await continuationCall(questionText, reply, systemHint, model)
-        if (!contData?.content?.[0]?.text) break
-        reply             += removeOverlap(reply, contData.content[0].text)
-        inputTokensTotal  += contData?.usage?.input_tokens  ?? 0
-        outputTokensTotal += contData?.usage?.output_tokens ?? 0
-        claudeData         = contData
+        if (strategy.wantsReturn && isTruncated(claudeData)) {
+          reply = '[CELF_LIMIT]\nFull return requires more output tokens than available.\nIncrease output budget or split the file intentionally.'
+        } else {
+          let continuationCount = 0
+          while (reply && isTruncated(claudeData) && continuationCount < 2) {
+            continuationCount++
+            if (outputTokensTotal >= 4096) break
+            const contData = await continuationCall(questionText, reply, systemHint, model)
+            if (!contData?.content?.[0]?.text) break
+            reply             += removeOverlap(reply, contData.content[0].text)
+            inputTokensTotal  += contData?.usage?.input_tokens  ?? 0
+            outputTokensTotal += contData?.usage?.output_tokens ?? 0
+            claudeData         = contData
+          }
+        }
       }
     } catch (err) {
       if (err.name === 'AbortError') return res.status(504).json({ error: 'claude_timeout' })
