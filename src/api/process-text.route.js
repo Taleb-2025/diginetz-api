@@ -354,7 +354,7 @@ function updateSemanticState(sid, detectedDomain) {
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '14.3' })
+  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '14.4' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -520,7 +520,7 @@ router.post('/process-text', async (req, res) => {
       : strategy.wantsReturn
       ? '[Output Shape]\nReturn complete modified code only. No explanation. No preamble.'
       : outputShape === 'balanced'
-      ? '[Output Shape]\nAnswer in max 3 sentences or 3 bullet points. No preamble. Direct answer only.'
+      ? '[Output Shape]\nAnswer directly. No preamble. No repetition.\nIf this is a follow-up, answer only the new point.\nFor lists or historical questions, use up to 8 points with 1-line context each.\nKeep enough detail for accuracy.'
       : null
 
     const _today      = new Date().toISOString().slice(0, 10)
