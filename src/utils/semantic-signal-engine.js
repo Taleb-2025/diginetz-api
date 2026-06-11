@@ -96,6 +96,11 @@ export function buildDirectives(anchors, userIsArabic, fieldSignals, questionOnl
   if (signals)        parts.push('[Routing Signals]\n' + signals)
   if (constraints)    parts.push(constraints)
   if (fs.includes('@depth.surface')) parts.push('concise')
+
+  const hasCelfSignals = fs.includes('@depth.contextual') || fs.includes('@accuracy.scientific_caution') || fs.includes('@facts.no_overclaim') || fs.includes('@output.list_with_context')
+  if (hasCelfSignals)
+    parts.push('[CELF_RUNTIME_RULE]\nExecute all signals literally. Do not ignore @accuracy, @depth, @facts, or @output signals.')
+
   return parts.join('\n') || null
 }
 
@@ -287,7 +292,16 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   if (novel > 0.70)                            add('explore',     novel)
   if (continuity > 0.35 && questionType !== 'followup') add('#continuity', continuity + coher + 0.3)
 
-  const MAX_SIGNALS = 10
+  if (dom === 'science' || dom === 'math') {
+    add('@depth.contextual',            0.80)
+    add('@accuracy.scientific_caution', 0.85)
+    add('@facts.no_overclaim',          0.85)
+  }
+
+  if (/من هم|قائمة|أبرز|أهم|أكبر|أشهر|تجارب|علماء|who are|list|top|best|greatest|famous|experiments|scientists/i.test(qText))
+    add('@output.list_with_context', 0.78)
+
+  const MAX_SIGNALS = 14
   const top = weighted
     .filter((s, i, arr) => arr.findIndex(x => x.text === s.text) === i)
     .sort((a, b) => b.w - a.w)
