@@ -354,7 +354,7 @@ function updateSemanticState(sid, detectedDomain) {
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '14.4' })
+  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '14.5' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -405,7 +405,6 @@ router.post('/process-text', async (req, res) => {
       .trim()
       .slice(0, 500) || cleanedText.slice(0, 200)
 
-    // ── sessionLanguage: تُحسب مرة واحدة من أول نص طبيعي ──────
     const userIsArabic = (() => {
       if (sessionLanguageStore.has(sid)) return sessionLanguageStore.get(sid)
       if (!questionOnly) return false
@@ -563,7 +562,7 @@ router.post('/process-text', async (req, res) => {
     const remaining     = Math.max(1000, 180000 - inputEstimate)
     const maxTokens     = chooseMaxTokens(outputShape, strategy.wantsReturn, finalHasCode, remaining)
     const model = strategy.wantsReturn
-      ? 'claude-sonnet-4-20250514'
+      ? 'claude-sonnet-4-6'
       : 'claude-haiku-4-5-20251001'
 
     let payloadSize = 0
