@@ -301,7 +301,7 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   if (/من هم|ما هي|ماهي|قائمة|أبرز|أهم|أكبر|أشهر|تجارب|علماء|عبر التاريخ|فسر|تفسير|who are|what are|list|top|best|greatest|famous|experiments|scientists|throughout history|interpret/i.test(qText))
     add('@output.list_with_context', 0.78)
 
-  const MAX_SIGNALS = 14
+  const MAX_SIGNALS = 16
   const top = weighted
     .filter((s, i, arr) => arr.findIndex(x => x.text === s.text) === i)
     .sort((a, b) => b.w - a.w)
