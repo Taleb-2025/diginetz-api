@@ -32,6 +32,7 @@ const codeAnalysisStore    = new Map()
 const sessionLanguageStore = new Map()
 
 const classifyDomain = _classifyDomain
+const USE_SSE        = process.env.USE_SSE !== 'false'
 
 function semanticHash(text) {
   const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 200)
@@ -354,7 +355,7 @@ function updateSemanticState(sid, detectedDomain) {
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '14.5' })
+  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '14.6' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -470,20 +471,28 @@ router.post('/process-text', async (req, res) => {
 
     const hasCodeContext = Boolean(_codeBase || codeSummary)
 
-    const { fieldSignals, systemHint: _systemHint, allowCodeSuggestion, outputShape, questionType } =
-      buildSignalEngine({
-        sid,
-        celfResult: { field: { continuity, noveltyPressure: 0, semanticCoherence: 0 } },
-        questionOnly,
-        codeBlocks,
-        continuity,
-        anchors,
-        storedRaw: shouldAttachStoredCode ? codeSummary : null,
-        hasCodeContext,
-        userIsArabic,
-        semanticState: getSemanticState(sid),
-        activeStyle,
-      })
+    const { fieldSignals, llmSignals, systemHint: _systemHint, allowCodeSuggestion, outputShape, questionType } =
+      USE_SSE
+        ? buildSignalEngine({
+            sid,
+            celfResult: { field: { continuity, noveltyPressure: 0, semanticCoherence: 0 } },
+            questionOnly,
+            codeBlocks,
+            continuity,
+            anchors,
+            storedRaw: shouldAttachStoredCode ? codeSummary : null,
+            hasCodeContext,
+            userIsArabic,
+            semanticState: getSemanticState(sid),
+            activeStyle,
+          })
+        : {
+            fieldSignals:        null,
+            systemHint:          userIsArabic ? 'أجب باللغة العربية.' : null,
+            allowCodeSuggestion: false,
+            outputShape:         'balanced',
+            questionType:        'general',
+          }
 
     const needsWebSearch = fieldSignals?.includes('@tool.web_required') ?? false
     const strategy       = resolveCodeStrategy(fieldSignals)
@@ -570,8 +579,9 @@ router.post('/process-text', async (req, res) => {
 
     const _sl          = strategy.needsRaw ? 'raw' : strategy.needsSummary ? 'sum' : 'none'
     const _hintPreview = _systemHint?.split('\n').filter(l => l.startsWith('[')).join(' | ').slice(0, 120) ?? '-'
-    console.log(`[${sid.slice(-8)}] → shape:${outputShape} st:${_sl} max:${maxTokens} dom:${activeDomain} type:${questionType ?? '-'}${needsWebSearch ? ' 🌐web' : ''}`)
-    console.log(`[${sid.slice(-8)}]   sig:${fieldSignals ?? '-'}`)
+    console.log(`[${sid.slice(-8)}] → shape:${outputShape} st:${_sl} max:${maxTokens} dom:${activeDomain} type:${questionType ?? '-'}${needsWebSearch ? ' 🌐web' : ''}${!USE_SSE ? ' ⚡NO-SSE' : ''}`)
+    console.log(`[${sid.slice(-8)}]   field:${fieldSignals ?? '-'}`)
+    console.log(`[${sid.slice(-8)}]   llm:${llmSignals ?? '-'}`)
     console.log(`[${sid.slice(-8)}]   hint:${_hintPreview}`)
 
     let claudeData, reply = null, inputTokensTotal = 0, outputTokensTotal = 0
@@ -649,7 +659,7 @@ router.post('/process-text', async (req, res) => {
       nextSuggestion: null,
       celfVault: [],
       observer: null,
-      debug: { fieldSignals, anchors, continuity, allowCodeSuggestion, activeDomain, outputShape, questionType, needsWebSearch, msgCount: messages.length, hasCode: finalHasCode, storedCode: !!storedRaw, maxTokens, model },
+      debug: { fieldSignals, llmSignals, anchors, continuity, allowCodeSuggestion, activeDomain, outputShape, questionType, needsWebSearch, msgCount: messages.length, hasCode: finalHasCode, storedCode: !!storedRaw, maxTokens, model },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, costUSD, maxTokens, model, payloadSize }
     })
 
