@@ -75,31 +75,112 @@ export function buildRoutingConstraints(anchors, fieldSignals, questionOnly = ''
       constraints.push('Always wrap code in fenced blocks with language tag.')
   }
 
-  if (fs.includes('#followup') && !setConstraints.some(c => c.includes('new point')))
+  const isFollowup   = fs.includes('#followup')   || fs.includes('@followup.strict')
+  const hasContinuity = fs.includes('#continuity') || fs.includes('@followup.strict') || fs.includes('@goal.preserve')
+
+  if (isFollowup && !setConstraints.some(c => c.includes('new point')))
     constraints.push('Answer the new point only. Reference prior work by name.')
-  if (fs.includes('#continuity') && !fs.includes('#followup'))
+  if (hasContinuity && !isFollowup)
     constraints.push('Build on prior context. Do not repeat what was already addressed.')
 
   return constraints.length > 0 ? '[Routing Constraints]\n' + constraints.join('\n') : null
 }
 
+export function compactSignalsForLLM(fieldSignals = '') {
+  const fs = String(fieldSignals || '')
+  const out = []
+  const add = s => { if (s && !out.includes(s)) out.push(s) }
+
+  if (fs.includes('@execute.strict') || fs.includes('@signals.strict_execution') || fs.includes('@signals.compliance_check'))
+    add('@execute.strict')
+
+  if (fs.includes('@input.raw_required'))         add('@input.raw_required')
+  if (fs.includes('@input.related_code_required')) add('@input.related_code_required')
+  if (fs.includes('#code_full'))                  add('#code_full')
+  if (fs.includes('#code_summary'))               add('#code_summary')
+  if (fs.includes('@output.full_return'))         add('@output.full_return')
+  if (fs.includes('@output.focused_review'))      add('@output.focused_review')
+  if (fs.includes('@tool.web_required'))          add('@tool.web_required')
+
+  if (fs.includes('@repair.surgical_fix') || fs.includes('@intent.fix') || fs.includes('@intent.modify')) {
+    add('@execute.strict')
+    add('@repair.surgical_fix')
+    add('@accuracy.strict')
+  }
+  if (fs.includes('@intent.analyze') || fs.includes('@output.focused_review')) {
+    add('@accuracy.strict')
+  }
+  if (fs.includes('@followup.strict') || fs.includes('#followup') || fs.includes('@context.previous_answer') || fs.includes('@output.delta_only') || fs.includes('@output.no_recap')) {
+    add('@execute.strict')
+    add('@goal.preserve')
+    add('@followup.strict')
+  }
+  if (fs.includes('@summary.checkpoint') || fs.includes('@mode.checkpoint') || fs.includes('@output.decision_summary')) {
+    add('@execute.strict')
+    add('@summary.checkpoint')
+    add('@goal.preserve')
+    add('@accuracy.strict')
+  }
+  if (fs.includes('@accuracy.strict') || fs.includes('@accuracy.scientific_caution') || fs.includes('@facts.no_invent') || fs.includes('@facts.no_overclaim') || fs.includes('@verification.self_check') || fs.includes('@terms.precise_language') || fs.includes('@claims.calibrated_confidence'))
+    add('@accuracy.strict')
+  if (fs.includes('@science.epistemic_humility') || fs.includes('@science.no_absolute_claims') || fs.includes('@science.distinguish_fact_interpretation')) {
+    add('@accuracy.strict')
+    add('@science.epistemic_humility')
+  }
+  if (fs.includes('@goal.preserve') || fs.includes('@scope.current_topic') || fs.includes('@scope.user_requested_scope'))
+    add('@goal.preserve')
+  if (fs.includes('@scope.broaden_historical')) add('@scope.broaden_historical')
+  if (fs.includes('@output.list_with_context'))  add('@output.list_with_context')
+  if (fs.includes('@depth.contextual'))          add('@depth.contextual')
+  if (fs.includes('@depth.surface'))             add('@depth.surface')
+  if (fs.includes('@depth.technical'))           add('@depth.technical')
+
+  const domain = fs.match(/::[a-z_]+/)
+  if (domain) add(domain[0])
+
+  const urgency = fs.match(/[!?][a-z_]+/g)
+  if (urgency) urgency.forEach(u => add(u))
+
+  return out.join(' ')
+}
+
+export function buildCompactRuntimeRule(llmSignals = '') {
+  const fs = String(llmSignals || '')
+  const rules = []
+  if (fs.includes('@execute.strict'))
+    rules.push('@execute.strict = execute active CELF signals as hard constraints and check compliance before answering.')
+  if (fs.includes('@accuracy.strict'))
+    rules.push('@accuracy.strict = no invention, no unsupported assumptions, no overclaiming; do not generate names, studies, numbers, or claims not supported by context or reliable general knowledge.')
+  if (fs.includes('@science.epistemic_humility'))
+    rules.push('@science.epistemic_humility = distinguish fact, experiment, interpretation, and uncertainty; avoid absolute scientific claims; calibrate confidence to evidence strength.')
+  if (fs.includes('@goal.preserve'))
+    rules.push("@goal.preserve = preserve the user's goal, current topic, and requested scope; do not drift.")
+  if (fs.includes('@followup.strict'))
+    rules.push('@followup.strict = use prior context, answer only the new point, no recap, no repetition.')
+  if (fs.includes('@repair.surgical_fix'))
+    rules.push('@repair.surgical_fix = fix only the specified damage with the smallest safe change after identifying root cause; preserve unrelated working parts.')
+  if (fs.includes('@summary.checkpoint'))
+    rules.push('@summary.checkpoint = summarize known state only: goal, current state, changes, untouched parts, risks, and next step.')
+  if (!rules.length) return null
+  return '[CELF_RUNTIME_RULE]\n' + rules.join('\n')
+}
+
 export function buildDirectives(anchors, userIsArabic, fieldSignals, questionOnly = '', hasStoredCode = false, continuity = 0, hasCodeBlocks = false) {
   const lang        = userIsArabic ? '[lang: Arabic]' : '[lang: same_as_user]'
   const pattern     = buildSemanticPattern(anchors)
-  const signals     = fieldSignals ?? null
+  const llmSignals  = compactSignalsForLLM(fieldSignals)
   const constraints = buildRoutingConstraints(anchors, fieldSignals, questionOnly, hasStoredCode, continuity, hasCodeBlocks)
   const fs          = String(fieldSignals || '')
 
   const parts = []
   const directivesPart = [lang, pattern].filter(Boolean).join('\n')
-  if (directivesPart) parts.push('[Routing Directives]\n' + directivesPart)
-  if (signals)        parts.push('[Routing Signals]\n' + signals)
-  if (constraints)    parts.push(constraints)
+  if (directivesPart)  parts.push('[Routing Directives]\n' + directivesPart)
+  if (llmSignals)      parts.push('[CELF_SIGNAL_SET]\n' + llmSignals)
+  if (constraints)     parts.push(constraints)
   if (fs.includes('@depth.surface')) parts.push('concise')
 
-  const hasCelfSignals = fs.includes('@depth.contextual') || fs.includes('@accuracy.scientific_caution') || fs.includes('@facts.no_overclaim') || fs.includes('@output.list_with_context') || fs.includes('@scope.')
-  if (hasCelfSignals)
-    parts.push('[CELF_RUNTIME_RULE]\nExecute all signals literally. Do not ignore @accuracy, @depth, @facts, @output, or @scope signals.')
+  const runtimeRule = buildCompactRuntimeRule(llmSignals)
+  if (runtimeRule) parts.push(runtimeRule)
 
   return parts.join('\n') || null
 }
@@ -129,7 +210,7 @@ export function classifyQuestionType(q, hasStoredCode = false, continuity = 0, h
   if (/ما الفرق|فرق بين|مقارنة|compare|difference|vs\b|versus/i.test(t))
     return 'comparison'
 
-  if (/كيف.*يعمل|كيف.*يتم|كيف.*تعمل|ما هو|ما هي|اشرح|what is|how does|explain/i.test(t) && !hasStoredCode)
+  if (/كيف.*يعمل|كيف.*يتم|كيف.*تعمل|ما هو|ما هي|ما معنى|ما المقصود|عرّف|تعريف|اشرح|فسر|فسّر|وضح|تفسير|what is|what are|how does|how do|explain|define|tell me about|interpret|was ist|was sind|wie funktioniert|erkläre|erklaere|definiere|was bedeutet/i.test(t) && !hasStoredCode)
     return 'conceptual'
 
   if (/اكتب.*اختبار|write.*test|generate.*test|أضف.*اختبار/i.test(t))
@@ -146,7 +227,7 @@ export function classifyQuestionType(q, hasStoredCode = false, continuity = 0, h
 
 const SIGNAL_SETS = {
   code_fix: {
-    base:        ['@intent.fix', '@intent.modify', '@input.raw_required', '@output.full_return', '#code_full'],
+    base:        ['@execute.strict', '@repair.surgical_fix', '@accuracy.strict', '@input.raw_required', '@output.full_return', '#code_full'],
     constraints: [
       'Output: complete modified code. No truncation.',
       'Wrap code in fenced blocks with language tag.',
@@ -155,21 +236,21 @@ const SIGNAL_SETS = {
     ],
   },
   code_analyze: {
-    base:        ['@intent.analyze', '@input.raw_required', '@output.focused_review', '#code_full'],
+    base:        ['@execute.strict', '@accuracy.strict', '@input.raw_required', '@output.focused_review', '#code_full'],
     constraints: [
       'Output format: **What it does** · **Strengths** · **Weaknesses** · **Critical**.',
       'No code rewrite. No line-by-line explanation.',
     ],
   },
   code_build: {
-    base:        ['@intent.build', '@input.raw_required', '@output.full_return', '#code_full'],
+    base:        ['@execute.strict', '@accuracy.strict', '@input.raw_required', '@output.full_return', '#code_full'],
     constraints: [
       'Output: structured implementation. Define contracts before code.',
       'Wrap code in fenced blocks with language tag.',
     ],
   },
   current_info: {
-    base:        ['@intent.current_info', '@freshness.required', '@tool.web_required', '@output.brief_ranked_list'],
+    base:        ['@execute.strict', '@accuracy.strict', '@intent.current_info', '@freshness.required', '@tool.web_required', '@output.brief_ranked_list'],
     constraints: [
       'Use recent information if available.',
       'Answer as a ranked brief list.',
@@ -177,7 +258,7 @@ const SIGNAL_SETS = {
     ],
   },
   comparison: {
-    base:        ['@intent.compare', '@output.structured_diff'],
+    base:        ['@accuracy.strict', '@output.structured_diff'],
     constraints: [
       'Use a table or side-by-side format.',
       'Focus on practical differences only.',
@@ -185,21 +266,21 @@ const SIGNAL_SETS = {
     ],
   },
   conceptual: {
-    base:        ['@intent.explain', '@output.layered_explanation'],
+    base:        ['@accuracy.strict', '@depth.contextual'],
     constraints: [
       'Start with 1-sentence summary.',
       'Then detail. No preamble.',
     ],
   },
   test_gen: {
-    base:        ['@intent.build', '#tests', '@input.raw_required', '#code_full'],
+    base:        ['@execute.strict', '@accuracy.strict', '@intent.build', '#tests', '@input.raw_required', '#code_full'],
     constraints: [
       'Generate test cases only. No explanation.',
       'Cover edge cases and happy path.',
     ],
   },
   docs: {
-    base:        ['@intent.build', '#docs', '@input.summary_ok'],
+    base:        ['@execute.strict', '@accuracy.strict', '@intent.build', '#docs', '@input.summary_ok'],
     constraints: [
       'Generate documentation only.',
       'Use standard doc format for the language.',
@@ -207,16 +288,9 @@ const SIGNAL_SETS = {
   },
   followup: {
     base: [
-      '#continuity',
-      '#followup',
-      '#last_turn',
-      '@context.previous_answer',
-      '@context.current_topic',
+      '@execute.strict',
       '@goal.preserve',
-      '@output.delta_only',
-      '@output.no_recap',
-      '@output.no_repetition',
-      '?ambiguous_followup',
+      '@followup.strict',
     ],
     constraints: [
       'Use the previous assistant answer as reference.',
@@ -229,6 +303,9 @@ const SIGNAL_SETS = {
   },
   project_integration: {
     base: [
+      '@execute.strict',
+      '@goal.preserve',
+      '@accuracy.strict',
       '#project_context',
       '@context.project_map',
       '@context.related_files',
@@ -247,7 +324,7 @@ const SIGNAL_SETS = {
     ],
   },
   checkpoint: {
-    base:        ['@mode.checkpoint', '@context.original_goal', '@context.current_state', '@output.decision_summary'],
+    base:        ['@execute.strict', '@summary.checkpoint', '@goal.preserve', '@accuracy.strict'],
     constraints: [
       'Format: Original Goal · What Changed · Still Uncertain · On Track · Next Step.',
       'No code. No suggestions beyond next step.',
@@ -293,13 +370,18 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   if (continuity > 0.35 && questionType !== 'followup') add('#continuity', continuity + coher + 0.3)
 
   if (dom === 'science' || dom === 'math' || dom === 'humanities') {
-    add('@depth.contextual',            0.80)
-    add('@accuracy.scientific_caution', 0.85)
-    add('@facts.no_overclaim',          0.85)
+    add('@accuracy.strict',   0.92)
+    add('@depth.contextual',  0.80)
+  }
+  if (dom === 'science') {
+    add('@science.epistemic_humility',          0.88)
+    add('@science.distinguish_fact_interpretation', 0.82)
   }
 
-  if (/من هم|ما هي|ماهي|قائمة|أبرز|أهم|أكبر|أشهر|تجارب|علماء|عبر التاريخ|who are|what are|list|top|best|greatest|famous|experiments|scientists|throughout history/i.test(qText))
-    add('@output.list_with_context', 0.78)
+  if (/من هم|ما هي|ماهي|قائمة|أبرز|أهم|أكبر|أشهر|تجارب|علماء|عبر التاريخ|who are|what are|list|top|best|greatest|famous|experiments|scientists|throughout history/i.test(qText)) {
+    add('@scope.user_requested_scope', 0.88)
+    add('@output.list_with_context',   0.78)
+  }
 
   if (/عبر التاريخ|throughout history|تاريخياً|historically|منذ|since|عبر العصور|across centuries/i.test(qText))
     add('@scope.broaden_historical', 0.82)
@@ -307,9 +389,11 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   if (questionType === 'followup')
     add('@scope.current_topic', 0.82)
 
-  add('@scope.user_requested_scope', 0.72)
+  const asksForExplicitScope = /حدد|في نطاق|فقط عن|فقط في|only about|only in|within|limit to|specifically/i.test(qText)
+  if (asksForExplicitScope)
+    add('@scope.user_requested_scope', 0.72)
 
-  const MAX_SIGNALS = 18
+  const MAX_SIGNALS = 22
   const top = weighted
     .filter((s, i, arr) => arr.findIndex(x => x.text === s.text) === i)
     .sort((a, b) => b.w - a.w)
@@ -329,7 +413,7 @@ export function computeAllowCodeSuggestion({ storedRaw, activeDomain, anchors, f
   const fs            = String(fieldSignals || '')
   const safeAnchors   = anchors ?? []
   const hasCodeAnchor = safeAnchors.some(a => ['@repair_intent', '@build_intent'].includes(a))
-  const hasCodeSignal = /(@intent\.fix|@intent\.build|#code_full\b|#code\b)/.test(fs)
+  const hasCodeSignal = /(@intent\.fix|@intent\.build|@repair\.surgical_fix|#code_full\b|#code\b)/.test(fs)
   const hasCodeIntent = hasCodeAnchor || hasCodeSignal
   return !!storedRaw && hasCodeIntent && !BLOCK_DOMAINS.has(activeDomain)
 }
@@ -338,13 +422,14 @@ export function computeOutputShape({ questionOnly = '', anchors, fieldSignals, a
   const fs = String(fieldSignals || '')
   const q  = String(questionOnly).toLowerCase()
 
-  if (fs.includes('#full_file'))                                    return 'full'
-  if (activeStyle === 'detailed')                                   return 'detailed'
-  if (fs.includes('@depth.technical'))                              return 'detailed'
-  if (/بالتفصيل|تفصيل|شامل|in depth|detailed|اشرح كل/i.test(q))  return 'detailed'
-  if (activeStyle === 'concise')                                    return 'brief'
-  if (fs.includes('@depth.surface'))                                return 'brief'
-  if (/باختصار|مختصر|brief|بإيجاز|بسرعة|tldr/i.test(q))          return 'brief'
+  if (fs.includes('#full_file'))                                                             return 'full'
+  if (activeStyle === 'detailed')                                                            return 'detailed'
+  if (/بالتفصيل|تفصيل|شامل|in depth|detailed|اشرح كل/i.test(q))                           return 'detailed'
+  if (activeStyle === 'concise')                                                             return 'brief'
+  if (/باختصار|مختصر|brief|بإيجاز|بسرعة|tldr/i.test(q))                                   return 'brief'
+  if (fs.includes('@depth.surface'))                                                         return 'brief'
+  if (fs.includes('@output.focused_review'))                                                 return 'balanced'
+  if (fs.includes('@depth.contextual'))                                                      return 'balanced'
 
   return 'balanced'
 }
@@ -382,6 +467,8 @@ export function buildSignalEngine({
     continuity, anchors, hasStoredCode, semanticState
   )
 
+  const llmSignals = compactSignalsForLLM(fieldSignals)
+
   const systemHint = buildDirectives(anchors, userIsArabic, fieldSignals, questionOnly, hasStoredCode, continuity, (codeBlocks?.length ?? 0) > 0)
 
   const allowCodeSuggestion = computeAllowCodeSuggestion({
@@ -394,5 +481,5 @@ export function buildSignalEngine({
   const outputShape  = computeOutputShape({ questionOnly, anchors, fieldSignals, activeStyle })
   const questionType = classifyQuestionType(questionOnly, hasStoredCode, continuity, (codeBlocks?.length ?? 0) > 0)
 
-  return { fieldSignals, systemHint, allowCodeSuggestion, activeDomain, outputShape, questionType }
+  return { fieldSignals, llmSignals, systemHint, allowCodeSuggestion, activeDomain, outputShape, questionType }
 }
