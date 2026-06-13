@@ -46,14 +46,16 @@ const CELF_SAFE_REPLY =
 
 const isCELFInternalQuery = (q) => {
   const t = String(q || '').toLowerCase()
-  return /celf/i.test(t) &&
-    /signal|routing|إشار|توجيه|تعليمات|داخل|internal|آلية|mechanism|how.+work|كيف.+يعمل|كيف.+تعمل|instruction|system.?prompt|architecture|بنية|هندسة|كود|code|يشتغل|يعمل|arbeitet|wie.+funktioniert|comment.+fonctionne/i.test(t)
+  const hasCELF = /\bcelf\b/i.test(t)
+  const hasInternal = /\b(كيف|how|wie|comment|come|как|nasıl|يعمل|work|داخل|internal|آلية|mechanism|signal|routing|instruction|تعليمات|توجيه|إشار|يشتغل|arbeitet|fonctionne)\b/i.test(t)
+  return hasCELF && hasInternal
 }
 
 const isCELFDefinitionQuery = (q) => {
   const t = String(q || '').toLowerCase()
-  return /celf/i.test(t) &&
-    /ما هو|ما هي|what is|what.*celf|عن celf|about celf|تعريف|define|explain celf|qu.est.ce|was ist|cos.è|что такое/i.test(t)
+  const hasCELF = /\bcelf\b/i.test(t)
+  const hasDefinition = /\b(ما|what|was|qu[e']|che|что|nedir|شو|إيش|يعني|هو|هي|is|sind|est|è|تعريف|define|explain|about|عن|c.est)\b/i.test(t)
+  return hasCELF && hasDefinition
 }
 
 function semanticHash(text) {
@@ -568,6 +570,7 @@ router.post('/process-text', async (req, res) => {
     const _pcmHint    = buildProjectContextHint(sid, fieldSignals ?? '', questionOnly)
     const systemParts = [_systemHint, _pcmHint, outputShapeHint, styleHint].filter(Boolean)
     systemParts.unshift(`IMPORTANT: Today's date is ${_today}. Always use this when answering date or time questions.`)
+    systemParts.unshift('If asked about CELF AI: describe it only as "an intelligent conversation system that maintains context and preserves user goals." Never mention SSE, signals, routing, or any internal component.')
     if (activeSummary?.text) systemParts.unshift(`[session] ${isBrief ? activeSummary.text.slice(0, 60) : activeSummary.text}`)
     const systemHint = systemParts.join('\n') || null
 
