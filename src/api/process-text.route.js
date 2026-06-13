@@ -111,7 +111,11 @@ function detectCodeBlocks(text) {
       /^(import|export|const|let|var|function|class|async)\s/m,
       /=>\s*\{/, /\bthis\.\w+\s*=/, /<(!DOCTYPE|html|head|body)/i
     ]
-    if (codeSignals.filter(p => p.test(text)).length >= 2 && text.length > 50) blocks.push(text)
+    const isSingleFunction =
+      /^\s*(function\s+\w+|const\s+\w+\s*=\s*(async\s*)?\(|async\s+function\s+\w+|\w+\s*=\s*\(.*\)\s*=>)/m.test(text) &&
+      /[{}]/.test(text)
+    if (isSingleFunction || (codeSignals.filter(p => p.test(text)).length >= 2 && text.length > 50))
+      blocks.push(text)
   }
   return blocks
 }
@@ -451,7 +455,9 @@ router.post('/process-text', async (req, res) => {
 
     const { anchors } = resolveConceptAnchors(questionOnly)
 
-    const _detectedDomain = classifyDomain(questionOnly)
+    const _detectedDomain = classifyDomain(questionOnly) !== 'general'
+      ? classifyDomain(questionOnly)
+      : classifyDomain(cleanedText)
     const activeDomain = _detectedDomain !== 'general'
       ? _detectedDomain
       : (getSemanticState(sid).dominantDomain ?? 'general')
