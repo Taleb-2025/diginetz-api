@@ -223,8 +223,10 @@ export function classifyQuestionType(q, hasStoredCode = false, continuity = 0, h
   if (hasStoredCode || hasCodeBlocks) {
     if (/اصلح|أصلح|عدل|تعديل|حسّن|fix|edit|refactor|debug|improve|ثغرة|خطأ|مشكلة/i.test(t))
       return 'code_fix'
-    if (/حلل|اشرح|وضح|فسّر|analyze|explain|review|افحص|inspect|check|قيّم/i.test(t))
+    if (/حلل|analyze|review|افحص|inspect|check|قيّم/i.test(t))
       return 'code_analyze'
+    if (/اشرح|وضح|فسّر|فسر|explain|describe/i.test(t))
+      return 'code_explain'
     if (/ابنِ|ابن|أنشئ|انشئ|build|implement|أضف.*feature|add.*feature/i.test(t))
       return 'code_build'
   }
@@ -261,6 +263,14 @@ const SIGNAL_SETS = {
       'Wrap code in fenced blocks with language tag.',
       'Only claim a fix is applied if the code change is present.',
       'Do not modify unrelated parts.',
+    ],
+  },
+  code_explain: {
+    base:        ['@execute.strict', '@accuracy.strict', '@input.summary_ok', '#code_summary'],
+    constraints: [
+      'Explain the code naturally and clearly.',
+      'No structured review format.',
+      'Reference the provided code summary as context.',
     ],
   },
   code_analyze: {
