@@ -461,7 +461,7 @@ router.post('/process-text', async (req, res) => {
       .join(' ')
       .replace(/\s+/g, ' ')
       .trim()
-      .slice(0, 500) || cleanedText.slice(0, 200)
+      .slice(0, 1000) || cleanedText.slice(0, 400)
 
     const userIsArabic = (() => {
       if (sessionLanguageStore.has(sid)) return sessionLanguageStore.get(sid)
@@ -573,9 +573,9 @@ router.post('/process-text', async (req, res) => {
 
     let storedRaw = null
     if (!shouldBlockCode) {
-      if (isFirstPass && _codeBase)              storedRaw = _codeBase               // أول مرة: raw كامل
-      else if (strategy.wantsReturn)             storedRaw = _lastCtx?.raw ?? null   // إصلاح: آخر نسخة raw
-      else if (shouldAttachStoredCode)           storedRaw = codeSummary             // تحليل/متابعة: summary
+      if (isFirstPass && _codeBase)              storedRaw = _codeBase
+      else if (strategy.wantsReturn)             storedRaw = _lastCtx?.raw ?? null
+      else if (shouldAttachStoredCode)           storedRaw = codeSummary
       if (!storedRaw && recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30) {
         storedRaw = (isFirstPass || strategy.wantsReturn)
           ? recoveredCode.slice(0, firstPassLimit)
