@@ -98,6 +98,17 @@ function extractSymbols(raw) {
   return [...new Set(symbols)].slice(0, 25)
 }
 
+function extractCodeName(raw, questionOnly = '') {
+  const m =
+    raw.match(/^export\s+(?:default\s+)?class\s+(\w+)/m)    ||
+    raw.match(/^export\s+(?:default\s+)?function\s+(\w+)/m) ||
+    raw.match(/^export\s+const\s+(\w+)/m)                   ||
+    (questionOnly && questionOnly.match(/\b([\w.-]+\.(js|ts|py|jsx|tsx|css|html|json))\b/)) ||
+    raw.match(/\bclass\s+(\w+)/m)                           ||
+    raw.match(/\bfunction\s+(\w+)/m)
+  return m ? m[1] : null
+}
+
 function detectCodeBlocks(text) {
   const blocks = []
   const fenced = /```(?:[a-zA-Z0-9_+-]*)?(?: |\n)([\s\S]*?)```/gi
@@ -161,7 +172,7 @@ function storeSemanticEntry(sid, t, text) {
   semanticTextMaps.set(sid, map)
 }
 
-function storeCodeContext(sid, rawArr, tValue) {
+function storeCodeContext(sid, rawArr, tValue, options = {}) {
   const contexts = rawCodeStore.get(sid) ?? []
   for (const raw of rawArr) {
     if (!raw || raw.length < 30) continue
@@ -170,9 +181,27 @@ function storeCodeContext(sid, rawArr, tValue) {
     const hash     = Math.abs(cs >>> 0).toString(16)
     const existing = contexts.find(c => c.hash === hash)
     if (existing) { existing.updatedAt = Date.now(); existing.msgIndex = tValue; continue }
-    const symbols = extractSymbols(raw)
-    const summary = `${classifyDomain(raw)} code: ${symbols.slice(0,6).join(', ') || 'general'}`
-    contexts.push({ id: `ctx_${tValue}_${hash.slice(0,6)}`, raw, symbols, summary, domain: classifyDomain(raw), hash, createdAt: Date.now(), updatedAt: Date.now(), msgIndex: tValue })
+    const symbols   = extractSymbols(raw)
+    const domain    = classifyDomain(raw)
+    const summary   = `${domain} code: ${symbols.slice(0,6).join(', ') || 'general'}`
+    const parentCtx     = options.parentHash ? contexts.find(c => c.hash === options.parentHash) : null
+    const name          = options.name ?? parentCtx?.name ?? extractCodeName(raw, options.questionOnly ?? '') ?? `file_${tValue}`
+    const version       = parentCtx ? parentCtx.version + 1 : 1
+    const parentVersion = parentCtx ? parentCtx.version : null
+    contexts.push({
+      id: `ctx_${tValue}_${hash.slice(0,6)}`,
+      name,
+      version,
+      parentVersion,
+      raw,
+      symbols,
+      summary,
+      domain,
+      hash,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      msgIndex: tValue
+    })
   }
   if (contexts.length > 10) contexts.splice(0, contexts.length - 10)
   rawCodeStore.set(sid, contexts)
@@ -383,7 +412,7 @@ function updateSemanticState(sid, detectedDomain) {
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '14.7' })
+  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '14.9' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -477,7 +506,9 @@ router.post('/process-text', async (req, res) => {
     const shouldBlockCode   = HARD_BLOCK_DOMAINS.has(activeDomain) || (activeDomain === 'general' && !generalAllowsCode)
 
     if (codeBlocks.length > 0) {
-      storeCodeContext(sid, codeBlocks, tValue)
+      storeCodeContext(sid, codeBlocks, tValue, { questionOnly })
+      const _storedCtx = (rawCodeStore.get(sid) ?? []).at(-1)
+      if (_storedCtx) registerFile(sid, { name: _storedCtx.name, version: _storedCtx.version, summary: _storedCtx.summary, domain: _storedCtx.domain, symbols: _storedCtx.symbols })
       codeSessionStore.set(sid, { active: true, ttl: 6 })
     } else {
       const cs = codeSessionStore.get(sid)
@@ -495,11 +526,12 @@ router.post('/process-text', async (req, res) => {
 
     const shouldAttachStoredCode =
       hasStoredCode && !shouldBlockCode &&
-      (codeBlocks.length > 0 || codeRelated || explainCodeRelated || refRelated || hasCodeAnchor || codeSessionActive)
+      (codeBlocks.length > 0 || codeRelated || explainCodeRelated || refRelated ||
+       hasCodeAnchor || codeSessionActive || (continuity > 0.20 && hasStoredCode))
 
     const _lastCtx    = (rawCodeStore.get(sid) ?? []).at(-1)
     const codeSummary = _lastCtx
-      ? `[code_summary] ${_lastCtx.summary} — ${Math.round(_lastCtx.raw.length / 1024 * 10) / 10}KB`
+      ? `[code_summary] ${_lastCtx.name} v${_lastCtx.version} — ${_lastCtx.summary} — ${Math.round(_lastCtx.raw.length / 1024 * 10) / 10}KB`
       : null
     const _codeBase   = effectiveMatch?.raw ?? _lastCtx?.raw ?? null
     const _codeHash   = _lastCtx?.hash || null
@@ -541,11 +573,11 @@ router.post('/process-text', async (req, res) => {
 
     let storedRaw = null
     if (!shouldBlockCode) {
-      if (isFirstPass && _codeBase)            storedRaw = _codeBase
-      else if (strategy.needsRaw && _codeBase) storedRaw = _codeBase
-      else if (shouldAttachStoredCode)         storedRaw = codeSummary
+      if (isFirstPass && _codeBase)              storedRaw = _codeBase               // أول مرة: raw كامل
+      else if (strategy.wantsReturn)             storedRaw = _lastCtx?.raw ?? null   // إصلاح: آخر نسخة raw
+      else if (shouldAttachStoredCode)           storedRaw = codeSummary             // تحليل/متابعة: summary
       if (!storedRaw && recoveredCode && typeof recoveredCode === 'string' && recoveredCode.length > 30) {
-        storedRaw = (isFirstPass || strategy.needsRaw)
+        storedRaw = (isFirstPass || strategy.wantsReturn)
           ? recoveredCode.slice(0, firstPassLimit)
           : `[code_summary] recovered code — ${Math.round(recoveredCode.length / 1024 * 10) / 10}KB`
       }
@@ -562,10 +594,18 @@ router.post('/process-text', async (req, res) => {
 
     const outputShapeHint = isBrief
       ? '[Output Shape]\nBe brief. Max 3 points. No preamble.'
+      : questionType === 'code_explain'
+      ? (userIsArabic
+        ? '[Output Shape]\nاشرح الكود بشكل طبيعي وواضح. لا تستخدم شكل المراجعة المنظمة. لا مقدمة.'
+        : '[Output Shape]\nExplain the code naturally and clearly. No structured review format. No preamble.')
       : isFirstPass
-      ? '[Output Shape]\nRespond in this exact format only:\n**What it does:** 1 sentence.\n**Strengths:** max 2 bullet points.\n**Weaknesses:** max 2 bullet points.\n**Critical:** only if exists.\nNo code. No explanations. No preamble.'
+      ? (userIsArabic
+        ? '[Output Shape]\nأجب بهذا الشكل فقط:\n**ما يفعله:** جملة واحدة.\n**نقاط القوة:** نقطتان كحد أقصى.\n**نقاط الضعف:** نقطتان كحد أقصى.\n**حرج:** فقط إن وجد.\nبدون كود. بدون شرح. بدون مقدمة.'
+        : '[Output Shape]\nRespond in this exact format only:\n**What it does:** 1 sentence.\n**Strengths:** max 2 bullet points.\n**Weaknesses:** max 2 bullet points.\n**Critical:** only if exists.\nNo code. No explanations. No preamble.')
       : strategy.wantsReview
-      ? '[Output Shape]\nRespond in this exact format only:\n**What it does:** 1 sentence.\n**Strengths:** max 2 bullet points.\n**Weaknesses:** max 2 bullet points.\n**Critical:** only if exists.\nNo code. No explanations. No preamble.'
+      ? (userIsArabic
+        ? '[Output Shape]\nأجب بهذا الشكل فقط:\n**ما يفعله:** جملة واحدة.\n**نقاط القوة:** نقطتان كحد أقصى.\n**نقاط الضعف:** نقطتان كحد أقصى.\n**حرج:** فقط إن وجد.\nبدون كود. بدون شرح. بدون مقدمة.'
+        : '[Output Shape]\nRespond in this exact format only:\n**What it does:** 1 sentence.\n**Strengths:** max 2 bullet points.\n**Weaknesses:** max 2 bullet points.\n**Critical:** only if exists.\nNo code. No explanations. No preamble.')
       : strategy.wantsReturn
       ? '[Output Shape]\nReturn complete modified code only. No explanation. No preamble.'
       : outputShape === 'balanced'
@@ -625,6 +665,7 @@ router.post('/process-text', async (req, res) => {
     console.log(`[${sid.slice(-8)}]   field:${fieldSignals ?? '-'}`)
     console.log(`[${sid.slice(-8)}]   llm:${llmSignals ?? '-'}`)
     console.log(`[${sid.slice(-8)}]   hint:${_hintPreview}`)
+    if (_lastCtx) console.log(`[${sid.slice(-8)}]   stored:${_lastCtx.name} v${_lastCtx.version}`)
 
     let claudeData, reply = null, inputTokensTotal = 0, outputTokensTotal = 0
 
@@ -670,11 +711,22 @@ router.post('/process-text', async (req, res) => {
     const currentDomain = classifyDomain(questionOnly || cleanedText)
     updateAnchors(sid, cleanedText.slice(0,80), 0.5, currentDomain)
 
-    if (reply && fieldSignals?.includes('#full_file')) {
+    const shouldSaveNewVersion =
+      (strategy.wantsReturn || fieldSignals?.includes('#full_file')) &&
+      reply && !reply.startsWith('[CELF_LIMIT]')
+    if (shouldSaveNewVersion) {
       const replyBlocks = detectCodeBlocks(reply)
       if (replyBlocks.length > 0 && replyBlocks[0].length > 200) {
-        storeCodeContext(sid, replyBlocks, tValue + 0.9)
+        storeCodeContext(sid, replyBlocks, tValue + 0.9, {
+          name:       _lastCtx?.name,
+          parentHash: _lastCtx?.hash,
+        })
         codeSessionStore.set(sid, { active: true, ttl: 6 })
+        const _newCtx = (rawCodeStore.get(sid) ?? []).at(-1)
+        if (_newCtx) {
+          registerFile(sid, { name: _newCtx.name, version: _newCtx.version, summary: _newCtx.summary, domain: _newCtx.domain, symbols: _newCtx.symbols })
+          console.log(`[${sid.slice(-8)}]   saved:${_newCtx.name} v${_newCtx.version} (parent:v${_newCtx.parentVersion ?? '-'})`)
+        }
       }
     }
 
