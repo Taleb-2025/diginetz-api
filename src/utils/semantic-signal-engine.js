@@ -112,6 +112,11 @@ export function compactSignalsForLLM(fieldSignals = '') {
     add('@repair.surgical_fix')
     add('@accuracy.strict')
   }
+  if (fs.includes('@improve.based_on_analysis')) {
+    add('@execute.strict')
+    add('@goal.preserve')
+    add('@improve.based_on_analysis')
+  }
   if (fs.includes('@intent.analyze') || fs.includes('@output.focused_review')) {
     add('@accuracy.strict')
   }
@@ -174,6 +179,8 @@ export function buildCompactRuntimeRule(llmSignals = '') {
     rules.push('@followup.strict = use prior context, answer only the new point, no recap, no repetition.')
   if (fs.includes('@repair.surgical_fix'))
     rules.push('@repair.surgical_fix = fix only the specified damage with the smallest safe change after identifying root cause; preserve unrelated working parts.')
+  if (fs.includes('@improve.based_on_analysis'))
+    rules.push('@improve.based_on_analysis = apply all improvements identified in prior analysis; do not ask for clarification; return the complete improved code.')
   if (fs.includes('@summary.checkpoint'))
     rules.push('@summary.checkpoint = summarize known state only: goal, current state, changes, untouched parts, risks, and next step.')
   if (fs.includes('@output.validate'))
@@ -221,7 +228,13 @@ export function classifyQuestionType(q, hasStoredCode = false, continuity = 0, h
     return 'project_integration'
 
   if (hasStoredCode || hasCodeBlocks) {
-    if (/اصلح|أصلح|عدل|تعديل|حسّن|fix|edit|refactor|debug|improve|ثغرة|خطأ|مشكلة/i.test(t))
+    if (/اصلح|أصلح|fix|debug/i.test(t) && /خطأ|error|bug|مشكلة|لا يعمل|crash|exception|ثغرة/i.test(t))
+      return 'code_fix'
+    if (/حسّن|حسن|طبّق|طبق|نفّذ|نفذ|improve|refactor|optimize|enhance|apply/i.test(t))
+      return 'code_improve'
+    if (/اصلح|أصلح|عدل|تعديل|fix|edit/i.test(t))
+      return 'code_improve'
+    if (/debug|ثغرة/i.test(t))
       return 'code_fix'
     if (/حلل|analyze|review|افحص|inspect|check|قيّم/i.test(t))
       return 'code_analyze'
@@ -256,6 +269,23 @@ export function classifyQuestionType(q, hasStoredCode = false, continuity = 0, h
 }
 
 const SIGNAL_SETS = {
+  code_improve: {
+    base: [
+      '@execute.strict',
+      '@goal.preserve',
+      '@improve.based_on_analysis',
+      '@input.raw_required',
+      '@output.full_return',
+      '@output.validate',
+      '#code_full',
+    ],
+    constraints: [
+      'Output: complete improved code. No truncation.',
+      'Apply all improvements found in prior analysis.',
+      'Wrap code in fenced blocks with language tag.',
+      'Do not ask for clarification — apply improvements directly.',
+    ],
+  },
   code_fix: {
     base:        ['@execute.strict', '@repair.surgical_fix', '@accuracy.strict', '@input.raw_required', '@output.full_return', '#code_full'],
     constraints: [
@@ -469,7 +499,7 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   if (/لماذا|why/i.test(qText))                                       urgencyLayer.push({ text: '?causal',        w: 0.60 })
   if (novel > 0.70)                                                    urgencyLayer.push({ text: 'explore',        w: novel })
   if (continuity > 0.35 && questionType !== 'followup')               urgencyLayer.push({ text: '#continuity',    w: continuity + coher + 0.3 })
-  if (questionType === 'code_fix' || questionType === 'code_analyze')  urgencyLayer.push({ text: '@output.validate', w: 0.83 })
+  if (questionType === 'code_fix' || questionType === 'code_analyze' || questionType === 'code_improve')  urgencyLayer.push({ text: '@output.validate', w: 0.83 })
 
   // ── Merge all layers ─────────────────────────────────────────
   const all = [...baseLayer, ...domainLayer, ...guards, ...scopes, ...urgencyLayer]
