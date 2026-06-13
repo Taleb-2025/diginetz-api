@@ -1,8 +1,3 @@
-// ═══════════════════════════════════════════════════════════════
-//  SEMANTIC SIGNAL ENGINE — v3.0
-//  Question Type → Signal Set → SystemHint
-// ═══════════════════════════════════════════════════════════════
-
 export function classifyDomain(text) {
   if (!text || typeof text !== 'string') return 'general'
   const t = text.toLowerCase()
@@ -435,16 +430,13 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
       ? detectedDomain
       : (semanticState?.dominantDomain ?? 'general')
 
-  // ── Layer 1: Base signals (من SIGNAL_SETS — دائماً) ─────────
   const baseLayer = []
   signalSet.base.forEach((s, i) => baseLayer.push({ text: s, w: 1.0 - i * 0.02 }))
 
-  // ── Layer 2: Domain signal (واحدة فقط) ───────────────────────
   const domainLayer = []
   if (dom !== 'general') domainLayer.push({ text: `::${dom}`, w: 0.75 })
   if (driftCount >= 2)   domainLayer.push({ text: '::reset',  w: 0.85 })
 
-  // ── Layer 3: Guard signals (بحسب الـ domain فقط) ────────────
   const guardLayer = []
   const GUARD_MAX = 4
   if (dom === 'science' || dom === 'math' || dom === 'humanities') {
@@ -470,7 +462,6 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
     .sort((a, b) => b.w - a.w)
     .slice(0, GUARD_MAX)
 
-  // ── Layer 4: Scope signals (فقط عند طلب صريح) ───────────────
   const scopeLayer = []
   const SCOPE_MAX = 2
   if (/من هم|ما هي|ماهي|قائمة|أبرز|أهم|أكبر|أشهر|تجارب|علماء|عبر التاريخ|who are|what are|list|top|best|greatest|famous|experiments|scientists|throughout history/i.test(qText)) {
@@ -487,7 +478,6 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
     .sort((a, b) => b.w - a.w)
     .slice(0, SCOPE_MAX)
 
-  // ── Layer 5: Urgency + depth (كلمات صريحة فقط) ──────────────
   const urgencyLayer = []
   if (/critical|قاتل|خطير|urgent|عاجل/i.test(qText))               urgencyLayer.push({ text: '!critical',       w: 1.00 })
   if (/موقوف|توقف|blocked|cannot proceed|انهار|crashed/i.test(qText)) urgencyLayer.push({ text: '!blocked',       w: 0.98 })
@@ -501,7 +491,6 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   if (continuity > 0.35 && questionType !== 'followup')               urgencyLayer.push({ text: '#continuity',    w: continuity + coher + 0.3 })
   if (questionType === 'code_fix' || questionType === 'code_analyze' || questionType === 'code_improve')  urgencyLayer.push({ text: '@output.validate', w: 0.83 })
 
-  // ── Merge all layers ─────────────────────────────────────────
   const all = [...baseLayer, ...domainLayer, ...guards, ...scopes, ...urgencyLayer]
   const top = all
     .filter((s, i, arr) => arr.findIndex(x => x.text === s.text) === i)
