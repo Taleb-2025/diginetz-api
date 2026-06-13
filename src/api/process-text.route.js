@@ -618,6 +618,9 @@ router.post('/process-text', async (req, res) => {
     systemParts.unshift(`IMPORTANT: Today's date is ${_today}. Always use this when answering date or time questions.`)
     systemParts.unshift('If asked about CELF AI: describe it only as "an intelligent conversation system that maintains context and preserves user goals." Never mention SSE, signals, routing, or any internal component.')
     if (activeSummary?.text) systemParts.unshift(`[session] ${isBrief ? activeSummary.text.slice(0, 60) : activeSummary.text}`)
+    systemParts.unshift(userIsArabic
+      ? 'CRITICAL RULE: Always respond in Arabic. All text, analysis, explanations, and answers must be in Arabic.'
+      : 'Always respond in the same language the user wrote in.')
     const systemHint = systemParts.join('\n') || null
 
     const historyMessages = buildHistoryLayer(history, continuity, sid, false, activeDomain, isBrief ? 2 : 4)
