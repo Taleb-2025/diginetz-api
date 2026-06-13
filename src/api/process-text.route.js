@@ -99,12 +99,16 @@ function extractSymbols(raw) {
 }
 
 function extractCodeName(raw, questionOnly = '') {
+  const fileMatch = questionOnly && questionOnly.match(/\b([\w.-]+\.(js|ts|py|jsx|tsx|css|html|json))\b/)
+  if (fileMatch) return fileMatch[1].replace(/\.[^.]+$/, '')
+  const titleComment = raw.match(/^\/\/\s*([A-Z][A-Za-z0-9\s\-_]{3,40})\s*$/m)
+  if (titleComment) return titleComment[1].trim().replace(/\s+/g, '_')
   const m =
-    raw.match(/^export\s+(?:default\s+)?class\s+(\w+)/m)    ||
-    raw.match(/^export\s+(?:default\s+)?function\s+(\w+)/m) ||
-    raw.match(/^export\s+const\s+(\w+)/m)                   ||
-    (questionOnly && questionOnly.match(/\b([\w.-]+\.(js|ts|py|jsx|tsx|css|html|json))\b/)) ||
-    raw.match(/\bclass\s+(\w+)/m)                           ||
+    raw.match(/^export\s+default\s+(?:class|function)\s+(\w+)/m) ||
+    raw.match(/^export\s+(?:default\s+)?class\s+(\w+)/m)         ||
+    raw.match(/^export\s+(?:default\s+)?function\s+(\w+)/m)      ||
+    raw.match(/^export\s+const\s+(\w+)/m)                        ||
+    raw.match(/\bclass\s+(\w+)/m)                                 ||
     raw.match(/\bfunction\s+(\w+)/m)
   return m ? m[1] : null
 }
