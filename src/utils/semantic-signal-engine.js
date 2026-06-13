@@ -408,9 +408,10 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   const guardLayer = []
   const GUARD_MAX = 4
   if (dom === 'science' || dom === 'math' || dom === 'humanities') {
-    guardLayer.push({ text: '@accuracy.strict',              w: 0.92 })
-    guardLayer.push({ text: '@accuracy.verify',              w: 0.86 })
-    guardLayer.push({ text: '@depth.contextual',             w: 0.80 })
+    guardLayer.push({ text: '@accuracy.strict',  w: 0.92 })
+    guardLayer.push({ text: '@depth.contextual', w: 0.80 })
+    if (/من|أول|أشهر|أبرز|تاريخ|جائزة|رقم|عام|سنة|ترتيب|اكتشف|اخترع|who|first|famous|prize|award|number|year|rank|discovered|invented|date|born|died/i.test(qText))
+      guardLayer.push({ text: '@accuracy.verify', w: 0.86 })
   }
   if (dom === 'science') {
     guardLayer.push({ text: '@science.epistemic_humility',              w: 0.88 })
