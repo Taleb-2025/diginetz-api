@@ -14,7 +14,7 @@ export function classifyDomain(text) {
   if (/docker|railway|nginx|kubernetes|deploy|cloud/i.test(t))                             return 'devops'
   if (/algorithm|sort|search|graph|tree|dynamic|recursion/i.test(t))                       return 'algorithms'
   if (/test|jest|mocha|cypress|spec|unit|mock|coverage/i.test(t))                          return 'testing'
-  if (/const|let|var|function|class|import|export|async/.test(t) && t.length > 80)         return 'code'
+  if (/const|let|var|function|class|import|export|async/.test(t) && t.length > 30)         return 'code'
   if (/كرة|رياضة|مباراة|دوري|لاعب|فريق|بطولة|هدف|سلة|تنس|سباق|ملاكمة|كأس|منتخب|نادي|اتحاد|football|soccer|basketball|tennis|sport|match|league|player|team|champion|goal|score|racing|boxing|cup|tournament|club|championship|federation|national.team/i.test(t)) return 'sports'
   if (/اكتب.*قصة|قصة قصيرة|حكاية|رواية|مشهد|سيناريو|write.*story|short story|fiction|scene|script/i.test(t)) return 'creative'
   if (/فيزياء|physics|كيمياء|chemistry|بيولوجيا|biology|كوانتم|quantum|ذرة|atom|موجة|wave|تشابك|entanglement|نسبية|relativity|ميكانيكا|mechanics|طاقة|energy|جسيم|particle|نووي|nuclear/i.test(t)) return 'science'
