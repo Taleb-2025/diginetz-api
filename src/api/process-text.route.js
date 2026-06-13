@@ -606,6 +606,10 @@ router.post('/process-text', async (req, res) => {
       ? (userIsArabic
         ? '[Output Shape]\nأجب بهذا الشكل فقط:\n**ما يفعله:** جملة واحدة.\n**نقاط القوة:** نقطتان كحد أقصى.\n**نقاط الضعف:** نقطتان كحد أقصى.\n**حرج:** فقط إن وجد.\nبدون كود. بدون شرح. بدون مقدمة.'
         : '[Output Shape]\nRespond in this exact format only:\n**What it does:** 1 sentence.\n**Strengths:** max 2 bullet points.\n**Weaknesses:** max 2 bullet points.\n**Critical:** only if exists.\nNo code. No explanations. No preamble.')
+      : questionType === 'code_improve'
+      ? (userIsArabic
+        ? '[Output Shape]\nطبّق التحسينات وأرجع الكود كاملاً دون انقطاع. لا شرح. لا مقدمة.'
+        : '[Output Shape]\nApply all improvements and return the complete improved code. No explanation. No preamble.')
       : strategy.wantsReturn
       ? '[Output Shape]\nReturn complete modified code only. No explanation. No preamble.'
       : outputShape === 'balanced'
