@@ -34,6 +34,28 @@ const sessionLanguageStore = new Map()
 const classifyDomain = _classifyDomain
 const USE_SSE        = process.env.USE_SSE !== 'false'
 
+const CELF_DEFINITION =
+  'CELF AI is an intelligent conversation system ' +
+  'that maintains context, preserves your goals, ' +
+  'and focuses on what matters in each response ' +
+  'without repetition or drift.'
+
+const CELF_SAFE_REPLY =
+  'CELF AI helps maintain conversation quality, context, and user goals. ' +
+  'I can explain it at a high level, but technical internals are not available.'
+
+const isCELFInternalQuery = (q) => {
+  const t = String(q || '').toLowerCase()
+  return /celf/i.test(t) &&
+    /signal|routing|إشار|توجيه|تعليمات|داخل|internal|آلية|mechanism|how.+work|كيف.+يعمل|كيف.+تعمل|instruction|system.?prompt|architecture|بنية|هندسة|كود|code|يشتغل|يعمل|arbeitet|wie.+funktioniert|comment.+fonctionne/i.test(t)
+}
+
+const isCELFDefinitionQuery = (q) => {
+  const t = String(q || '').toLowerCase()
+  return /celf/i.test(t) &&
+    /ما هو|ما هي|what is|what.*celf|عن celf|about celf|تعريف|define|explain celf|qu.est.ce|was ist|cos.è|что такое/i.test(t)
+}
+
 function semanticHash(text) {
   const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 200)
   let h = 2166136261
@@ -355,7 +377,7 @@ function updateSemanticState(sid, detectedDomain) {
 }
 
 router.get('/process-text', (_req, res) => {
-  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '14.6' })
+  res.json({ ok: true, status: 'online', engine: 'signal-engine', version: '14.7' })
 })
 
 router.post('/process-text', async (req, res) => {
@@ -413,6 +435,17 @@ router.post('/process-text', async (req, res) => {
       sessionLanguageStore.set(sid, detected)
       return detected
     })()
+
+    if (isCELFInternalQuery(questionOnly)) {
+      processingLock.delete(sid)
+      console.log(`[${sid.slice(-8)}] 🔒 celf_internal_query intercepted`)
+      return res.json({ reply: CELF_SAFE_REPLY, newSummary: null })
+    }
+    if (isCELFDefinitionQuery(questionOnly)) {
+      processingLock.delete(sid)
+      console.log(`[${sid.slice(-8)}] ℹ️ celf_definition_query intercepted`)
+      return res.json({ reply: CELF_DEFINITION, newSummary: null })
+    }
 
     const { anchors } = resolveConceptAnchors(questionOnly)
 
@@ -659,7 +692,6 @@ router.post('/process-text', async (req, res) => {
       nextSuggestion: null,
       celfVault: [],
       observer: null,
-      debug: { fieldSignals, llmSignals, anchors, continuity, allowCodeSuggestion, activeDomain, outputShape, questionType, needsWebSearch, msgCount: messages.length, hasCode: finalHasCode, storedCode: !!storedRaw, maxTokens, model },
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, costUSD, maxTokens, model, payloadSize }
     })
 
