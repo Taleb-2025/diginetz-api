@@ -15,6 +15,8 @@ export function classifyDomain(text) {
   if (/algorithm|sort|search|graph|tree|dynamic|recursion/i.test(t))                       return 'algorithms'
   if (/test|jest|mocha|cypress|spec|unit|mock|coverage/i.test(t))                          return 'testing'
   if (/const|let|var|function|class|import|export|async/.test(t) && t.length > 80)         return 'code'
+  if (/كرة|رياضة|مباراة|دوري|لاعب|فريق|بطولة|هدف|سلة|تنس|سباق|ملاكمة|كأس|منتخب|نادي|اتحاد|football|soccer|basketball|tennis|sport|match|league|player|team|champion|goal|score|racing|boxing|cup|tournament|club|championship|federation|national.team/i.test(t)) return 'sports'
+  if (/اكتب.*قصة|قصة قصيرة|حكاية|رواية|مشهد|سيناريو|write.*story|short story|fiction|scene|script/i.test(t)) return 'creative'
   if (/فيزياء|physics|كيمياء|chemistry|بيولوجيا|biology|كوانتم|quantum|ذرة|atom|موجة|wave|تشابك|entanglement|نسبية|relativity|ميكانيكا|mechanics|طاقة|energy|جسيم|particle|نووي|nuclear/i.test(t)) return 'science'
   if (/رياضيات|math|جبر|algebra|هندسة|geometry|إحصاء|statistics|حساب|calculus|مبرهنة|theorem|معادلة|equation|تفاضل|differential|تكامل|integral/i.test(t)) return 'math'
   if (/تاريخ|history|جغرافيا|geography|فلسفة|philosophy|أدب|literature|لغة|language/i.test(t)) return 'humanities'
@@ -22,9 +24,12 @@ export function classifyDomain(text) {
   return 'general'
 }
 
-export function buildSemanticPattern(anchors) {
-  if (!anchors?.length) return null
-  const has = a => anchors.includes(a)
+export function buildSemanticPattern(anchors, fieldSignals = '') {
+  const fs = String(fieldSignals || '')
+  if (!anchors?.length && !fs) return null
+  const has = a => (anchors ?? []).includes(a)
+  if (fs.includes('@creative.write'))
+    return '[pattern: creative_write] [step: draft → refine → final_story]'
   if (has('@repair_intent') && has('@failure') && has('@identity_layer'))
     return '[pattern: diagnose_auth_failure] [step: identify_root_cause → locate_auth_flow → apply_fix → verify]'
   if (has('@repair_intent') && has('@failure') && has('@data_store'))
@@ -127,10 +132,20 @@ export function compactSignalsForLLM(fieldSignals = '') {
     add('@accuracy.strict')
     add('@science.epistemic_humility')
   }
+  if (fs.includes('@creative.write') || fs.includes('@output.story') || fs.includes('@style.narrative')) {
+    add('@execute.strict')
+    add('@goal.preserve')
+    add('@creative.write')
+    add('@output.story')
+  }
   if (fs.includes('@goal.preserve') || fs.includes('@scope.current_topic') || fs.includes('@scope.user_requested_scope'))
     add('@goal.preserve')
   if (fs.includes('@scope.broaden_historical')) add('@scope.broaden_historical')
   if (fs.includes('@output.list_with_context'))  add('@output.list_with_context')
+  if (fs.includes('@ranking.verify'))            add('@ranking.verify')
+  if (fs.includes('@accuracy.verify'))           add('@accuracy.verify')
+  if (fs.includes('@output.validate'))           add('@output.validate')
+  if (fs.includes('@postcheck.required'))        add('@postcheck.required')
   if (fs.includes('@depth.contextual'))          add('@depth.contextual')
   if (fs.includes('@depth.surface'))             add('@depth.surface')
   if (fs.includes('@depth.technical'))           add('@depth.technical')
@@ -161,13 +176,23 @@ export function buildCompactRuntimeRule(llmSignals = '') {
     rules.push('@repair.surgical_fix = fix only the specified damage with the smallest safe change after identifying root cause; preserve unrelated working parts.')
   if (fs.includes('@summary.checkpoint'))
     rules.push('@summary.checkpoint = summarize known state only: goal, current state, changes, untouched parts, risks, and next step.')
+  if (fs.includes('@output.validate'))
+    rules.push('@output.validate = before finalizing, verify the answer matches the requested format, scope, and length; adjust if it drifts.')
+  if (fs.includes('@accuracy.verify'))
+    rules.push('@accuracy.verify = before including any name, date, number, or sensitive fact, verify it is supported by context or reliable knowledge; flag uncertainty explicitly.')
+  if (fs.includes('@ranking.verify'))
+    rules.push('@ranking.verify = verify the order or ranking of listed items; do not fabricate rankings; use established criteria or flag if the ranking is subjective.')
+  if (fs.includes('@creative.write'))
+    rules.push('@creative.write = write with narrative structure, voice, and creative intent; do not summarize or explain; stay in the requested tone and genre.')
+  if (fs.includes('@postcheck.required'))
+    rules.push('@postcheck.required = after generating the answer, internally verify key claims, names, dates, and facts; correct any unsupported assertion before finalizing.')
   if (!rules.length) return null
   return '[CELF_RUNTIME_RULE]\n' + rules.join('\n')
 }
 
 export function buildDirectives(anchors, userIsArabic, fieldSignals, questionOnly = '', hasStoredCode = false, continuity = 0, hasCodeBlocks = false) {
   const lang        = userIsArabic ? '[lang: Arabic]' : '[lang: same_as_user]'
-  const pattern     = buildSemanticPattern(anchors)
+  const pattern     = buildSemanticPattern(anchors, fieldSignals)
   const llmSignals  = compactSignalsForLLM(fieldSignals)
   const constraints = buildRoutingConstraints(anchors, fieldSignals, questionOnly, hasStoredCode, continuity, hasCodeBlocks)
   const fs          = String(fieldSignals || '')
@@ -206,6 +231,9 @@ export function classifyQuestionType(q, hasStoredCode = false, continuity = 0, h
 
   if (/أحدث|أخير|آخر|جديد|الآن|اليوم|هذا العام|recent|latest|current|today|now|this year/i.test(t))
     return 'current_info'
+
+  if (/اكتب.*قصة|قصة قصيرة|حكاية|رواية|مشهد|سيناريو|write.*story|short story|fiction|scene|script/i.test(t))
+    return 'creative_write'
 
   if (/ما الفرق|فرق بين|مقارنة|compare|difference|vs\b|versus/i.test(t))
     return 'comparison'
@@ -330,6 +358,20 @@ const SIGNAL_SETS = {
       'No code. No suggestions beyond next step.',
     ],
   },
+  creative_write: {
+    base: [
+      '@execute.strict',
+      '@goal.preserve',
+      '@creative.write',
+      '@output.story',
+      '@style.narrative',
+    ],
+    constraints: [
+      'Write with narrative structure, voice, and creative intent.',
+      'Do not summarize, explain, or add meta-commentary.',
+      'Stay within the requested scene, genre, and tone.',
+    ],
+  },
   general: {
     base:        [],
     constraints: [],
@@ -346,58 +388,84 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   const questionType = classifyQuestionType(qText, hasStoredCode, continuity, (codeBlocks?.length ?? 0) > 0)
   const signalSet    = SIGNAL_SETS[questionType] ?? SIGNAL_SETS.general
 
-  const weighted = []
-  const add = (sig, w) => weighted.push({ text: sig, w })
-
-  signalSet.base.forEach((s, i) => add(s, 1.0 - i * 0.02))
-
-  if (/critical|قاتل|خطير|urgent|عاجل/i.test(qText))              add('!critical', 1.00)
-  if (/موقوف|توقف|blocked|cannot proceed|انهار|crashed/i.test(qText)) add('!blocked', 0.98)
-  if (/كان يعمل|used to work|regression/i.test(qText))             add('?regression',  0.90)
-  if (/بطيء|slow|latency|performance|memory leak/i.test(qText))    add('?performance', 0.90)
-  if (/ثغرة|vulnerability|injection|xss|csrf/i.test(qText))        add('?security',    0.92)
-  if (/لماذا|why/i.test(qText))                                     add('?causal',      0.60)
-  if (/بالتفصيل|detailed|شامل|in depth/i.test(qText))              add('@depth.technical', 0.70)
-  if (/باختصار|brief|بإيجاز/i.test(qText))                         add('@depth.surface',   0.70)
-  if (/خطوة|step by step/i.test(qText))                             add('step-by-step',     0.70)
-
   const detectedDomain = classifyDomain(qText)
-  const dom = detectedDomain !== 'general' ? detectedDomain : (semanticState?.dominantDomain ?? 'general')
-  if (dom !== 'general') add(`::${dom}`, 0.75)
+  const dom = questionType === 'creative_write'
+    ? 'creative'
+    : detectedDomain !== 'general'
+      ? detectedDomain
+      : (semanticState?.dominantDomain ?? 'general')
 
-  if (driftCount >= 2)                         add('::reset',     0.85)
-  if (novel > 0.70)                            add('explore',     novel)
-  if (continuity > 0.35 && questionType !== 'followup') add('#continuity', continuity + coher + 0.3)
+  // ── Layer 1: Base signals (من SIGNAL_SETS — دائماً) ─────────
+  const baseLayer = []
+  signalSet.base.forEach((s, i) => baseLayer.push({ text: s, w: 1.0 - i * 0.02 }))
 
+  // ── Layer 2: Domain signal (واحدة فقط) ───────────────────────
+  const domainLayer = []
+  if (dom !== 'general') domainLayer.push({ text: `::${dom}`, w: 0.75 })
+  if (driftCount >= 2)   domainLayer.push({ text: '::reset',  w: 0.85 })
+
+  // ── Layer 3: Guard signals (بحسب الـ domain فقط) ────────────
+  const guardLayer = []
+  const GUARD_MAX = 4
   if (dom === 'science' || dom === 'math' || dom === 'humanities') {
-    add('@accuracy.strict',   0.92)
-    add('@depth.contextual',  0.80)
+    guardLayer.push({ text: '@accuracy.strict',              w: 0.92 })
+    guardLayer.push({ text: '@accuracy.verify',              w: 0.86 })
+    guardLayer.push({ text: '@depth.contextual',             w: 0.80 })
   }
   if (dom === 'science') {
-    add('@science.epistemic_humility',          0.88)
-    add('@science.distinguish_fact_interpretation', 0.82)
+    guardLayer.push({ text: '@science.epistemic_humility',              w: 0.88 })
+    guardLayer.push({ text: '@science.distinguish_fact_interpretation', w: 0.82 })
+    if (/من|أبرز|أشهر|علماء|قائمة|who|list|top|best|greatest|famous/i.test(qText))
+      guardLayer.push({ text: '@postcheck.required', w: 0.80 })
   }
+  if (dom === 'sports') {
+    guardLayer.push({ text: '@accuracy.verify',  w: 0.88 })
+    guardLayer.push({ text: '@ranking.verify',   w: 0.84 })
+    guardLayer.push({ text: '@accuracy.strict',  w: 0.82 })
+  }
+  if (/من هم|ما هي|ماهي|قائمة|أبرز|أهم|أكبر|أشهر|تجارب|علماء|who are|what are|list|top|best|greatest|famous|experiments|scientists/i.test(qText))
+    guardLayer.push({ text: '@ranking.verify', w: 0.84 })
+  const guards = guardLayer
+    .sort((a, b) => b.w - a.w)
+    .slice(0, GUARD_MAX)
 
+  // ── Layer 4: Scope signals (فقط عند طلب صريح) ───────────────
+  const scopeLayer = []
+  const SCOPE_MAX = 2
   if (/من هم|ما هي|ماهي|قائمة|أبرز|أهم|أكبر|أشهر|تجارب|علماء|عبر التاريخ|who are|what are|list|top|best|greatest|famous|experiments|scientists|throughout history/i.test(qText)) {
-    add('@scope.user_requested_scope', 0.88)
-    add('@output.list_with_context',   0.78)
+    scopeLayer.push({ text: '@scope.user_requested_scope', w: 0.88 })
+    scopeLayer.push({ text: '@output.list_with_context',   w: 0.78 })
   }
-
-  if (/عبر التاريخ|throughout history|تاريخياً|historically|منذ|since|عبر العصور|across centuries/i.test(qText))
-    add('@scope.broaden_historical', 0.82)
-
+  if (/عبر التاريخ|throughout history|تاريخياً|historically|عبر العصور|across centuries/i.test(qText))
+    scopeLayer.push({ text: '@scope.broaden_historical', w: 0.82 })
   if (questionType === 'followup')
-    add('@scope.current_topic', 0.82)
+    scopeLayer.push({ text: '@scope.current_topic', w: 0.82 })
+  if (/حدد|في نطاق|فقط عن|فقط في|only about|only in|within|limit to|specifically/i.test(qText))
+    scopeLayer.push({ text: '@scope.user_requested_scope', w: 0.72 })
+  const scopes = scopeLayer
+    .sort((a, b) => b.w - a.w)
+    .slice(0, SCOPE_MAX)
 
-  const asksForExplicitScope = /حدد|في نطاق|فقط عن|فقط في|only about|only in|within|limit to|specifically/i.test(qText)
-  if (asksForExplicitScope)
-    add('@scope.user_requested_scope', 0.72)
+  // ── Layer 5: Urgency + depth (كلمات صريحة فقط) ──────────────
+  const urgencyLayer = []
+  if (/critical|قاتل|خطير|urgent|عاجل/i.test(qText))               urgencyLayer.push({ text: '!critical',       w: 1.00 })
+  if (/موقوف|توقف|blocked|cannot proceed|انهار|crashed/i.test(qText)) urgencyLayer.push({ text: '!blocked',       w: 0.98 })
+  if (/ثغرة|vulnerability|injection|xss|csrf/i.test(qText))          urgencyLayer.push({ text: '?security',      w: 0.92 })
+  if (/كان يعمل|used to work|regression/i.test(qText))               urgencyLayer.push({ text: '?regression',    w: 0.90 })
+  if (/بطيء|slow|latency|performance|memory leak/i.test(qText))      urgencyLayer.push({ text: '?performance',   w: 0.90 })
+  if (/بالتفصيل|detailed|شامل|in depth/i.test(qText))                urgencyLayer.push({ text: '@depth.technical', w: 0.70 })
+  if (/باختصار|brief|بإيجاز/i.test(qText))                           urgencyLayer.push({ text: '@depth.surface',   w: 0.70 })
+  if (/لماذا|why/i.test(qText))                                       urgencyLayer.push({ text: '?causal',        w: 0.60 })
+  if (novel > 0.70)                                                    urgencyLayer.push({ text: 'explore',        w: novel })
+  if (continuity > 0.35 && questionType !== 'followup')               urgencyLayer.push({ text: '#continuity',    w: continuity + coher + 0.3 })
+  if (questionType === 'code_fix' || questionType === 'code_analyze')  urgencyLayer.push({ text: '@output.validate', w: 0.83 })
 
-  const MAX_SIGNALS = 22
-  const top = weighted
+  // ── Merge all layers ─────────────────────────────────────────
+  const all = [...baseLayer, ...domainLayer, ...guards, ...scopes, ...urgencyLayer]
+  const top = all
     .filter((s, i, arr) => arr.findIndex(x => x.text === s.text) === i)
     .sort((a, b) => b.w - a.w)
-    .slice(0, MAX_SIGNALS)
+    .slice(0, 14)
     .map(s => s.text)
 
   return top.length ? top.join(' ') : null
@@ -422,7 +490,7 @@ export function computeOutputShape({ questionOnly = '', anchors, fieldSignals, a
   const fs = String(fieldSignals || '')
   const q  = String(questionOnly).toLowerCase()
 
-  if (fs.includes('#full_file'))                                                             return 'full'
+  if (fs.includes('@creative.write'))                                                        return 'full'
   if (activeStyle === 'detailed')                                                            return 'detailed'
   if (/بالتفصيل|تفصيل|شامل|in depth|detailed|اشرح كل/i.test(q))                           return 'detailed'
   if (activeStyle === 'concise')                                                             return 'brief'
