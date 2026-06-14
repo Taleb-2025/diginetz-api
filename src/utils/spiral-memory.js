@@ -11,6 +11,7 @@ const PROMOTE_TYPES = new Set(['code_improve', 'code_fix', 'creative_write'])
 let _db = null
 
 async function openDB() {
+  if (typeof indexedDB === 'undefined') return null
   if (_db) return _db
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION)
@@ -26,7 +27,8 @@ async function openDB() {
 }
 
 async function persistCapsule(capsule) {
-  const db    = await openDB()
+  const db = await openDB()
+  if (!db) return
   return new Promise((resolve, reject) => {
     const tx    = db.transaction(STORE_NAME, 'readwrite')
     const store = tx.objectStore(STORE_NAME)
@@ -37,7 +39,8 @@ async function persistCapsule(capsule) {
 }
 
 async function deleteCapsule(capsuleId) {
-  const db    = await openDB()
+  const db = await openDB()
+  if (!db) return
   return new Promise((resolve, reject) => {
     const tx    = db.transaction(STORE_NAME, 'readwrite')
     const store = tx.objectStore(STORE_NAME)
@@ -48,7 +51,8 @@ async function deleteCapsule(capsuleId) {
 }
 
 async function loadAllFromDB() {
-  const db    = await openDB()
+  const db = await openDB()
+  if (!db) return []
   const tx    = db.transaction(STORE_NAME, 'readonly')
   const store = tx.objectStore(STORE_NAME)
   return new Promise((resolve, reject) => {
