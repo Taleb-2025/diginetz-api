@@ -1,5 +1,7 @@
-export function resolveTheta({ questionType, domain, fieldSignals, artifactType } = {}) {
+export function resolveTheta({ questionType, domain, fieldSignals, artifactType, type } = {}) {
   const fs = String(fieldSignals || '')
+
+  if (type === 'session_summary') return 0
 
   if (questionType === 'checkpoint' || fs.includes('@summary.checkpoint')) return 135
   if (questionType === 'followup'   || fs.includes('@followup.strict'))    return 180
