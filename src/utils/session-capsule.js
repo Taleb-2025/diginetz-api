@@ -63,7 +63,7 @@ export function buildSessionContext(sessionCapsule, history = [], storedFiles = 
     data.goal        ? `goal: ${data.goal}`                                            : null,
     data.lastTopic   ? `lastTopic: ${data.lastTopic}`                                  : null,
     data.lastVersion ? `lastVersion: ${data.lastVersion}`                              : null,
-    data.content     ? `content: ${data.content}`                                      : null,
+    data.content     ? `content: [artifact stored]`                                    : null,
     data.decisions?.length   ? `context: ${data.decisions.slice(-3).join(' | ')}`     : null,
     data.knownErrors?.length ? `errors: ${data.knownErrors.slice(-2).join(' | ')}`    : null,
     data.doNotRepeat?.length ? `avoid: ${data.doNotRepeat.slice(-2).join(' | ')}`     : null,
@@ -84,6 +84,7 @@ export function buildSessionContext(sessionCapsule, history = [], storedFiles = 
 
   return {
     capsuleHint,
+    capsuleContent: data.content ?? null,
     recentHistory,
     filesSummary,
   }
