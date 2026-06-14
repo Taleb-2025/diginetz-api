@@ -603,6 +603,7 @@ router.post('/process-text', async (req, res) => {
         questionType,
         domain: activeDomain,
         title:  questionOnly.slice(0, 60),
+        type:   'session_summary',
       }, { limit: 2 })
       _recalled = _recallResult.results ?? []
     } catch {}
