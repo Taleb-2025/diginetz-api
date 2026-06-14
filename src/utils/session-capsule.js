@@ -7,6 +7,7 @@ function sessionId(sid) {
 }
 
 function mergeSessionData(existing, incoming) {
+  const content   = incoming.content ?? existing.content ?? null
   const decisions = [...new Set([...(existing.decisions ?? []), ...(incoming.decisions ?? [])])].slice(-10)
   while (decisions.join('').length > 4000 && decisions.length > 1) decisions.shift()
   const knownErrors = [...new Set([...(existing.knownErrors ?? []), ...(incoming.knownErrors ?? [])])].slice(-5)
@@ -15,6 +16,7 @@ function mergeSessionData(existing, incoming) {
     goal:         incoming.goal        ?? existing.goal        ?? '',
     lastTopic:    incoming.lastTopic   ?? existing.lastTopic   ?? '',
     lastVersion:  incoming.lastVersion ?? existing.lastVersion ?? null,
+    content,
     decisions,
     knownErrors,
     doNotRepeat,
@@ -58,10 +60,14 @@ export function buildSessionContext(sessionCapsule, history = [], storedFiles = 
   const data = sessionCapsule?.sessionData ?? {}
 
   const capsuleLines = sessionCapsule ? [
-    data.goal        ? `goal: ${data.goal}`                        : null,
-    data.lastTopic   ? `lastTopic: ${data.lastTopic}`              : null,
-    data.lastVersion ? `lastVersion: ${data.lastVersion}`          : null,
-    data.decisions?.length   ? `content: ${data.decisions.slice(-3).join(' | ')}`   : null,
+    data.goal        ? `goal: ${data.goal}`                                            : null,
+    data.lastTopic   ? `lastTopic: ${data.lastTopic}`                                  : null,
+    data.lastVersion ? `lastVersion: ${data.lastVersion}`                              : null,
+    data.content     ? `content: ${data.content}`                                      : null,
+    data.decisions?.length   ? `context: ${data.decisions.slice(-3).join(' | ')}`     : null,
+    data.knownErrors?.length ? `errors: ${data.knownErrors.slice(-2).join(' | ')}`    : null,
+    data.doNotRepeat?.length ? `avoid: ${data.doNotRepeat.slice(-2).join(' | ')}`     : null,
+  ].filter(Boolean) : []
     data.knownErrors?.length ? `errors: ${data.knownErrors.slice(-2).join(' | ')}`  : null,
     data.doNotRepeat?.length ? `avoid: ${data.doNotRepeat.slice(-2).join(' | ')}`   : null,
   ].filter(Boolean) : []
