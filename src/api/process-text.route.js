@@ -509,7 +509,7 @@ router.post('/process-text', async (req, res) => {
     if (codeBlocks.length > 0) {
       storeCodeContext(sid, codeBlocks, tValue, { questionOnly })
       const _storedCtx = (rawCodeStore.get(sid) ?? []).at(-1)
-      if (_storedCtx) registerFile(sid, { name: _storedCtx.name, version: _storedCtx.version, summary: _storedCtx.summary, domain: _storedCtx.domain, symbols: _storedCtx.symbols })
+      if (_storedCtx) try { registerFile(sid, { name: _storedCtx.name, version: _storedCtx.version, summary: _storedCtx.summary, domain: _storedCtx.domain, symbols: _storedCtx.symbols }) } catch {}
       codeSessionStore.set(sid, { active: true, ttl: 6 })
     } else {
       const cs = codeSessionStore.get(sid)
@@ -597,7 +597,7 @@ router.post('/process-text', async (req, res) => {
       _recalled = _recallResult.results ?? []
     } catch {}
     const _sessionCapsule = _memory.field.capsules.get(`session_${sid}`) ?? null
-    const { capsuleHint } = buildSessionContext(_sessionCapsule, history, rawCodeStore.get(sid) ?? [])
+    const { capsuleHint } = buildSessionContext(_sessionCapsule, history, rawCodeStore.get(sid) ?? [], _recalled)
 
     const styleMap  = { concise:'Be concise.', detailed:'Be detailed.', arabic:'Respond in Arabic.', english:'Reply in English.', german:'Antworte auf Deutsch.' }
     const styleHint = activeStyle && styleMap[activeStyle] ? styleMap[activeStyle] : null
@@ -741,7 +741,7 @@ router.post('/process-text', async (req, res) => {
         codeSessionStore.set(sid, { active: true, ttl: 6 })
         const _newCtx = (rawCodeStore.get(sid) ?? []).at(-1)
         if (_newCtx) {
-          registerFile(sid, { name: _newCtx.name, version: _newCtx.version, summary: _newCtx.summary, domain: _newCtx.domain, symbols: _newCtx.symbols })
+          try { registerFile(sid, { name: _newCtx.name, version: _newCtx.version, summary: _newCtx.summary, domain: _newCtx.domain, symbols: _newCtx.symbols }) } catch {}
           console.log(`[${sid.slice(-8)}]   saved:${_newCtx.name} v${_newCtx.version} (parent:v${_newCtx.parentVersion ?? '-'})`)
         }
       }
