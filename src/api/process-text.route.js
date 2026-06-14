@@ -521,6 +521,16 @@ router.post('/process-text', async (req, res) => {
       codeSessionStore.set(sid, { active: true, ttl: 6 })
     }
 
+    const _isVeryLongText = cleanedText.length > 4000 && codeBlocks.length === 0 && !shouldBlockCode
+    const _isLongText     = questionOnly.length > 600  && codeBlocks.length === 0
+
+    if (_isVeryLongText) {
+      storeCodeContext(sid, [cleanedText], tValue, {
+        questionOnly,
+        name: questionOnly.slice(0, 30).replace(/\s+/g, '_') || `artifact_${tValue}`,
+      })
+    }
+
     hasStoredCode = (rawCodeStore.get(sid) ?? []).length > 0
     const hasCode        = codeBlocks.length > 0 || (hasStoredCode && !shouldBlockCode)
     const effectiveMatch = hasCode && !shouldBlockCode ? retrieveRelevantCode(cleanedText, sid, tValue) : null
@@ -752,10 +762,14 @@ router.post('/process-text', async (req, res) => {
         goal:        questionOnly.slice(0, 100),
         lastTopic:   activeDomain,
         lastVersion: _lastCtx?.name ?? null,
-        decisions:   reply && !strategy.wantsReturn
-          ? [`${questionOnly.slice(0, 60)}: ${reply.slice(0, 100)}`]
-          : [],
-        entities:    anchors.filter(a => !a.startsWith('@') && !a.startsWith('#')).slice(0, 5),
+        decisions:   _isVeryLongText
+          ? [`[artifact] ${questionOnly.slice(0, 100)}`]
+          : _isLongText
+            ? [questionOnly.slice(0, 1000)]
+            : reply && !strategy.wantsReturn
+              ? [`${questionOnly.slice(0, 80)}: ${reply.slice(0, 300)}`]
+              : [],
+        entities: anchors.filter(a => !a.startsWith('@') && !a.startsWith('#')).slice(0, 5),
       }, { domain: activeDomain, questionType })
     } catch {}
 
