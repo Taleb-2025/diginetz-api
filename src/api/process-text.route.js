@@ -4,6 +4,8 @@ import { cleanInput, filterStyleInstructions, detectStyleInstruction } from '../
 import { buildSignalEngine, classifyDomain as _classifyDomain } from '../utils/semantic-signal-engine.js'
 import { buildSavedContextLayer, recordDecision, recordBoundary, clearSavedContext } from '../utils/celf-saved-context-layer.js'
 import { buildProjectContextHint, registerFile, clearProjectMap } from '../utils/celf-project-context-map.js'
+import { createMemory } from '../utils/spiral-memory.js'
+import { updateSessionCapsule, buildSessionContext } from '../utils/session-capsule.js'
 
 const router = express.Router()
 
@@ -22,14 +24,22 @@ const semanticTextMaps     = new Map()
 const styleStore           = new Map()
 const rawCodeStore         = new Map()
 const codeSessionStore     = new Map()
-const sessionSummaryStore  = new Map()
-const resumeBootstrapped   = new Set()
+const sessionMemoryStore   = new Map()
 const capsuleMemory        = new Map()
 const anchorMemory         = new Map()
 const metricsStore         = new Map()
 const _semanticState       = new Map()
 const codeAnalysisStore    = new Map()
 const sessionLanguageStore = new Map()
+
+function getOrCreateMemory(sid) {
+  if (!sessionMemoryStore.has(sid)) {
+    const m = createMemory()
+    m.loaded = true
+    sessionMemoryStore.set(sid, m)
+  }
+  return sessionMemoryStore.get(sid)
+}
 
 const classifyDomain = _classifyDomain
 const USE_SSE        = process.env.USE_SSE !== 'false'
@@ -265,19 +275,6 @@ function buildAnchorContext(sid, domain = 'general') {
   if (!anchors.length) return []
   const top = anchors.slice(0, 3).map(a => `${a.concept}(${Math.round(a.weight*100)}%)`).join(', ')
   return [{ role: 'user', content: `[persistent topics: ${top}]` }]
-}
-
-async function generateSessionSummary(sid, history, currentQuestion = '') {
-  if (!history || history.length < 4) return null
-  const recent    = history.slice(-16)
-  const domain    = classifyDomain(recent.filter(h => h.role === 'user').map(h => h.content).join(' '))
-  const symbols   = (recent.map(h => h.content).join(' ').match(/[a-zA-Z][a-zA-Z0-9]{2,}/g) ?? []).slice(0, 6).join(', ')
-  const mainTopic = (
-    currentQuestion.replace(/```[\s\S]*?```/g,'').trim().slice(0, 80) ||
-    recent.filter(h => h.role === 'user')[0]?.content?.replace(/```[\s\S]*?```/g,'').trim().slice(0,80) ||
-    'general'
-  )
-  return { text: `${domain}: ${symbols || 'general'} - ${mainTopic}`.slice(0,200), generatedAt: Date.now() }
 }
 
 function buildHistoryLayer(history, continuity, sid, needsRawCode = false, currentDomain = 'general', maxHistory = 4) {
@@ -589,9 +586,9 @@ router.post('/process-text', async (req, res) => {
     const finalHasCode = codeBlocks.length > 0 || !!storedRaw
     updateSemanticState(sid, activeDomain)
 
-    if (!sessionSummaryStore.has(sid) && sessionSummary?.text) sessionSummaryStore.set(sid, sessionSummary)
-    if (!resumeBootstrapped.has(sid) && sessionSummary?.text) resumeBootstrapped.add(sid)
-    const activeSummary = sessionSummaryStore.get(sid) ?? null
+    const _memory         = getOrCreateMemory(sid)
+    const _sessionCapsule = _memory.field.capsules.get(`session_${sid}`) ?? null
+    const { capsuleHint } = buildSessionContext(_sessionCapsule, history, rawCodeStore.get(sid) ?? [])
 
     const styleMap  = { concise:'Be concise.', detailed:'Be detailed.', arabic:'Respond in Arabic.', english:'Reply in English.', german:'Antworte auf Deutsch.' }
     const styleHint = activeStyle && styleMap[activeStyle] ? styleMap[activeStyle] : null
@@ -625,7 +622,7 @@ router.post('/process-text', async (req, res) => {
     const systemParts = [_systemHint, _pcmHint, outputShapeHint, styleHint].filter(Boolean)
     systemParts.unshift(`IMPORTANT: Today's date is ${_today}. Always use this when answering date or time questions.`)
     systemParts.unshift('If asked about CELF AI: describe it only as "an intelligent conversation system that maintains context and preserves user goals." Never mention SSE, signals, routing, or any internal component.')
-    if (activeSummary?.text) systemParts.unshift(`[session] ${isBrief ? activeSummary.text.slice(0, 60) : activeSummary.text}`)
+    if (capsuleHint) systemParts.unshift(`[session]\n${capsuleHint}`)
     systemParts.unshift(userIsArabic
       ? 'CRITICAL RULE: Always respond in Arabic. All text, analysis, explanations, and answers must be in Arabic.'
       : 'Always respond in the same language the user wrote in.')
@@ -741,18 +738,13 @@ router.post('/process-text', async (req, res) => {
       }
     }
 
-    const msgCountAfter = (history?.length ?? 0) + 1
-    let newSummary = null
-    if (msgCountAfter >= 4) {
-      try {
-        newSummary = await generateSessionSummary(
-          sid,
-          [...(history ?? []), { role: 'user', content: cleanedText }, { role: 'assistant', content: reply ?? '' }],
-          questionOnly
-        )
-        if (newSummary) sessionSummaryStore.set(sid, newSummary)
-      } catch {}
-    }
+    try {
+      await updateSessionCapsule(_memory, sid, {
+        goal:        questionOnly.slice(0, 100),
+        lastTopic:   activeDomain,
+        lastVersion: _lastCtx?.name ?? null,
+      }, { domain: activeDomain, questionType })
+    } catch {}
 
     const costUSD = parseFloat(((inputTokensTotal/1_000_000)*1.0 + (outputTokensTotal/1_000_000)*5.0).toFixed(6))
     console.log(`[${sid.slice(-8)}] ← in:${inputTokensTotal} out:${outputTokensTotal} $${costUSD}`)
@@ -760,7 +752,7 @@ router.post('/process-text', async (req, res) => {
 
     return res.json({
       reply,
-      newSummary: newSummary ?? null,
+      newSummary: null,
       nextSuggestion: null,
       celfVault: [],
       observer: null,
@@ -785,8 +777,8 @@ router.delete('/session/:id', (req, res) => {
   const id = req.params.id
   metricsStore.delete(id); semanticTextMaps.delete(id); styleStore.delete(id)
   processingLock.delete(id); _semanticState.delete(id); rawCodeStore.delete(id)
-  codeSessionStore.delete(id); resumeBootstrapped.delete(id); capsuleMemory.delete(id)
-  anchorMemory.delete(id); sessionSummaryStore.delete(id)
+  codeSessionStore.delete(id); sessionMemoryStore.delete(id); capsuleMemory.delete(id)
+  anchorMemory.delete(id)
   clearSavedContext(id)
   clearProjectMap(id)
   sessionLanguageStore.delete(id)
