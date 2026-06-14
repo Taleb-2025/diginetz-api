@@ -4,7 +4,7 @@ import { cleanInput, filterStyleInstructions, detectStyleInstruction } from '../
 import { buildSignalEngine, classifyDomain as _classifyDomain } from '../utils/semantic-signal-engine.js'
 import { buildSavedContextLayer, recordDecision, recordBoundary, clearSavedContext } from '../utils/celf-saved-context-layer.js'
 import { buildProjectContextHint, registerFile, clearProjectMap } from '../utils/celf-project-context-map.js'
-import { createMemory } from '../utils/spiral-memory.js'
+import { createMemory, recall } from '../utils/spiral-memory.js'
 import { updateSessionCapsule, buildSessionContext } from '../utils/session-capsule.js'
 
 const router = express.Router()
@@ -587,6 +587,15 @@ router.post('/process-text', async (req, res) => {
     updateSemanticState(sid, activeDomain)
 
     const _memory         = getOrCreateMemory(sid)
+    let _recalled = []
+    try {
+      const _recallResult = await recall(_memory, {
+        questionType,
+        domain: activeDomain,
+        title:  questionOnly.slice(0, 60),
+      }, { limit: 2 })
+      _recalled = _recallResult.results ?? []
+    } catch {}
     const _sessionCapsule = _memory.field.capsules.get(`session_${sid}`) ?? null
     const { capsuleHint } = buildSessionContext(_sessionCapsule, history, rawCodeStore.get(sid) ?? [])
 
@@ -743,6 +752,10 @@ router.post('/process-text', async (req, res) => {
         goal:        questionOnly.slice(0, 100),
         lastTopic:   activeDomain,
         lastVersion: _lastCtx?.name ?? null,
+        decisions:   reply && !strategy.wantsReturn
+          ? [`${questionOnly.slice(0, 60)}: ${reply.slice(0, 100)}`]
+          : [],
+        entities:    anchors.filter(a => !a.startsWith('@') && !a.startsWith('#')).slice(0, 5),
       }, { domain: activeDomain, questionType })
     } catch {}
 
