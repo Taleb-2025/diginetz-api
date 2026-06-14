@@ -763,13 +763,12 @@ router.post('/process-text', async (req, res) => {
         goal:        questionOnly.slice(0, 100),
         lastTopic:   activeDomain,
         lastVersion: _lastCtx?.name ?? null,
-        decisions:   _isVeryLongText
-          ? [`[artifact] ${questionOnly.slice(0, 100)}`]
-          : _isLongText
-            ? [questionOnly.slice(0, 1000)]
-            : reply && !strategy.wantsReturn
-              ? [`${questionOnly.slice(0, 80)}: ${reply.slice(0, 300)}`]
-              : [],
+        content:     _isLongText    ? cleanedText.slice(0, 2000) : undefined,
+        decisions:   _isLongText
+          ? []
+          : reply && !strategy.wantsReturn
+            ? [`${questionOnly.slice(0, 80)}: ${reply.slice(0, 300)}`]
+            : [],
         entities: anchors.filter(a => !a.startsWith('@') && !a.startsWith('#')).slice(0, 5),
       }, { domain: activeDomain, questionType })
     } catch {}
