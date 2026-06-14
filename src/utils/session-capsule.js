@@ -37,7 +37,7 @@ export async function updateSessionCapsule(memory, sid, incoming = {}, context =
     sessionData: merged,
     entities,
     signals,
-  }, { ...context, theta: context.theta ?? SESSION_THETA_DEFAULT, isActive: true })
+  }, { ...context, theta: context.theta ?? SESSION_THETA_DEFAULT, isActive: true, type: 'session_summary' })
 }
 
 export async function getSessionCapsule(memory, sid, context = {}) {
@@ -61,7 +61,7 @@ export function buildSessionContext(sessionCapsule, history = [], storedFiles = 
     data.goal        ? `goal: ${data.goal}`                        : null,
     data.lastTopic   ? `lastTopic: ${data.lastTopic}`              : null,
     data.lastVersion ? `lastVersion: ${data.lastVersion}`          : null,
-    data.decisions?.length   ? `decisions: ${data.decisions.slice(-3).join(' | ')}` : null,
+    data.decisions?.length   ? `content: ${data.decisions.slice(-3).join(' | ')}`   : null,
     data.knownErrors?.length ? `errors: ${data.knownErrors.slice(-2).join(' | ')}`  : null,
     data.doNotRepeat?.length ? `avoid: ${data.doNotRepeat.slice(-2).join(' | ')}`   : null,
   ].filter(Boolean) : []
