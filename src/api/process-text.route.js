@@ -608,7 +608,7 @@ router.post('/process-text', async (req, res) => {
       _recalled = _recallResult.results ?? []
     } catch {}
     const _sessionCapsule = _memory.field.capsules.get(`session_${sid}`) ?? null
-    const { capsuleHint } = buildSessionContext(_sessionCapsule, history, rawCodeStore.get(sid) ?? [], _recalled)
+    const { capsuleHint, capsuleContent } = buildSessionContext(_sessionCapsule, history, rawCodeStore.get(sid) ?? [], _recalled)
 
     const styleMap  = { concise:'Be concise.', detailed:'Be detailed.', arabic:'Respond in Arabic.', english:'Reply in English.', german:'Antworte auf Deutsch.' }
     const styleHint = activeStyle && styleMap[activeStyle] ? styleMap[activeStyle] : null
@@ -658,6 +658,7 @@ router.post('/process-text', async (req, res) => {
       : questionText
 
     const messages = [
+      ...(capsuleContent ? [{ role: 'user', content: `[shared content]\n${capsuleContent}` }] : []),
       ...(recCode && !storedRaw ? [{ role: 'user', content: recCode }] : []),
       ...(storedRaw ? [{ role: 'user', content: storedRaw }] : []),
       ...historyMessages,
