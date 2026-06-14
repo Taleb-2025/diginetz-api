@@ -68,9 +68,6 @@ export function buildSessionContext(sessionCapsule, history = [], storedFiles = 
     data.knownErrors?.length ? `errors: ${data.knownErrors.slice(-2).join(' | ')}`    : null,
     data.doNotRepeat?.length ? `avoid: ${data.doNotRepeat.slice(-2).join(' | ')}`     : null,
   ].filter(Boolean) : []
-    data.knownErrors?.length ? `errors: ${data.knownErrors.slice(-2).join(' | ')}`  : null,
-    data.doNotRepeat?.length ? `avoid: ${data.doNotRepeat.slice(-2).join(' | ')}`   : null,
-  ].filter(Boolean) : []
 
   const recalledLines = recalledCapsules
     .filter(c => c.type !== 'session_summary' && c.summary)
