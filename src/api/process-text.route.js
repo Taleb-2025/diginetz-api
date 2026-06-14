@@ -649,7 +649,7 @@ router.post('/process-text', async (req, res) => {
       : 'Always respond in the same language the user wrote in.')
     const systemHint = systemParts.join('\n') || null
 
-    const historyMessages = buildHistoryLayer(history, continuity, sid, false, activeDomain, isBrief ? 2 : 4)
+    const historyMessages = [] // DIAGNOSTIC: history disabled
     const recCode         = !isBrief && typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode
       ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT)
       : null
@@ -773,6 +773,11 @@ router.post('/process-text', async (req, res) => {
             : [],
         entities: anchors.filter(a => !a.startsWith('@') && !a.startsWith('#')).slice(0, 5),
       }, { domain: activeDomain, questionType })
+      const _sc = _memory.field.capsules.get(`session_${sid}`)
+      if (_sc) {
+        const _sd = _sc.sessionData ?? {}
+        console.log(`[${sid.slice(-8)}]   capsule:θ${_sc.theta}° ring${_sc.ring} goal:"${(_sd.goal ?? '').slice(0, 40)}" content:${_sd.content ? _sd.content.length + 'ch' : 'none'} decisions:${(_sd.decisions ?? []).length}`)
+      }
     } catch {}
 
     const costUSD = parseFloat(((inputTokensTotal/1_000_000)*1.0 + (outputTokensTotal/1_000_000)*5.0).toFixed(6))
