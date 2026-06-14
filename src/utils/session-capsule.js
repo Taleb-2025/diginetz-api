@@ -7,7 +7,8 @@ function sessionId(sid) {
 }
 
 function mergeSessionData(existing, incoming) {
-  const decisions   = [...new Set([...(existing.decisions ?? []), ...(incoming.decisions ?? [])])].slice(-10)
+  const decisions = [...new Set([...(existing.decisions ?? []), ...(incoming.decisions ?? [])])].slice(-10)
+  while (decisions.join('').length > 4000 && decisions.length > 1) decisions.shift()
   const knownErrors = [...new Set([...(existing.knownErrors ?? []), ...(incoming.knownErrors ?? [])])].slice(-5)
   const doNotRepeat = [...new Set([...(existing.doNotRepeat ?? []), ...(incoming.doNotRepeat ?? [])])].slice(-5)
   return {
