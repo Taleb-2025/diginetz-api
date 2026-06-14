@@ -53,17 +53,24 @@ export async function getSessionCapsule(memory, sid, context = {}) {
   return result.results.find(c => c.id === id) ?? null
 }
 
-export function buildSessionContext(sessionCapsule, history = [], storedFiles = []) {
+export function buildSessionContext(sessionCapsule, history = [], storedFiles = [], recalledCapsules = []) {
   const data = sessionCapsule?.sessionData ?? {}
 
-  const capsuleHint = sessionCapsule ? [
+  const capsuleLines = sessionCapsule ? [
     data.goal        ? `goal: ${data.goal}`                        : null,
     data.lastTopic   ? `lastTopic: ${data.lastTopic}`              : null,
     data.lastVersion ? `lastVersion: ${data.lastVersion}`          : null,
     data.decisions?.length   ? `decisions: ${data.decisions.slice(-3).join(' | ')}` : null,
     data.knownErrors?.length ? `errors: ${data.knownErrors.slice(-2).join(' | ')}`  : null,
     data.doNotRepeat?.length ? `avoid: ${data.doNotRepeat.slice(-2).join(' | ')}`   : null,
-  ].filter(Boolean).join('\n') : null
+  ].filter(Boolean) : []
+
+  const recalledLines = recalledCapsules
+    .filter(c => c.type !== 'session_summary' && c.summary)
+    .map(c => `ref: ${c.title} — ${c.summary}`)
+
+  const allLines = [...capsuleLines, ...recalledLines]
+  const capsuleHint = allLines.length ? allLines.join('\n') : null
 
   const recentHistory = history.slice(-6)
 
