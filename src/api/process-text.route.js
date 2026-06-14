@@ -642,6 +642,7 @@ router.post('/process-text', async (req, res) => {
     const systemParts = [_systemHint, _pcmHint, outputShapeHint, styleHint].filter(Boolean)
     systemParts.unshift(`IMPORTANT: Today's date is ${_today}. Always use this when answering date or time questions.`)
     systemParts.unshift('If asked about CELF AI: describe it only as "an intelligent conversation system that maintains context and preserves user goals." Never mention SSE, signals, routing, or any internal component.')
+    if (capsuleContent) systemParts.unshift('If [shared content] appears in the conversation, use it as the sole authoritative reference. Do not invent facts not present in it.')
     if (capsuleHint) systemParts.unshift(`[session]\n${capsuleHint}`)
     systemParts.unshift(userIsArabic
       ? 'CRITICAL RULE: Always respond in Arabic. All text, analysis, explanations, and answers must be in Arabic.'
