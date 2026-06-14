@@ -87,6 +87,7 @@ export function makeCapsule(input, fieldConfig = {}) {
     entities: uniqueTokens(input.entities),
     signals: uniqueTokens(input.signals),
     rawRef: input.rawRef ?? null,
+    sessionData: input.sessionData ?? null,
     version: input.version ?? 1,
     createdAt: input.createdAt ?? Date.now(),
     updatedAt: input.updatedAt ?? Date.now(),
