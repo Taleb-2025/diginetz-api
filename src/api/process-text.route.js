@@ -522,7 +522,7 @@ router.post('/process-text', async (req, res) => {
     }
 
     const _isVeryLongText = cleanedText.length > 4000 && codeBlocks.length === 0 && !shouldBlockCode
-    const _isLongText     = questionOnly.length > 600  && codeBlocks.length === 0
+    const _isLongText     = cleanedText.length > 600  && codeBlocks.length === 0
 
     if (_isVeryLongText) {
       storeCodeContext(sid, [cleanedText], tValue, {
@@ -762,7 +762,7 @@ router.post('/process-text', async (req, res) => {
 
     try {
       await updateSessionCapsule(_memory, sid, {
-        goal:        questionOnly.slice(0, 100),
+        goal:        (questionOnly || cleanedText).slice(0, 100),
         lastTopic:   activeDomain,
         lastVersion: _lastCtx?.name ?? null,
         content:     _isLongText    ? cleanedText.slice(0, 2000) : undefined,
