@@ -578,7 +578,7 @@ router.post('/process-text', async (req, res) => {
             questionType:        'general',
           }
 
-    const needsWebSearch = (fieldSignals?.includes('@tool.web_required') ?? false) && !capsuleContent
+    const needsWebSearch = fieldSignals?.includes('@tool.web_required') ?? false
     const strategy       = resolveCodeStrategy(fieldSignals)
     const isBrief        = outputShape === 'brief'
 
@@ -614,6 +614,9 @@ router.post('/process-text', async (req, res) => {
     if (capsuleContent && activeDomain === 'sports') {
       updateSemanticState(sid, 'creative')
     }
+
+    // إذا capsuleContent موجود → لا حاجة لـ web search
+    const _needsWebSearch = needsWebSearch && !capsuleContent
 
     const styleMap  = { concise:'Be concise.', detailed:'Be detailed.', arabic:'Respond in Arabic.', english:'Reply in English.', german:'Antworte auf Deutsch.' }
     const styleHint = activeStyle && styleMap[activeStyle] ? styleMap[activeStyle] : null
@@ -676,7 +679,7 @@ router.post('/process-text', async (req, res) => {
       { role: 'user', content: userContent }
     ]
 
-    if (needsWebSearch) {
+    if (_needsWebSearch) {
       const webResults = await fetchWebResults(questionOnly)
       if (webResults) {
         messages.splice(messages.length - 1, 0, {
@@ -701,7 +704,7 @@ router.post('/process-text', async (req, res) => {
 
     const _sl          = strategy.needsRaw ? 'raw' : strategy.needsSummary ? 'sum' : 'none'
     const _hintPreview = _systemHint?.split('\n').filter(l => l.startsWith('[')).join(' | ').slice(0, 120) ?? '-'
-    console.log(`[${sid.slice(-8)}] → shape:${outputShape} st:${_sl} max:${maxTokens} dom:${activeDomain} type:${questionType ?? '-'}${needsWebSearch ? ' 🌐web' : ''}${!USE_SSE ? ' ⚡NO-SSE' : ''}`)
+    console.log(`[${sid.slice(-8)}] → shape:${outputShape} st:${_sl} max:${maxTokens} dom:${activeDomain} type:${questionType ?? '-'}${_needsWebSearch ? ' 🌐web' : ''}${!USE_SSE ? ' ⚡NO-SSE' : ''}`)
     console.log(`[${sid.slice(-8)}]   field:${fieldSignals ?? '-'}`)
     console.log(`[${sid.slice(-8)}]   llm:${llmSignals ?? '-'}`)
     console.log(`[${sid.slice(-8)}]   hint:${_hintPreview}`)
