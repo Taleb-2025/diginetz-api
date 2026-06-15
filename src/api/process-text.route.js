@@ -488,7 +488,7 @@ router.post('/process-text', async (req, res) => {
     const _detectedDomain = classifyDomain(questionOnly) !== 'general'
       ? classifyDomain(questionOnly)
       : classifyDomain(cleanedText)
-    const activeDomain = _detectedDomain !== 'general'
+    let activeDomain = _detectedDomain !== 'general'
       ? _detectedDomain
       : (getSemanticState(sid).dominantDomain ?? 'general')
 
@@ -610,8 +610,9 @@ router.post('/process-text', async (req, res) => {
     const _sessionCapsule = _memory.field.capsules.get(`session_${sid}`) ?? null
     const { capsuleHint, capsuleContent } = buildSessionContext(_sessionCapsule, history, rawCodeStore.get(sid) ?? [], _recalled)
 
-    // إذا capsuleContent موجود (قصة/نص) و domain انجرف لـ sports → أعِد creative
+    // إذا capsuleContent موجود و domain انجرف لـ sports → صحّح فوراً
     if (capsuleContent && activeDomain === 'sports') {
+      activeDomain = 'creative'
       updateSemanticState(sid, 'creative')
     }
 
@@ -779,7 +780,7 @@ router.post('/process-text', async (req, res) => {
         lastTopic:   activeDomain,
         lastVersion: _lastCtx?.name ?? null,
         content:     _isLongText    ? cleanedText.slice(0, 2000) : undefined,
-        decisions:   _isLongText
+        decisions:   _isLongText || questionType === 'creative_write'
           ? []
           : reply && !strategy.wantsReturn
             ? [`${questionOnly.slice(0, 80)}: ${reply.slice(0, 300)}`]
