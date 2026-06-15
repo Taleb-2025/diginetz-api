@@ -668,6 +668,7 @@ router.post('/process-text', async (req, res) => {
       : questionText
 
     const shouldInjectCapsule = capsuleContent && (
+      activeDomain === 'creative' ||
       questionType !== 'followup' ||
       historyMessages.length === 0
     )
