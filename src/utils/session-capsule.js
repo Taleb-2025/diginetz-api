@@ -58,15 +58,16 @@ export async function getSessionCapsule(memory, sid, context = {}) {
 
 export function buildSessionContext(sessionCapsule, history = [], storedFiles = [], recalledCapsules = []) {
   const data = sessionCapsule?.sessionData ?? {}
+  const hasRecentHistory = history.length >= 2
 
   const capsuleLines = sessionCapsule ? [
-    data.goal        ? `goal: ${data.goal}`                                            : null,
-    data.lastTopic   ? `lastTopic: ${data.lastTopic}`                                  : null,
-    data.lastVersion ? `lastVersion: ${data.lastVersion}`                              : null,
-    data.content     ? `content: [artifact stored]`                                    : null,
-    data.decisions?.length   ? `context: ${data.decisions.slice(-3).join(' | ')}`     : null,
-    data.knownErrors?.length ? `errors: ${data.knownErrors.slice(-2).join(' | ')}`    : null,
-    data.doNotRepeat?.length ? `avoid: ${data.doNotRepeat.slice(-2).join(' | ')}`     : null,
+    data.goal        ? `goal: ${data.goal}`                                                              : null,
+    data.lastTopic   ? `lastTopic: ${data.lastTopic}`                                                    : null,
+    data.lastVersion ? `lastVersion: ${data.lastVersion}`                                                : null,
+    data.content     ? `content: [artifact stored]`                                                      : null,
+    !hasRecentHistory && data.decisions?.length ? `context: ${data.decisions.slice(-3).join(' | ')}` : null,
+    data.knownErrors?.length ? `errors: ${data.knownErrors.slice(-2).join(' | ')}`                   : null,
+    data.doNotRepeat?.length ? `avoid: ${data.doNotRepeat.slice(-2).join(' | ')}`                    : null,
   ].filter(Boolean) : []
 
   const recalledLines = recalledCapsules
