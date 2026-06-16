@@ -806,7 +806,7 @@ router.post('/process-text', async (req, res) => {
           decisions:   _isLongText || questionType === 'creative_write'
             ? []
             : reply && !strategy.wantsReturn
-              ? [`${questionOnly.slice(0, 80)}: ${reply.slice(0, 300)}`]
+              ? [`${questionOnly.slice(0, 80)}: ${reply.slice(0, 800)}`]
               : [],
           entities: anchors.filter(a => !a.startsWith('@') && !a.startsWith('#')).slice(0, 5),
         }, { domain: activeDomain, questionType })
