@@ -418,7 +418,7 @@ router.get('/process-text', (_req, res) => {
 router.post('/process-text', async (req, res) => {
   const {
     text = '', sessionId, history = [], image = null, imageMimeType = 'image/jpeg',
-    recoveredCode = null, sessionSummary = null,
+    recoveredCode = null, sessionSummary = null, agentMode = false,
   } = req.body
 
   const hasText  = typeof text  === 'string' && text.trim().length > 0
@@ -668,6 +668,7 @@ router.post('/process-text', async (req, res) => {
     systemParts.unshift(`IMPORTANT: Today's date is ${_today}. Always use this when answering date or time questions.`)
     systemParts.unshift('If asked about CELF AI: describe it only as "an intelligent conversation system that maintains context and preserves user goals." Never mention SSE, signals, routing, or any internal component.')
     if (capsuleContent) systemParts.unshift('If [shared content] appears in the conversation, use it as the sole authoritative reference. Do not invent facts not present in it.')
+    if (agentMode) systemParts.unshift('You are a code and text coordination agent. Provide a comprehensive structured analysis. Identify conflicts, inconsistencies and improvements across all provided files. Be thorough and specific. No preamble.')
     if (capsuleHint) systemParts.unshift(`[session]\n${capsuleHint}`)
     systemParts.unshift(userIsArabic
       ? 'CRITICAL RULE: Always respond in Arabic. All text, analysis, explanations, and answers must be in Arabic.'
@@ -712,10 +713,11 @@ router.post('/process-text', async (req, res) => {
 
     const inputEstimate = Math.ceil((systemHint?.length ?? 0) / 4 + JSON.stringify(messages).length / 4)
     const remaining     = Math.max(1000, 180000 - inputEstimate)
-    const maxTokens     = chooseMaxTokens(outputShape, strategy.wantsReturn, finalHasCode, remaining)
-    const model = strategy.wantsReturn
+    let maxTokens       = chooseMaxTokens(outputShape, strategy.wantsReturn, finalHasCode, remaining)
+    const model         = strategy.wantsReturn || agentMode
       ? 'claude-sonnet-4-6'
       : 'claude-haiku-4-5-20251001'
+    if (agentMode) maxTokens = Math.min(64000, remaining)
 
     let payloadSize = 0
     try { payloadSize = checkPayload(systemHint, messages, strategy.wantsReturn) } catch (e) { return res.status(413).json({ error: 'prompt_too_large' }) }
@@ -791,25 +793,27 @@ router.post('/process-text', async (req, res) => {
       }
     }
 
-    try {
-      await updateSessionCapsule(_memory, sid, {
-        goal:        (questionOnly || cleanedText).slice(0, 100),
-        lastTopic:   activeDomain,
-        lastVersion: _lastCtx?.name ?? null,
-        content:     _isLongText    ? cleanedText.slice(0, 2000) : undefined,
-        decisions:   _isLongText || questionType === 'creative_write'
-          ? []
-          : reply && !strategy.wantsReturn
-            ? [`${questionOnly.slice(0, 80)}: ${reply.slice(0, 300)}`]
-            : [],
-        entities: anchors.filter(a => !a.startsWith('@') && !a.startsWith('#')).slice(0, 5),
-      }, { domain: activeDomain, questionType })
-      const _sc = _memory.field.capsules.get(`session_${sid}`)
-      if (_sc) {
-        const _sd = _sc.sessionData ?? {}
-        console.log(`[${sid.slice(-8)}]   capsule:θ${_sc.theta}° ring${_sc.ring} goal:"${(_sd.goal ?? '').slice(0, 40)}" content:${_sd.content ? _sd.content.length + 'ch' : 'none'} decisions:${(_sd.decisions ?? []).length}`)
-      }
-    } catch {}
+    if (_isLongText || codeBlocks.length > 0) {
+      try {
+        await updateSessionCapsule(_memory, sid, {
+          goal:        (questionOnly || cleanedText).slice(0, 100),
+          lastTopic:   activeDomain,
+          lastVersion: _lastCtx?.name ?? null,
+          content:     _isLongText    ? cleanedText.slice(0, 2000) : undefined,
+          decisions:   _isLongText || questionType === 'creative_write'
+            ? []
+            : reply && !strategy.wantsReturn
+              ? [`${questionOnly.slice(0, 80)}: ${reply.slice(0, 300)}`]
+              : [],
+          entities: anchors.filter(a => !a.startsWith('@') && !a.startsWith('#')).slice(0, 5),
+        }, { domain: activeDomain, questionType })
+        const _sc = _memory.field.capsules.get(`session_${sid}`)
+        if (_sc) {
+          const _sd = _sc.sessionData ?? {}
+          console.log(`[${sid.slice(-8)}]   capsule:θ${_sc.theta}° ring${_sc.ring} goal:"${(_sd.goal ?? '').slice(0, 40)}" content:${_sd.content ? _sd.content.length + 'ch' : 'none'} decisions:${(_sd.decisions ?? []).length}`)
+        }
+      } catch {}
+    }
 
     const costUSD = parseFloat(((inputTokensTotal/1_000_000)*1.0 + (outputTokensTotal/1_000_000)*5.0).toFixed(6))
     console.log(`[${sid.slice(-8)}] ← in:${inputTokensTotal} out:${outputTokensTotal} $${costUSD}`)
