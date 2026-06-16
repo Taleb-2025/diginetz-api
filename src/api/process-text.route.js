@@ -450,12 +450,14 @@ router.post('/process-text', async (req, res) => {
 
     const questionOnly = cleanedText
       .replace(/```[\s\S]*?```/g, '')
+      .replace(/<[^>]{0,200}>/g, ' ')
       .split('\n')
       .filter(line => {
         const l = line.trim()
         if (!l) return false
         if (/^\s*(import|export|const|let|var|function|class|async|return|if|for|while|try|catch)/i.test(l)) return false
         if (/[{};]/.test(l) && l.length > 30) return false
+        if (/^<[a-zA-Z]/.test(l)) return false
         return true
       })
       .join(' ')
@@ -537,7 +539,8 @@ router.post('/process-text', async (req, res) => {
     const shouldAttachStoredCode =
       hasStoredCode && !shouldBlockCode &&
       (codeBlocks.length > 0 || codeRelated || explainCodeRelated || refRelated ||
-       hasCodeAnchor || codeSessionActive || (continuity > 0.20 && hasStoredCode))
+       hasCodeAnchor || codeSessionActive || (continuity > 0.20 && hasStoredCode) ||
+       questionType === 'followup')
 
     const _lastCtx    = (rawCodeStore.get(sid) ?? []).at(-1)
     const codeSummary = _lastCtx
