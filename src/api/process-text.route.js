@@ -2,7 +2,6 @@ import express from 'express'
 import { resolveConceptAnchors } from '../utils/concept-anchor.js'
 import { cleanInput, filterStyleInstructions, detectStyleInstruction } from '../utils/context-builder.js'
 import { buildSignalEngine, classifyDomain as _classifyDomain } from '../utils/semantic-signal-engine.js'
-import { buildSavedContextLayer, recordDecision, recordBoundary, clearSavedContext } from '../utils/celf-saved-context-layer.js'
 import { buildProjectContextHint, registerFile, clearProjectMap } from '../utils/celf-project-context-map.js'
 import { createMemory, recall } from '../utils/spiral-memory.js'
 import { updateSessionCapsule, buildSessionContext } from '../utils/session-capsule.js'
@@ -596,7 +595,25 @@ router.post('/process-text', async (req, res) => {
     const finalHasCode = codeBlocks.length > 0 || !!storedRaw
     updateSemanticState(sid, activeDomain)
 
-    const _memory         = getOrCreateMemory(sid)
+    const _memory = getOrCreateMemory(sid)
+
+    // استرجع الكبسولة من Client إذا أرسلها (cross-session persistence)
+    if (sessionSummary && !_memory.field.capsules.has(`session_${sid}`)) {
+      try {
+        const { remember: _remember } = await import('../utils/spiral-memory.js')
+        await _remember(_memory, {
+          id:          `session_${sid}`,
+          type:        'session_summary',
+          title:       sessionSummary.lastTopic || sessionSummary.goal || sid,
+          summary:     sessionSummary.goal ?? '',
+          sessionData: sessionSummary,
+          entities:    [],
+          signals:     [],
+        }, { theta: 0, isActive: true, type: 'session_summary' })
+        console.log(`[${sid.slice(-8)}]   capsule:restored from client goal:"${(sessionSummary.goal ?? '').slice(0, 40)}"`)
+      } catch {}
+    }
+
     let _recalled = []
     try {
       const _recallResult = await recall(_memory, {
@@ -799,12 +816,14 @@ router.post('/process-text', async (req, res) => {
     console.log(`[${sid.slice(-8)}] ← in:${inputTokensTotal} out:${outputTokensTotal} $${costUSD}`)
     metricsStore.set(sid, { sessionId: sid, inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, costUSD, maxTokens, payloadSize, updatedAt: new Date().toISOString() })
 
+    const _newSummary = _memory.field.capsules.get(`session_${sid}`)?.sessionData ?? null
+
     return res.json({
       reply,
-      newSummary: null,
+      newSummary:     _newSummary,
       nextSuggestion: null,
-      celfVault: [],
-      observer: null,
+      celfVault:      [],
+      observer:       null,
       metrics: { inputTokens: inputTokensTotal, outputTokens: outputTokensTotal, costUSD, maxTokens, model, payloadSize }
     })
 
@@ -828,7 +847,6 @@ router.delete('/session/:id', (req, res) => {
   processingLock.delete(id); _semanticState.delete(id); rawCodeStore.delete(id)
   codeSessionStore.delete(id); sessionMemoryStore.delete(id); capsuleMemory.delete(id)
   anchorMemory.delete(id)
-  clearSavedContext(id)
   clearProjectMap(id)
   sessionLanguageStore.delete(id)
   for (const [k] of codeAnalysisStore) { if (k.startsWith(`${id}:`)) codeAnalysisStore.delete(k) }
