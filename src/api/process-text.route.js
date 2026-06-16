@@ -3,7 +3,7 @@ import { resolveConceptAnchors } from '../utils/concept-anchor.js'
 import { cleanInput, filterStyleInstructions, detectStyleInstruction } from '../utils/context-builder.js'
 import { buildSignalEngine, classifyDomain as _classifyDomain } from '../utils/semantic-signal-engine.js'
 import { buildProjectContextHint, registerFile, clearProjectMap } from '../utils/celf-project-context-map.js'
-import { createMemory, recall } from '../utils/spiral-memory.js'
+import { createMemory, recall, remember } from '../utils/spiral-memory.js'
 import { updateSessionCapsule, buildSessionContext } from '../utils/session-capsule.js'
 
 const router = express.Router()
@@ -600,8 +600,7 @@ router.post('/process-text', async (req, res) => {
     // استرجع الكبسولة من Client إذا أرسلها (cross-session persistence)
     if (sessionSummary && !_memory.field.capsules.has(`session_${sid}`)) {
       try {
-        const { remember: _remember } = await import('../utils/spiral-memory.js')
-        await _remember(_memory, {
+        await remember(_memory, {
           id:          `session_${sid}`,
           type:        'session_summary',
           title:       sessionSummary.lastTopic || sessionSummary.goal || sid,
