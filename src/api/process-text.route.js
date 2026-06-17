@@ -827,6 +827,7 @@ router.post('/process-text', async (req, res) => {
 
     return res.json({
       reply,
+      codeModified:   shouldSaveNewVersion,
       newSummary:     _newSummary,
       nextSuggestion: null,
       celfVault:      [],
