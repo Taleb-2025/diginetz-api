@@ -800,7 +800,7 @@ router.post('/process-text', async (req, res) => {
     if (_isLongText || codeBlocks.length > 0) {
       try {
         await updateSessionCapsule(_memory, sid, {
-          goal:        (questionOnly || cleanedText).slice(0, 100),
+          goal:        (questionOnly || cleanedText.replace(/<[^>]{0,200}>/g,' ').replace(/\s+/g,' ').trim()).slice(0, 100),
           lastTopic:   activeDomain,
           lastVersion: _lastCtx?.name ?? null,
           content:     _isLongText    ? cleanedText.slice(0, 6000) : undefined,
