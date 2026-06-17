@@ -690,7 +690,8 @@ router.post('/process-text', async (req, res) => {
     const shouldInjectCapsule = capsuleContent && (
       activeDomain === 'creative' ||
       questionType !== 'followup' ||
-      historyMessages.length === 0
+      historyMessages.length === 0 ||
+      capsuleContent.length > 500
     )
 
     const messages = [
@@ -802,7 +803,7 @@ router.post('/process-text', async (req, res) => {
           goal:        (questionOnly || cleanedText).slice(0, 100),
           lastTopic:   activeDomain,
           lastVersion: _lastCtx?.name ?? null,
-          content:     _isLongText    ? cleanedText.slice(0, 2000) : undefined,
+          content:     _isLongText    ? cleanedText.slice(0, 6000) : undefined,
           decisions:   _isLongText || questionType === 'creative_write'
             ? []
             : reply && !strategy.wantsReturn
