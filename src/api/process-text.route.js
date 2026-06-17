@@ -5,6 +5,7 @@ import { buildSignalEngine, classifyDomain as _classifyDomain } from '../utils/s
 import { buildProjectContextHint, registerFile, clearProjectMap } from '../utils/celf-project-context-map.js'
 import { createMemory, recall, remember } from '../utils/spiral-memory.js'
 import { updateSessionCapsule, buildSessionContext } from '../utils/session-capsule.js'
+import { detectAgentType, buildAgentSystem, buildAgentPrompt, parseAgentResponse, buildAgentMetrics } from '../utils/agent.js'
 
 const router = express.Router()
 
@@ -722,6 +723,43 @@ router.post('/process-text', async (req, res) => {
       ? 'claude-sonnet-4-6'
       : 'claude-haiku-4-5-20251001'
     if (agentMode) maxTokens = Math.min(64000, remaining)
+
+    const _agentType = agentMode ? detectAgentType(cleanedText) : null
+
+    if (_agentType) {
+      const _agentSystem = buildAgentSystem(_agentType)
+      const _agentPrompt = buildAgentPrompt(_agentType, cleanedText)
+      const _agentBody   = buildClaudeBody(model, maxTokens, _agentSystem, [
+        { role: 'user', content: _agentPrompt }
+      ])
+      let _agentData, _agentReply = null
+      let _agentIn = 0, _agentOut = 0
+      try {
+        const _agentRes  = await fetchClaude(_agentBody)
+        _agentData       = await _agentRes.json()
+        _agentReply      = _agentData?.content?.filter(c => c.type === 'text').map(c => c.text).join('\n').trim() || null
+        _agentIn         = _agentData?.usage?.input_tokens  ?? 0
+        _agentOut        = _agentData?.usage?.output_tokens ?? 0
+      } catch (err) {
+        if (err.name === 'AbortError') return res.status(504).json({ error: 'claude_timeout' })
+        throw err
+      }
+      const _agentParsed  = _agentReply ? parseAgentResponse(_agentReply, _agentType) : null
+      const _agentMetrics = buildAgentMetrics(_agentType, _agentIn, _agentOut)
+      console.log(`[${sid.slice(-8)}] 🤖 agent:${_agentType} in:${_agentIn} out:${_agentOut} $${_agentMetrics.costUSD} files:${_agentParsed?.fixedFiles?.length ?? 0}`)
+      processingLock.delete(sid)
+      return res.json({
+        reply:        _agentReply,
+        codeModified: (_agentParsed?.hasCode ?? false),
+        agentType:    _agentType,
+        agentResult:  _agentParsed,
+        newSummary:   null,
+        nextSuggestion: null,
+        celfVault:    [],
+        observer:     null,
+        metrics:      { ..._agentMetrics, payloadSize: 0 },
+      })
+    }
 
     let payloadSize = 0
     try { payloadSize = checkPayload(systemHint, messages, strategy.wantsReturn) } catch (e) { return res.status(413).json({ error: 'prompt_too_large' }) }
