@@ -10,7 +10,7 @@ export function classifyDomain(text) {
   if (/algorithm|sort|search|graph|tree|dynamic|recursion/i.test(t))                       return 'algorithms'
   if (/test|jest|mocha|cypress|spec|unit|mock|coverage/i.test(t))                          return 'testing'
   if (/const|let|var|function|class|import|export|async/.test(t) && t.length > 30)         return 'code'
-  if (/كرة|رياضة|مباراة|دوري|لاعب|فريق|بطولة|هدف|سلة|تنس|سباق|ملاكمة|كأس|منتخب|نادي|اتحاد|football|soccer|basketball|tennis|sport|match|league|player|team|champion|goal|score|racing|boxing|cup|tournament|club|championship|federation|national.team/i.test(t)) return 'sports'
+  if (/كرة|رياضة|مباراة|دوري|لاعب|فريق|بطولة|هدف.*كرة|سلة|تنس|سباق|ملاكمة|كأس|منتخب|اتحاد.*رياضي|football|soccer|basketball|tennis|sport|match|league|player|team|champion|goal|score|racing|boxing|cup|tournament|championship|federation|national.team/i.test(t)) return 'sports'
   if (/قصة|حكاية|رواية|\bstory\b|\bfiction\b|اكتب.*قصة|قصة قصيرة|مشهد|سيناريو|write.*story|short story|scene|script|شخصية.*قصة|بطل.*قصة|راوي|مغامرة.*قصة|\bcharacter\b|\bhero\b|\bnarrator\b|adventure.*story|\btale\b/i.test(t)) return 'creative'
   if (/فيزياء|physics|كيمياء|chemistry|بيولوجيا|biology|كوانتم|quantum|ذرة|atom|موجة|wave|تشابك|entanglement|نسبية|relativity|ميكانيكا|mechanics|طاقة|energy|جسيم|particle|نووي|nuclear/i.test(t)) return 'science'
   if (/رياضيات|math|جبر|algebra|هندسة|geometry|إحصاء|statistics|حساب|calculus|مبرهنة|theorem|معادلة|equation|تفاضل|differential|تكامل|integral/i.test(t)) return 'math'
@@ -23,6 +23,10 @@ export function buildSemanticPattern(anchors, fieldSignals = '') {
   const fs = String(fieldSignals || '')
   if (!anchors?.length && !fs) return null
   const has = a => (anchors ?? []).includes(a)
+  if (fs.includes('@agent.timeline_compare'))
+    return '[pattern: agent_timeline] [step: compare_versions → identify_improvements → merge_best]'
+  if (fs.includes('@agent.project_coordinate'))
+    return '[pattern: agent_project] [step: trace_dependencies → find_conflicts → fix_all_files]'
   if (fs.includes('@creative.write'))
     return '[pattern: creative_write] [step: draft → refine → final_story]'
   if (has('@repair_intent') && has('@failure') && has('@identity_layer'))
@@ -162,6 +166,10 @@ export function compactSignalsForLLM(fieldSignals = '') {
 export function buildCompactRuntimeRule(llmSignals = '') {
   const fs = String(llmSignals || '')
   const rules = []
+  if (fs.includes('@agent.timeline_compare'))
+    rules.push('@agent.timeline_compare = compare all provided versions chronologically; identify what improved and what was lost in each version; produce the best merged version with complete code; no truncation.')
+  if (fs.includes('@agent.project_coordinate'))
+    rules.push('@agent.project_coordinate = trace all cross-file dependencies; find all conflicts including undefined refs, wrong imports, naming issues, breaking changes; fix each file to work correctly with all others; return each fixed file completely; no truncation.')
   if (fs.includes('@execute.strict'))
     rules.push('@execute.strict = execute active CELF signals as hard constraints and check compliance before answering.')
   if (fs.includes('@accuracy.strict'))
@@ -215,6 +223,12 @@ export function buildDirectives(anchors, userIsArabic, fieldSignals, questionOnl
 export function classifyQuestionType(q, hasStoredCode = false, continuity = 0, hasCodeBlocks = false) {
   if (!q) return 'general'
   const t = q.toLowerCase()
+
+  if (/compare these versions.*what changed|what improved.*what was lost/i.test(t))
+    return 'agent_timeline'
+
+  if (/analyze consistency.*conflicts|find conflicts between files|undefined references.*wrong imports/i.test(t))
+    return 'agent_project'
 
   if (/checkpoint|وين وصلنا|ما الذي تغير|ملخص.*قرار|what changed|status.*session/i.test(t))
     return 'checkpoint'
@@ -408,6 +422,45 @@ const SIGNAL_SETS = {
       'Write with narrative structure, voice, and creative intent.',
       'Do not summarize, explain, or add meta-commentary.',
       'Stay within the requested scene, genre, and tone.',
+    ],
+  },
+  agent_timeline: {
+    base: [
+      '@execute.strict',
+      '@goal.preserve',
+      '@agent.timeline_compare',
+      '@input.raw_required',
+      '#code_full',
+      '@output.full_return',
+      '@accuracy.strict',
+      '@output.validate',
+    ],
+    constraints: [
+      'Compare all provided versions chronologically.',
+      'Identify what improved and what was lost in each version.',
+      'Produce the best merged version — complete code, no truncation.',
+      'Return format: ## Analysis\n## Changes\n## Fixed Code',
+      'Wrap code in fenced blocks with language tag.',
+    ],
+  },
+  agent_project: {
+    base: [
+      '@execute.strict',
+      '@goal.preserve',
+      '@agent.project_coordinate',
+      '@dependency.trace',
+      '@input.raw_required',
+      '#code_full',
+      '@output.full_return',
+      '@accuracy.strict',
+      '@output.validate',
+    ],
+    constraints: [
+      'Find all conflicts: undefined refs, wrong imports, naming issues, breaking changes.',
+      'Fix each file to work correctly with all others.',
+      'Return each fixed file completely — no truncation.',
+      'Return format: ## Conflicts Found\n## Fixed Files (each file separately)',
+      'Wrap each file in fenced blocks with language tag and filename.',
     ],
   },
   general: {
