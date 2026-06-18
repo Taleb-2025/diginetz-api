@@ -50,6 +50,16 @@ const CODE_DOMAINS = new Set([
 ])
 const isCodeLike = (domain) => CODE_DOMAINS.has(domain)
 
+function resolveActiveDomain({ detectedDomain, isFollowup, sessionCapsuleDomain, fallbackDomain = 'general' }) {
+  const detected = detectedDomain || 'general'
+  const capsuleDomain = sessionCapsuleDomain || null
+  if (isFollowup && capsuleDomain && detected === 'general') return capsuleDomain
+  if (isFollowup && capsuleDomain === 'creative' && ['sports', 'general', 'humanities'].includes(detected)) return 'creative'
+  if (isFollowup && capsuleDomain && ['general', 'conceptual'].includes(detected)) return capsuleDomain
+  if (detected !== 'general') return detected
+  return capsuleDomain || fallbackDomain || 'general'
+}
+
 const CELF_DEFINITION =
   'CELF AI is an intelligent conversation system ' +
   'that maintains context, preserves your goals, ' +
@@ -502,9 +512,34 @@ router.post('/process-text', async (req, res) => {
     const _detectedDomain = classifyDomain(questionOnly) !== 'general'
       ? classifyDomain(questionOnly)
       : classifyDomain(cleanedText)
-    let activeDomain = _detectedDomain !== 'general'
-      ? _detectedDomain
-      : (getSemanticState(sid).dominantDomain ?? 'general')
+
+    // Lightweight capsule peek — only what's needed to resolve domain inheritance.
+    // The full buildSessionContext() call (history/recall-based) still happens later, unchanged.
+    const _memory = getOrCreateMemory(sid)
+    if (sessionSummary && !_memory.field.capsules.has(`session_${sid}`)) {
+      try {
+        await remember(_memory, {
+          id:          `session_${sid}`,
+          type:        'session_summary',
+          title:       sessionSummary.lastTopic || sessionSummary.goal || sid,
+          summary:     sessionSummary.goal ?? '',
+          sessionData: sessionSummary,
+          entities:    [],
+          signals:     [],
+        }, { theta: 0, isActive: true, type: 'session_summary' })
+        console.log(`[${sid.slice(-8)}]   capsule:restored from client goal:"${(sessionSummary.goal ?? '').slice(0, 40)}"`)
+      } catch {}
+    }
+    const _sessionCapsulePeek    = _memory.field.capsules.get(`session_${sid}`) ?? null
+    const _sessionCapsuleDomain  = _sessionCapsulePeek?.sessionData?.lastTopic ?? null
+    const _isFollowupEarly       = continuity > 0.20
+
+    let activeDomain = resolveActiveDomain({
+      detectedDomain:       _detectedDomain,
+      isFollowup:           _isFollowupEarly,
+      sessionCapsuleDomain: _sessionCapsuleDomain,
+      fallbackDomain:       getSemanticState(sid).dominantDomain ?? 'general',
+    })
 
     const HARD_BLOCK_DOMAINS = new Set(['science','math','humanities'])
 
@@ -615,24 +650,6 @@ router.post('/process-text', async (req, res) => {
     const finalHasCode = codeBlocks.length > 0 || !!storedRaw
     updateSemanticState(sid, activeDomain)
 
-    const _memory = getOrCreateMemory(sid)
-
-    // استرجع الكبسولة من Client إذا أرسلها (cross-session persistence)
-    if (sessionSummary && !_memory.field.capsules.has(`session_${sid}`)) {
-      try {
-        await remember(_memory, {
-          id:          `session_${sid}`,
-          type:        'session_summary',
-          title:       sessionSummary.lastTopic || sessionSummary.goal || sid,
-          summary:     sessionSummary.goal ?? '',
-          sessionData: sessionSummary,
-          entities:    [],
-          signals:     [],
-        }, { theta: 0, isActive: true, type: 'session_summary' })
-        console.log(`[${sid.slice(-8)}]   capsule:restored from client goal:"${(sessionSummary.goal ?? '').slice(0, 40)}"`)
-      } catch {}
-    }
-
     let _recalled = []
     try {
       const _recallResult = await recall(_memory, {
@@ -643,14 +660,8 @@ router.post('/process-text', async (req, res) => {
       }, { limit: 2 })
       _recalled = _recallResult.results ?? []
     } catch {}
-    const _sessionCapsule = _memory.field.capsules.get(`session_${sid}`) ?? null
+    const _sessionCapsule = _sessionCapsulePeek
     const { capsuleHint, capsuleContent } = buildSessionContext(_sessionCapsule, history, rawCodeStore.get(sid) ?? [], _recalled)
-
-    // إذا capsuleContent موجود و domain انجرف لـ sports → صحّح فوراً
-    if (capsuleContent && activeDomain === 'sports') {
-      activeDomain = 'creative'
-      updateSemanticState(sid, 'creative')
-    }
 
     // إذا capsuleContent موجود → لا حاجة لـ web search
     const _needsWebSearch = needsWebSearch && !capsuleContent
