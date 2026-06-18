@@ -877,7 +877,8 @@ router.post('/process-text', async (req, res) => {
     // metaSignals: only facts that actually happened in this request — no invented claims
     const metaSignals = []
     if (shouldInjectCapsule)                              metaSignals.push('used_original_text')
-    if (!finalHasCode && questionType === 'followup' && historyMessages.length > 0)
+    if (!finalHasCode && historyMessages.length > 0 &&
+        (questionType === 'followup' || (fieldSignals ?? '').includes('#continuity')))
                                                             metaSignals.push('remembered_context')
     if (shouldSaveNewVersion)                              metaSignals.push('saved_version')
     if (model === 'claude-sonnet-4-6' && !agentMode && finalHasCode)
