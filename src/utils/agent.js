@@ -42,11 +42,13 @@ const PROJECT_SYSTEM =
   '[repeat for each fixed file]'
 
 export function detectAgentType(text) {
-  if (/Compare these versions.*what changed|what improved.*what was lost/i.test(text))
-    return 'timeline'
-  if (/Analyze consistency.*conflicts|Find conflicts between files/i.test(text))
-    return 'project'
+  if (/^\[celf:timeline\]/.test(text)) return 'timeline'
+  if (/^\[celf:project\]/.test(text))  return 'project'
   return null
+}
+
+export function stripAgentSignal(text) {
+  return text.replace(/^\[celf:(timeline|project)\]\s*/, '')
 }
 
 export function buildAgentSystem(agentType) {
@@ -56,21 +58,22 @@ export function buildAgentSystem(agentType) {
 }
 
 export function buildAgentPrompt(agentType, text) {
+  const cleanText = stripAgentSignal(text)
   if (agentType === 'timeline') {
     return (
       'Compare the following versions and produce the best merged version.\n' +
       'Follow the format exactly.\n\n' +
-      text
+      cleanText
     )
   }
   if (agentType === 'project') {
     return (
       'Find all conflicts between the following files and return fixed versions.\n' +
       'Follow the format exactly.\n\n' +
-      text
+      cleanText
     )
   }
-  return text
+  return cleanText
 }
 
 export function parseAgentResponse(reply, agentType) {
