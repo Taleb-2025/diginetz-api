@@ -685,7 +685,7 @@ router.post('/process-text', async (req, res) => {
       : 'Always respond in the same language the user wrote in.')
     const systemHint = systemParts.join('\n') || null
 
-    const historyMessages = buildHistoryLayer(history, continuity, sid, false, activeDomain, 2)
+    const historyMessages = buildHistoryLayer(history, continuity, sid, false, activeDomain, 4)
     const recCode         = !isBrief && typeof recoveredCode === 'string' && recoveredCode.length > 30 && !shouldBlockCode
       ? recoveredCode.slice(0, RECOVERED_CODE_LIMIT)
       : null
