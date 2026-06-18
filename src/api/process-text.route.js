@@ -474,6 +474,12 @@ router.post('/process-text', async (req, res) => {
       return detected
     })()
 
+    const detectedLang = userIsArabic
+      ? 'ar'
+      : /\b(ich|und|ist|nicht|wie|für|mit|der|die|das|warum|kannst)\b/i.test(questionOnly)
+        ? 'de'
+        : 'en'
+
     if (isCELFInternalQuery(questionOnly)) {
       processingLock.delete(sid)
       console.log(`[${sid.slice(-8)}] 🔒 celf_internal_query intercepted`)
@@ -748,11 +754,16 @@ router.post('/process-text', async (req, res) => {
       const _agentMetrics = buildAgentMetrics(_agentType, _agentIn, _agentOut)
       console.log(`[${sid.slice(-8)}] 🤖 agent:${_agentType} in:${_agentIn} out:${_agentOut} $${_agentMetrics.costUSD} files:${_agentParsed?.fixedFiles?.length ?? 0}`)
       processingLock.delete(sid)
+      const _agentMetaSignals = []
+      if (_agentParsed?.hasCode)                                        _agentMetaSignals.push('saved_version')
+      if (_agentType === 'project' && _agentParsed?.analysis?.length)   _agentMetaSignals.push('found_conflict')
       return res.json({
         reply:        _agentReply,
         codeModified: (_agentParsed?.hasCode ?? false),
         agentType:    _agentType,
         agentResult:  _agentParsed,
+        metaSignals:  _agentMetaSignals,
+        detectedLang,
         newSummary:   null,
         nextSuggestion: null,
         celfVault:    [],
@@ -863,9 +874,20 @@ router.post('/process-text', async (req, res) => {
 
     const _newSummary = _memory.field.capsules.get(`session_${sid}`)?.sessionData ?? null
 
+    // metaSignals: only facts that actually happened in this request — no invented claims
+    const metaSignals = []
+    if (shouldInjectCapsule)                              metaSignals.push('used_original_text')
+    if (!finalHasCode && questionType === 'followup' && historyMessages.length > 0)
+                                                            metaSignals.push('remembered_context')
+    if (shouldSaveNewVersion)                              metaSignals.push('saved_version')
+    if (model === 'claude-sonnet-4-6' && !agentMode && finalHasCode)
+                                                            metaSignals.push('used_stronger_model')
+
     return res.json({
       reply,
       codeModified:   shouldSaveNewVersion,
+      metaSignals,
+      detectedLang,
       newSummary:     _newSummary,
       nextSuggestion: null,
       celfVault:      [],
