@@ -44,6 +44,12 @@ function getOrCreateMemory(sid) {
 const classifyDomain = _classifyDomain
 const USE_SSE        = process.env.USE_SSE !== 'false'
 
+const CODE_DOMAINS = new Set([
+  'code', 'backend', 'frontend', 'database', 'devops',
+  'security', 'debugging', 'algorithms', 'testing'
+])
+const isCodeLike = (domain) => CODE_DOMAINS.has(domain)
+
 const CELF_DEFINITION =
   'CELF AI is an intelligent conversation system ' +
   'that maintains context, preserves your goals, ' +
@@ -529,8 +535,12 @@ router.post('/process-text', async (req, res) => {
       codeSessionStore.set(sid, { active: true, ttl: 6 })
     }
 
-    const _isVeryLongText = cleanedText.length > 4000 && codeBlocks.length === 0 && !shouldBlockCode
-    const _isLongText     = cleanedText.length > 600  && codeBlocks.length === 0
+    // Domain decides WHAT the content is (text vs code) — length only decides the SIZE tier.
+    const _contentDomain = classifyDomain(cleanedText)
+    const _isCodeContent = isCodeLike(_contentDomain) || codeBlocks.length > 0
+
+    const _isVeryLongText = !_isCodeContent && cleanedText.length > 4000 && !shouldBlockCode
+    const _isLongText     = !_isCodeContent && cleanedText.length > 600
 
     if (_isVeryLongText) {
       storeCodeContext(sid, [cleanedText], tValue, {
