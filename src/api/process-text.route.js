@@ -1,4 +1,3 @@
-
 import express from 'express'
 import { resolveConceptAnchors } from '../utils/concept-anchor.js'
 import { cleanInput, filterStyleInstructions, detectStyleInstruction } from '../utils/context-builder.js'
