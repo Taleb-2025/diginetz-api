@@ -224,10 +224,10 @@ export function classifyQuestionType(q, hasStoredCode = false, continuity = 0, h
   if (!q) return 'general'
   const t = q.toLowerCase()
 
-  if (/compare these versions.*what changed|what improved.*what was lost/i.test(t))
+  if (/^\[celf:timeline\]/.test(t))
     return 'agent_timeline'
 
-  if (/analyze consistency.*conflicts|find conflicts between files|undefined references.*wrong imports/i.test(t))
+  if (/^\[celf:project\]/.test(t))
     return 'agent_project'
 
   if (/checkpoint|وين وصلنا|ما الذي تغير|ملخص.*قرار|what changed|status.*session/i.test(t))
