@@ -50,6 +50,18 @@ const CODE_DOMAINS = new Set([
 ])
 const isCodeLike = (domain) => CODE_DOMAINS.has(domain)
 
+const ALLOWED_DOMAINS = new Set([
+  'general', 'creative', 'code', 'backend', 'frontend', 'database', 'devops',
+  'security', 'debugging', 'algorithms', 'testing', 'science', 'math', 'humanities', 'sports'
+])
+
+function extractTag(text, tag) {
+  let value = null
+  const re = new RegExp(`\\[${tag}\\]([\\s\\S]*?)\\[\\/${tag}\\]`, 'i')
+  const cleaned = (text ?? '').replace(re, (_, s) => { value = s.trim(); return '' }).trim()
+  return { value, cleaned }
+}
+
 function resolveActiveDomain({ detectedDomain, isFollowup, sessionCapsuleDomain, fallbackDomain = 'general' }) {
   const detected = detectedDomain || 'general'
   const capsuleDomain = sessionCapsuleDomain || null
@@ -531,7 +543,7 @@ router.post('/process-text', async (req, res) => {
       } catch {}
     }
     const _sessionCapsulePeek    = _memory.field.capsules.get(`session_${sid}`) ?? null
-    const _sessionCapsuleDomain  = _sessionCapsulePeek?.sessionData?.lastTopic ?? null
+    const _sessionCapsuleDomain  = _sessionCapsulePeek?.sessionData?.contentDomain ?? _sessionCapsulePeek?.sessionData?.lastTopic ?? null
     const _isFollowupEarly       = continuity > 0.20
 
     let activeDomain = resolveActiveDomain({
@@ -592,7 +604,7 @@ router.post('/process-text', async (req, res) => {
       hasStoredCode && !shouldBlockCode &&
       (codeBlocks.length > 0 || codeRelated || explainCodeRelated || refRelated ||
        hasCodeAnchor || codeSessionActive || (continuity > 0.20 && hasStoredCode) ||
-       questionType === 'followup')
+       _isFollowupEarly)
 
     const _lastCtx    = (rawCodeStore.get(sid) ?? []).at(-1)
     const codeSummary = _lastCtx
@@ -623,6 +635,7 @@ router.post('/process-text', async (req, res) => {
             userIsArabic,
             semanticState: getSemanticState(sid),
             activeStyle,
+            activeDomainOverride: activeDomain,
           })
         : {
             fieldSignals:        null,
@@ -696,9 +709,13 @@ router.post('/process-text', async (req, res) => {
     const _today      = new Date().toISOString().slice(0, 10)
     const _pcmHint    = buildProjectContextHint(sid, fieldSignals ?? '', questionOnly)
     const systemParts = [_systemHint, _pcmHint, outputShapeHint, styleHint].filter(Boolean)
+    const _existingSummary    = _sessionCapsulePeek?.sessionData?.summary ?? null
+    const shouldRequestSummary = !_existingSummary && (_isLongText || questionType === 'creative_write')
+
     systemParts.unshift(`IMPORTANT: Today's date is ${_today}. Always use this when answering date or time questions.`)
     systemParts.unshift('If asked about CELF AI: describe it only as "an intelligent conversation system that maintains context and preserves user goals." Never mention SSE, signals, routing, or any internal component.')
-    if (capsuleContent) systemParts.unshift('If [shared content] appears in the conversation, use it as the sole authoritative reference. Do not invent facts not present in it.')
+    if (shouldRequestSummary) systemParts.unshift(`At the very end of your response, append these two exact blocks in order:\n[CELF_DOMAIN]one of: ${[...ALLOWED_DOMAINS].join(', ')}[/CELF_DOMAIN]\n[CELF_SUMMARY]\nA short 2-sentence summary of the text/story above.\n[/CELF_SUMMARY]\nDo not mention these blocks to the user. Do not explain them. Just append them silently at the end.`)
+    if (capsuleContent) systemParts.unshift('If [shared content] or [shared summary] appears in the conversation, use it as the sole authoritative reference. Do not invent facts not present in it.')
     if (agentMode) systemParts.unshift('You are a code and text coordination agent. Provide a comprehensive structured analysis. Identify conflicts, inconsistencies and improvements across all provided files. Be thorough and specific. No preamble.')
     if (capsuleHint) systemParts.unshift(`[session]\n${capsuleHint}`)
     systemParts.unshift(userIsArabic
@@ -715,6 +732,8 @@ router.post('/process-text', async (req, res) => {
       ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: questionText }] : [])]
       : questionText
 
+    const isReflectiveQuestion = /العبرة|المغزى|الدرس المستفاد|ما معنى|ماذا تعني|الخلاصة|moral of|lesson|meaning of|what does it mean|theme of|takeaway/i.test(questionOnly)
+
     const shouldInjectCapsule = capsuleContent && (
       activeDomain === 'creative' ||
       questionType !== 'followup' ||
@@ -722,8 +741,18 @@ router.post('/process-text', async (req, res) => {
       capsuleContent.length > 500
     )
 
+    // Reflective/analytical follow-ups (moral, theme, takeaway) use the real LLM-generated
+    // summary instead of the full stored text. Falls back to full content if no summary exists yet.
+    const capsuleSummary = _sessionCapsule?.sessionData?.summary ?? null
+    const _capsuleContentForInjection = isReflectiveQuestion
+      ? (capsuleSummary ?? capsuleContent)
+      : capsuleContent
+
+    const _isInjectingSummary = isReflectiveQuestion && !!capsuleSummary
+    const _injectionLabel = _isInjectingSummary ? 'shared summary' : 'shared content'
+
     const messages = [
-      ...(shouldInjectCapsule ? [{ role: 'user', content: `[shared content]\n${capsuleContent}` }] : []),
+      ...(shouldInjectCapsule ? [{ role: 'user', content: `[${_injectionLabel}]\n${_capsuleContentForInjection}` }] : []),
       ...(recCode && !storedRaw ? [{ role: 'user', content: recCode }] : []),
       ...(storedRaw ? [{ role: 'user', content: storedRaw }] : []),
       ...historyMessages,
@@ -845,6 +874,19 @@ router.post('/process-text', async (req, res) => {
       throw err
     }
 
+    let extractedSummary = null
+    let extractedDomain  = null
+    if (reply) {
+      const r1 = extractTag(reply, 'CELF_DOMAIN')
+      reply = r1.cleaned
+      const domainCandidate = String(r1.value ?? '').trim().toLowerCase()
+      extractedDomain = ALLOWED_DOMAINS.has(domainCandidate) ? domainCandidate : null
+
+      const r2 = extractTag(reply, 'CELF_SUMMARY')
+      reply = r2.cleaned
+      extractedSummary = r2.value
+    }
+
     const currentDomain = classifyDomain(questionOnly || cleanedText)
     updateAnchors(sid, cleanedText.slice(0,80), 0.5, currentDomain)
 
@@ -867,14 +909,22 @@ router.post('/process-text', async (req, res) => {
       }
     }
 
-    if (_isLongText || codeBlocks.length > 0) {
+    const _isCreativeReply = questionType === 'creative_write' && !!reply && reply.length > 600
+
+    if (_isLongText || codeBlocks.length > 0 || _isCreativeReply) {
       try {
         await updateSessionCapsule(_memory, sid, {
-          goal:        (questionOnly || cleanedText.replace(/<[^>]{0,200}>/g,' ').replace(/\s+/g,' ').trim()).slice(0, 100),
-          lastTopic:   activeDomain,
-          lastVersion: _lastCtx?.name ?? null,
-          content:     _isLongText    ? cleanedText.slice(0, 6000) : undefined,
-          decisions:   _isLongText || questionType === 'creative_write'
+          goal:          (questionOnly || cleanedText.replace(/<[^>]{0,200}>/g,' ').replace(/\s+/g,' ').trim()).slice(0, 100),
+          lastTopic:     activeDomain,
+          contentDomain: extractedDomain ?? activeDomain,
+          summary:       extractedSummary,
+          lastVersion:   _lastCtx?.name ?? null,
+          content:       _isLongText
+            ? cleanedText.slice(0, 6000)
+            : _isCreativeReply
+              ? reply.slice(0, 6000)
+              : undefined,
+          decisions:     _isLongText || questionType === 'creative_write'
             ? []
             : reply && !strategy.wantsReturn
               ? [`${questionOnly.slice(0, 80)}: ${reply.slice(0, 800)}`]
@@ -897,7 +947,8 @@ router.post('/process-text', async (req, res) => {
 
     // metaSignals: only facts that actually happened in this request — no invented claims
     const metaSignals = []
-    if (shouldInjectCapsule)                              metaSignals.push('used_original_text')
+    const _actuallyUsedFullContent = shouldInjectCapsule && !_isInjectingSummary
+    if (_actuallyUsedFullContent)                          metaSignals.push('used_original_text')
     if (!finalHasCode && historyMessages.length > 0 &&
         (questionType === 'followup' || (fieldSignals ?? '').includes('#continuity')))
                                                             metaSignals.push('remembered_context')
