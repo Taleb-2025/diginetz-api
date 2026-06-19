@@ -14,7 +14,8 @@ export function classifyDomain(text) {
   if (/(^|\s)كرة(\s|$)|رياضة|مباراة|دوري|لاعب|فريق|بطولة|(^|\s)هدف(\s|$).*كرة|سلة|تنس|سباق|ملاكمة|كأس|منتخب|اتحاد.*رياضي|football|soccer|basketball|tennis|sport|match|league|player|team|champion|goal|score|racing|boxing|cup|tournament|championship|federation|national.team/i.test(t)) return 'sports'
   if (/فيزياء|physics|كيمياء|chemistry|بيولوجيا|biology|كوانتم|quantum|ذرة|atom|موجة|wave|تشابك|entanglement|نسبية|relativity|ميكانيكا|mechanics|طاقة|energy|جسيم|particle|نووي|nuclear/i.test(t)) return 'science'
   if (/رياضيات|math|جبر|algebra|هندسة|geometry|إحصاء|statistics|حساب|calculus|مبرهنة|theorem|معادلة|equation|تفاضل|differential|تكامل|integral/i.test(t)) return 'math'
-  if (/تاريخ|history|جغرافيا|geography|فلسفة|philosophy|أدب|literature|لغة|language/i.test(t)) return 'humanities'
+  if (t.length > 500 && /قال|جلس|نظر|استيقظ|مشى|ذهب|عاد|وجد|شعر|كان|كانت|بينما|حين|فجأة|ثم|في صباح|في الليل/i.test(t)) return 'creative'
+  if (/(^|\s)(ال)?تاريخ(\s|$)|history|جغرافيا|geography|فلسفة|philosophy|(^|\s)(ال)?أدب(\s|$)|literature|لغة|language/i.test(t)) return 'humanities'
   if (/celf|signal.engine|semantic.signal|anchor|field.signal|أوزان.*إشار|إشارات.*توجيه|محرك.*إشار|signal.weight/i.test(t)) return 'backend'
   return 'general'
 }
@@ -256,14 +257,20 @@ export function classifyQuestionType(q, hasStoredCode = false, continuity = 0, h
   if (/أحدث|أخير|آخر|جديد|الآن|اليوم|هذا العام|recent|latest|current|today|now|this year/i.test(t))
     return 'current_info'
 
-  if (/اكتب.*قصة|قصة قصيرة|حكاية|رواية|مشهد|سيناريو|write.*story|short story|fiction|scene|script/i.test(t))
+  const isReflectiveQuestion =
+    /العبرة|المغزى|الدرس المستفاد|الخلاصة|الفكرة العامة|ما معنى|ماذا تعني|theme|moral|lesson|takeaway/i.test(t)
+  if (isReflectiveQuestion && continuity > 0.20)
+    return 'followup'
+
+  const hasCreationVerb =
+    /اكتب|ألّف|الف|أنشئ|انشئ|اصنع|اكمل|أكمل|وسّع|وسع|أعد صياغة|rewrite|write|draft|compose|generate/i.test(t)
+  if (hasCreationVerb && /قصة|حكاية|رواية|مشهد|سيناريو|story|fiction|scene|script/i.test(t))
+    return 'creative_write'
+  if (/قصة قصيرة|short story|\bstory\b|\bfiction\b/i.test(t) && !isReflectiveQuestion)
     return 'creative_write'
 
   if (/ما الفرق|فرق بين|مقارنة|compare|difference|vs\b|versus/i.test(t))
     return 'comparison'
-
-  if (/كيف.*يعمل|كيف.*يتم|كيف.*تعمل|ما هو|ما هي|ما معنى|ما المقصود|عرّف|تعريف|اشرح|فسر|فسّر|وضح|تفسير|what is|what are|how does|how do|explain|define|tell me about|interpret|was ist|was sind|wie funktioniert|erkläre|erklaere|definiere|was bedeutet/i.test(t) && !hasStoredCode)
-    return 'conceptual'
 
   if (/اكتب.*اختبار|write.*test|generate.*test|أضف.*اختبار/i.test(t))
     return 'test_gen'
@@ -271,11 +278,11 @@ export function classifyQuestionType(q, hasStoredCode = false, continuity = 0, h
   if (/توثيق|documentation|docs|readme|اكتب.*docs/i.test(t))
     return 'docs'
 
-  if (continuity > 0.20 && classifyDomain(q) === 'creative')
-    return 'creative_write'
-
   if (continuity > 0.20)
     return 'followup'
+
+  if (/كيف.*يعمل|كيف.*يتم|كيف.*تعمل|ما هو|ما هي|ما معنى|ما المقصود|عرّف|تعريف|اشرح|فسر|فسّر|وضح|تفسير|what is|what are|how does|how do|explain|define|tell me about|interpret|was ist|was sind|wie funktioniert|erkläre|erklaere|definiere|was bedeutet/i.test(t) && !hasStoredCode)
+    return 'conceptual'
 
   return 'general'
 }
@@ -469,7 +476,7 @@ const SIGNAL_SETS = {
   },
 }
 
-export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, continuity, anchors = [], hasStoredCode = false, semanticState = {}) {
+export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, continuity, anchors = [], hasStoredCode = false, semanticState = {}, activeDomainOverride = null) {
   const field      = celfResult?.field ?? {}
   const novel      = field.noveltyPressure   ?? 0
   const coher      = field.semanticCoherence ?? 0
@@ -480,11 +487,14 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
   const signalSet    = SIGNAL_SETS[questionType] ?? SIGNAL_SETS.general
 
   const detectedDomain = classifyDomain(qText)
-  const dom = questionType === 'creative_write'
-    ? 'creative'
-    : detectedDomain !== 'general'
-      ? detectedDomain
-      : (semanticState?.dominantDomain ?? 'general')
+  const dom = activeDomainOverride
+    || (questionType === 'creative_write'
+      ? 'creative'
+      : detectedDomain !== 'general'
+        ? detectedDomain
+        : (semanticState?.dominantDomain ?? 'general'))
+
+  console.log('[SSE_FIELDSIGNALS_DOMAIN_DEBUG]', { activeDomainOverride, questionType, detectedDomain, dom })
 
   const baseLayer = []
   signalSet.base.forEach((s, i) => baseLayer.push({ text: s, w: 1.0 - i * 0.02 }))
@@ -608,17 +618,22 @@ export function buildSignalEngine({
   userIsArabic,
   semanticState,
   activeStyle = null,
+  activeDomainOverride = null,
 }) {
   const detectedDomain = classifyDomain(questionOnly)
-  const activeDomain   = detectedDomain !== 'general'
-    ? detectedDomain
-    : (semanticState?.dominantDomain ?? 'general')
+  const activeDomain   = activeDomainOverride
+    || (detectedDomain !== 'general'
+      ? detectedDomain
+      : (semanticState?.dominantDomain ?? 'general'))
+
+  console.log('[SSE_DOMAIN_DEBUG]', { activeDomainOverride, detectedDomain, activeDomain })
 
   const hasStoredCode = hasCodeContext || !!storedRaw || ((codeBlocks?.length ?? 0) > 0)
 
   const fieldSignals = buildFieldSignals(
     sid, celfResult, questionOnly, codeBlocks,
-    continuity, anchors, hasStoredCode, semanticState
+    continuity, anchors, hasStoredCode, semanticState,
+    activeDomain
   )
 
   const llmSignals = compactSignalsForLLM(fieldSignals)
