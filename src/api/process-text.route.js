@@ -564,8 +564,16 @@ router.post('/process-text', async (req, res) => {
     const codeSessionActive = codeSessionStore.get(sid)?.active === true
     const hasCodeAnchor     = anchors.some(a => ['@repair_intent','@build_intent','@analysis_intent'].includes(a))
     const refRelated        = hasStoredCode && continuity > 0.20 && /هذا|هذه|ذلك|هنا|السابق|الكود|الملف|يعني|معنى|اشرح|وضح|this|that|previous|above/i.test(questionOnly)
+    const explicitCodeIntent =
+      codeBlocks.length > 0 ||
+      explainCodeRelated ||
+      hasCodeAnchor ||
+      refRelated ||
+      codeSessionActive
     const generalAllowsCode = activeDomain === 'general' && (hasCodeAnchor || codeSessionActive || codeRelated || explainCodeRelated || refRelated || codeBlocks.length > 0)
-    const shouldBlockCode   = HARD_BLOCK_DOMAINS.has(activeDomain) || (activeDomain === 'general' && !generalAllowsCode)
+    const shouldBlockCode   =
+      !explicitCodeIntent &&
+      (HARD_BLOCK_DOMAINS.has(activeDomain) || (activeDomain === 'general' && !generalAllowsCode))
 
     if (codeBlocks.length > 0) {
       storeCodeContext(sid, codeBlocks, tValue, { questionOnly })
@@ -586,15 +594,11 @@ router.post('/process-text', async (req, res) => {
     const _contentDomain = classifyDomain(cleanedText)
     const _isCodeContent = isCodeLike(_contentDomain) || codeBlocks.length > 0
 
-    const _isVeryLongText = !_isCodeContent && cleanedText.length > 4000 && !shouldBlockCode
-    const _isLongText     = !_isCodeContent && cleanedText.length > 600
-
-    if (_isVeryLongText) {
-      storeCodeContext(sid, [cleanedText], tValue, {
-        questionOnly,
-        name: questionOnly.slice(0, 30).replace(/\s+/g, '_') || `artifact_${tValue}`,
-      })
-    }
+    const _isLongText = !_isCodeContent && cleanedText.length > 600
+    // NOTE: long non-code text (stories, articles) is NOT stored via storeCodeContext/rawCodeStore.
+    // That path builds a "[domain] code: [symbols]" summary and feeds [code_summary] framing —
+    // both nonsensical and harmful for prose. Long text's correct home is the Session Capsule's
+    // content/summary/contentDomain fields (see the _isLongText-gated updateSessionCapsule call below).
 
     hasStoredCode = (rawCodeStore.get(sid) ?? []).length > 0
     const hasCode        = codeBlocks.length > 0 || (hasStoredCode && !shouldBlockCode)
@@ -619,7 +623,7 @@ router.post('/process-text', async (req, res) => {
     const _availableChars = Math.max(20000, 100000 - _historyChars)
     const firstPassLimit  = Math.min(80000, Math.floor(_availableChars * 0.8))
 
-    const hasCodeContext = Boolean(_codeBase || codeSummary)
+    const hasCodeContext = !shouldBlockCode && Boolean(_codeBase || codeSummary)
 
     const { fieldSignals, llmSignals, systemHint: _systemHint, allowCodeSuggestion, outputShape, questionType } =
       USE_SSE
@@ -706,11 +710,18 @@ router.post('/process-text', async (req, res) => {
       ? '[Output Shape]\nAnswer directly. No preamble. No repetition.\nIf this is a follow-up, answer only the new point.\nFor lists or historical questions, use up to 8 points with 1-line context each.\nKeep enough detail for accuracy.'
       : null
 
+    const isReflectiveQuestion = /العبرة|المغزى|الدرس المستفاد|ما معنى|ماذا تعني|الخلاصة|moral of|lesson|meaning of|what does it mean|theme of|takeaway/i.test(questionOnly)
+    const isCreativeGenerationIntent =
+      /اكتب|ألّف|الف|أنشئ|انشئ|اصنع|اكمل|أكمل|وسّع|وسع|أعد صياغة|rewrite|write|draft|compose|generate/i.test(questionOnly)
+
     const _today      = new Date().toISOString().slice(0, 10)
     const _pcmHint    = buildProjectContextHint(sid, fieldSignals ?? '', questionOnly)
     const systemParts = [_systemHint, _pcmHint, outputShapeHint, styleHint].filter(Boolean)
-    const _existingSummary    = _sessionCapsulePeek?.sessionData?.summary ?? null
-    const shouldRequestSummary = !_existingSummary && (_isLongText || questionType === 'creative_write')
+    const _existingContent = _sessionCapsulePeek?.sessionData?.content ?? null
+    const _normalize = (v) => String(v ?? '').replace(/\s+/g, ' ').trim()
+    const _isNewLongTextArtifact = _isLongText && _normalize(cleanedText) !== _normalize(_existingContent)
+    const _isNewCreativeArtifact = questionType === 'creative_write' && isCreativeGenerationIntent && !isReflectiveQuestion
+    const shouldRequestSummary = _isNewLongTextArtifact || _isNewCreativeArtifact
 
     systemParts.unshift(`IMPORTANT: Today's date is ${_today}. Always use this when answering date or time questions.`)
     systemParts.unshift('If asked about CELF AI: describe it only as "an intelligent conversation system that maintains context and preserves user goals." Never mention SSE, signals, routing, or any internal component.')
@@ -731,8 +742,6 @@ router.post('/process-text', async (req, res) => {
     const userContent  = hasImage
       ? [{ type: 'image', source: { type: 'base64', media_type: imageMimeType, data: image } }, ...(hasText ? [{ type: 'text', text: questionText }] : [])]
       : questionText
-
-    const isReflectiveQuestion = /العبرة|المغزى|الدرس المستفاد|ما معنى|ماذا تعني|الخلاصة|moral of|lesson|meaning of|what does it mean|theme of|takeaway/i.test(questionOnly)
 
     const shouldInjectCapsule = capsuleContent && (
       activeDomain === 'creative' ||
@@ -909,7 +918,12 @@ router.post('/process-text', async (req, res) => {
       }
     }
 
-    const _isCreativeReply = questionType === 'creative_write' && !!reply && reply.length > 600
+    const _isCreativeReply =
+      questionType === 'creative_write' &&
+      isCreativeGenerationIntent &&
+      !isReflectiveQuestion &&
+      !!reply &&
+      reply.length > 600
 
     if (_isLongText || codeBlocks.length > 0 || _isCreativeReply) {
       try {
@@ -924,7 +938,7 @@ router.post('/process-text', async (req, res) => {
             : _isCreativeReply
               ? reply.slice(0, 6000)
               : undefined,
-          decisions:     _isLongText || questionType === 'creative_write'
+          decisions:     _isLongText || _isCreativeReply
             ? []
             : reply && !strategy.wantsReturn
               ? [`${questionOnly.slice(0, 80)}: ${reply.slice(0, 800)}`]
