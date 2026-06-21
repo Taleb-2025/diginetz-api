@@ -643,6 +643,7 @@ router.post('/process-text', async (req, res) => {
             semanticState: getSemanticState(sid),
             activeStyle,
             activeDomainOverride: activeDomain,
+            normalizedIntent: _intentResult,
           })
         : {
             fieldSignals:        null,
