@@ -327,6 +327,7 @@ const SIGNAL_SETS = {
     constraints: [
       'Output format: **What it does** · **Strengths** · **Weaknesses** · **Critical**.',
       'No code rewrite. No line-by-line explanation.',
+      'Weaknesses must cover more than the single most visible bug — actively check for runtime failures (NaN, type coercion, null/undefined access), state or storage corruption, and unhandled edge cases before finalizing the list.',
     ],
   },
   code_build: {
