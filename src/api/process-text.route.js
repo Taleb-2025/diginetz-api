@@ -6,6 +6,7 @@ import { buildProjectContextHint, registerFile, clearProjectMap } from '../utils
 import { createMemory, recall, remember } from '../utils/spiral-memory.js'
 import { updateSessionCapsule, buildSessionContext } from '../utils/session-capsule.js'
 import { detectAgentType, buildAgentSystem, buildAgentPrompt, parseAgentResponse, buildAgentMetrics } from '../utils/agent.js'
+import { normalizeIntent } from '../utils/code-intent-normalizer.js'
 
 const router = express.Router()
 
@@ -555,12 +556,14 @@ router.post('/process-text', async (req, res) => {
 
     const HARD_BLOCK_DOMAINS = new Set(['science','math','humanities'])
 
-    const codeRelated = /اصلح|أصلح|عدل|تعديل|حلل|اشرح|وضح|analyze|explain|fix|edit|refactor|review|debug|ثغرة|خطأ|مشكلة|improve|update|check|اختبر/i.test(questionOnly)
+    let hasStoredCode = (rawCodeStore.get(sid) ?? []).length > 0
+
+    const _intentResult = await normalizeIntent(questionOnly, sid, { hasStoredCode })
+    const codeRelated = _intentResult.isCodeRelated
     const explainCodeRelated =
       /اشرح|شرح|وضح|explain/i.test(questionOnly) &&
       /كود|الكود|code|file|ملف|function|class|html|css|js|javascript/i.test(questionOnly)
 
-    let hasStoredCode       = (rawCodeStore.get(sid) ?? []).length > 0
     const codeSessionActive = codeSessionStore.get(sid)?.active === true
     const hasCodeAnchor     = anchors.some(a => ['@repair_intent','@build_intent','@analysis_intent'].includes(a))
     const refRelated        = hasStoredCode && continuity > 0.20 && /هذا|هذه|ذلك|هنا|السابق|الكود|الملف|يعني|معنى|اشرح|وضح|this|that|previous|above/i.test(questionOnly)
