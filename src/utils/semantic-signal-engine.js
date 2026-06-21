@@ -221,7 +221,7 @@ export function buildDirectives(anchors, userIsArabic, fieldSignals, questionOnl
   return parts.join('\n') || null
 }
 
-export function classifyQuestionType(q, hasStoredCode = false, continuity = 0, hasCodeBlocks = false) {
+export function classifyQuestionType(q, hasStoredCode = false, continuity = 0, hasCodeBlocks = false, normalizedIntent = null) {
   if (!q) return 'general'
   const t = q.toLowerCase()
 
@@ -230,6 +230,12 @@ export function classifyQuestionType(q, hasStoredCode = false, continuity = 0, h
 
   if (/^\[celf:project\]/.test(t))
     return 'agent_project'
+
+  // Trust the unified multilingual intent classifier (local dictionary + LLM fallback)
+  // over this function's own narrower, largely English/Arabic-only regex below —
+  // it's the fix for cases like German "korrigiere" that this file's patterns miss.
+  if (normalizedIntent?.isCodeRelated && normalizedIntent.intent && normalizedIntent.intent !== 'general')
+    return normalizedIntent.intent
 
   if (/checkpoint|وين وصلنا|ما الذي تغير|ملخص.*قرار|what changed|status.*session/i.test(t))
     return 'checkpoint'
@@ -477,14 +483,14 @@ const SIGNAL_SETS = {
   },
 }
 
-export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, continuity, anchors = [], hasStoredCode = false, semanticState = {}, activeDomainOverride = null) {
+export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, continuity, anchors = [], hasStoredCode = false, semanticState = {}, activeDomainOverride = null, normalizedIntent = null) {
   const field      = celfResult?.field ?? {}
   const novel      = field.noveltyPressure   ?? 0
   const coher      = field.semanticCoherence ?? 0
   const driftCount = semanticState?.driftCount ?? 0
   const qText      = String(questionOnly || '')
 
-  const questionType = classifyQuestionType(qText, hasStoredCode, continuity, (codeBlocks?.length ?? 0) > 0)
+  const questionType = classifyQuestionType(qText, hasStoredCode, continuity, (codeBlocks?.length ?? 0) > 0, normalizedIntent)
   const signalSet    = SIGNAL_SETS[questionType] ?? SIGNAL_SETS.general
 
   const detectedDomain = classifyDomain(qText)
@@ -625,6 +631,7 @@ export function buildSignalEngine({
   semanticState,
   activeStyle = null,
   activeDomainOverride = null,
+  normalizedIntent = null,
 }) {
   const detectedDomain = classifyDomain(questionOnly)
   const activeDomain   = activeDomainOverride
@@ -639,7 +646,7 @@ export function buildSignalEngine({
   const fieldSignals = buildFieldSignals(
     sid, celfResult, questionOnly, codeBlocks,
     continuity, anchors, hasStoredCode, semanticState,
-    activeDomain
+    activeDomain, normalizedIntent
   )
 
   const llmSignals = compactSignalsForLLM(fieldSignals)
@@ -654,7 +661,7 @@ export function buildSignalEngine({
   })
 
   const outputShape  = computeOutputShape({ questionOnly, anchors, fieldSignals, activeStyle })
-  const questionType = classifyQuestionType(questionOnly, hasStoredCode, continuity, (codeBlocks?.length ?? 0) > 0)
+  const questionType = classifyQuestionType(questionOnly, hasStoredCode, continuity, (codeBlocks?.length ?? 0) > 0, normalizedIntent)
 
   return { fieldSignals, llmSignals, systemHint, allowCodeSuggestion, activeDomain, outputShape, questionType }
 }
