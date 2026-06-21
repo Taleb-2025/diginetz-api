@@ -840,6 +840,7 @@ router.post('/process-text', async (req, res) => {
     console.log(`[${sid.slice(-8)}]   field:${fieldSignals ?? '-'}`)
     console.log(`[${sid.slice(-8)}]   llm:${llmSignals ?? '-'}`)
     console.log(`[${sid.slice(-8)}]   hint:${_hintPreview}`)
+    console.log(`[${sid.slice(-8)}]   [ROUTE_ARTIFACT_SIGNAL_DEBUG]`, { shouldRequestSummary, isNewLongTextArtifact: _isNewLongTextArtifact, isNewCreativeArtifact: _isNewCreativeArtifact })
     if (_lastCtx) console.log(`[${sid.slice(-8)}]   stored:${_lastCtx.name} v${_lastCtx.version}`)
 
     let claudeData, reply = null, inputTokensTotal = 0, outputTokensTotal = 0
