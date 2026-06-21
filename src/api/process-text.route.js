@@ -760,6 +760,17 @@ router.post('/process-text', async (req, res) => {
     const _isInjectingSummary = isReflectiveQuestion && !!capsuleSummary
     const _injectionLabel = _isInjectingSummary ? 'shared summary' : 'shared content'
 
+    console.log(`[${sid.slice(-8)}] capsule_injection:`, {
+      shouldInjectCapsule,
+      activeDomain,
+      questionType,
+      isReflectiveQuestion,
+      hasContent: !!capsuleContent,
+      hasSummary: !!capsuleSummary,
+      injectionLabel: _injectionLabel,
+      injectedChars: _capsuleContentForInjection?.length ?? 0
+    })
+
     const messages = [
       ...(shouldInjectCapsule ? [{ role: 'user', content: `[${_injectionLabel}]\n${_capsuleContentForInjection}` }] : []),
       ...(recCode && !storedRaw ? [{ role: 'user', content: recCode }] : []),
