@@ -495,6 +495,11 @@ export function buildFieldSignals(sid, celfResult, questionOnly, codeBlocks, con
         : (semanticState?.dominantDomain ?? 'general'))
 
   console.log('[SSE_FIELDSIGNALS_DOMAIN_DEBUG]', { activeDomainOverride, questionType, detectedDomain, dom })
+  console.log('[SSE_ARTIFACT_SIGNAL_DEBUG]', {
+    questionType,
+    sseWouldFlagArtifact: questionType === 'creative_write',
+    note: 'diagnostic only — does not affect fieldSignals or any decision',
+  })
 
   const baseLayer = []
   signalSet.base.forEach((s, i) => baseLayer.push({ text: s, w: 1.0 - i * 0.02 }))
