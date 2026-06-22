@@ -5,7 +5,7 @@ import { buildSignalEngine, classifyDomain as _classifyDomain } from '../utils/s
 import { buildProjectContextHint, registerFile, clearProjectMap } from '../utils/celf-project-context-map.js'
 import { createMemory, recall, remember } from '../utils/spiral-memory.js'
 import { updateSessionCapsule, buildSessionContext } from '../utils/session-capsule.js'
-import { detectAgentType, buildAgentSystem, buildAgentPrompt, parseAgentResponse, buildAgentMetrics } from '../utils/agent.js'
+import { detectAgentType, buildAgentSystem, buildAgentPrompt, parseAgentResponse, buildAgentMetrics, buildAutonomousSystem, buildAutonomousPrompt } from '../utils/agent.js'
 import { normalizeIntent } from '../utils/code-intent-normalizer.js'
 
 const router = express.Router()
@@ -449,12 +449,14 @@ router.post('/process-text', async (req, res) => {
   const {
     text = '', sessionId, history = [], image = null, imageMimeType = 'image/jpeg',
     recoveredCode = null, sessionSummary = null, agentMode = false,
+    autonomousFiles = null,
   } = req.body
 
   const hasText  = typeof text  === 'string' && text.trim().length > 0
   const hasImage = typeof image === 'string' && image.length > 0
 
-  if (!hasText && !hasImage) return res.status(400).json({ error: 'missing_input' })
+  const hasAutonomousFiles = Array.isArray(autonomousFiles) && autonomousFiles.length > 0
+  if (!hasText && !hasImage && !hasAutonomousFiles) return res.status(400).json({ error: 'missing_input' })
   if (!sessionId)            return res.status(400).json({ error: 'missing_session_id' })
   if (processingLock.has(sessionId)) return res.status(429).json({ error: 'request_in_progress', retry: true })
   processingLock.add(sessionId)
@@ -803,6 +805,88 @@ router.post('/process-text', async (req, res) => {
       ? 'claude-sonnet-4-6'
       : 'claude-haiku-4-5-20251001'
     if (agentMode) maxTokens = Math.min(64000, remaining)
+
+    // ── Autonomous mode: route.js decides everything ──────────────────────────
+    if (autonomousFiles && Array.isArray(autonomousFiles) && autonomousFiles.length > 0) {
+      const _files = autonomousFiles.filter(f => f?.raw && f.raw.length > 20)
+      if (!_files.length) {
+        processingLock.delete(sid)
+        return res.status(400).json({ error: 'autonomous_no_valid_files' })
+      }
+
+      // 1. Decide timeline vs project based on unique base names
+      const _baseName = (name) => String(name || '').replace(/\s*v\d+\s*$/i, '').trim().toLowerCase()
+      const _baseNames = new Set(_files.map(f => _baseName(f.name)))
+      const _autoAgentType = _baseNames.size === 1 ? 'timeline' : 'project'
+
+      // 2. Decide content type based on file content (code wins on mixed)
+      const _autoContentType = _files.some(f => isCodeLike(classifyDomain(f.raw))) ? 'code' : 'text'
+
+      // 3. Select which files to send to LLM
+      let _filesToSend
+      if (_autoAgentType === 'timeline') {
+        // All versions for timeline — chronological merge needs full history
+        _filesToSend = [..._files].sort((a, b) => (a.version || 0) - (b.version || 0))
+      } else {
+        // Latest version per base name for project — no stale duplicates
+        const _latestMap = {}
+        for (const f of _files) {
+          const base = _baseName(f.name)
+          if (!_latestMap[base] || (f.version || 0) > (_latestMap[base].version || 0))
+            _latestMap[base] = f
+        }
+        _filesToSend = Object.values(_latestMap)
+      }
+
+      // 4. Slice each file to fit within token budget
+      const _autoFiles = _filesToSend.map(f => ({
+        name: f.name,
+        raw:  f.raw.slice(0, 8000),
+        version: f.version,
+      }))
+
+      const _autoSystem = buildAutonomousSystem(_autoAgentType, _autoContentType)
+      const _autoPrompt = buildAutonomousPrompt(_autoAgentType, _autoContentType, _autoFiles)
+      const _autoMaxTokens = Math.min(64000, Math.max(1000, 180000 - Math.ceil((_autoSystem.length + _autoPrompt.length) / 4)))
+      const _autoBody = {
+        model: 'claude-sonnet-4-6',
+        max_tokens: _autoMaxTokens,
+        system: _autoSystem,
+        messages: [{ role: 'user', content: _autoPrompt }]
+      }
+
+      let _autoData, _autoReply = null, _autoIn = 0, _autoOut = 0
+      try {
+        const _autoRes = await fetchClaude(_autoBody)
+        _autoData = await _autoRes.json()
+        _autoReply = _autoData?.content?.filter(c => c.type === 'text').map(c => c.text).join('\n').trim() || null
+        _autoIn    = _autoData?.usage?.input_tokens  ?? 0
+        _autoOut   = _autoData?.usage?.output_tokens ?? 0
+      } catch (err) {
+        processingLock.delete(sid)
+        if (err.name === 'AbortError') return res.status(504).json({ error: 'claude_timeout' })
+        return res.status(500).json({ error: 'autonomous_llm_failed', detail: err.message })
+      }
+
+      const _autoCost = parseFloat(((_autoIn / 1_000_000) * 3.0 + (_autoOut / 1_000_000) * 15.0).toFixed(6))
+      console.log(`[${sid.slice(-8)}] 🤖 autonomous:${_autoAgentType}/${_autoContentType} files:${_autoFiles.length} in:${_autoIn} out:${_autoOut} $${_autoCost}`)
+
+      processingLock.delete(sid)
+      return res.json({
+        reply:          _autoReply,
+        codeModified:   _autoContentType === 'code',
+        agentType:      `autonomous_${_autoAgentType}`,
+        contentType:    _autoContentType,
+        metaSignals:    ['saved_version'],
+        detectedLang,
+        newSummary:     null,
+        nextSuggestion: null,
+        celfVault:      [],
+        observer:       null,
+        metrics: { inputTokens: _autoIn, outputTokens: _autoOut, costUSD: _autoCost, maxTokens: _autoMaxTokens, model: 'claude-sonnet-4-6', payloadSize: 0 },
+      })
+    }
+    // ── End autonomous ────────────────────────────────────────────────────────
 
     const _agentType = agentMode ? detectAgentType(cleanedText) : null
 
