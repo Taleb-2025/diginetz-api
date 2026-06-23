@@ -10,6 +10,40 @@ import { normalizeIntent } from '../utils/code-intent-normalizer.js'
 
 const router = express.Router()
 
+// ── Security: IP-based rate limiting ─────────────────────────────────────────
+const _ipRequests = new Map()
+const _IP_WINDOW_MS  = 60_000  // 1 minute window
+const _IP_MAX_REQ    = 40      // max 40 requests per minute per IP
+const _IP_BURST_MAX  = 8       // max 8 requests per 5 seconds (burst)
+const _BURST_WINDOW  = 5_000
+
+router.use('/process-text', (req, res, next) => {
+  const ip  = req.ip || req.socket?.remoteAddress || 'unknown'
+  const now = Date.now()
+  const entry = _ipRequests.get(ip) || { times: [] }
+  // Clean old entries
+  entry.times = entry.times.filter(t => now - t < _IP_WINDOW_MS)
+  // Burst check (last 5s)
+  const burst = entry.times.filter(t => now - t < _BURST_WINDOW).length
+  if (burst >= _IP_BURST_MAX) {
+    return res.status(429).json({ error: 'rate_limit_burst', retryAfter: 5 })
+  }
+  // Window check (last 60s)
+  if (entry.times.length >= _IP_MAX_REQ) {
+    return res.status(429).json({ error: 'rate_limit', retryAfter: 60 })
+  }
+  entry.times.push(now)
+  _ipRequests.set(ip, entry)
+  // Clean map every 5 minutes to prevent memory leak
+  if (_ipRequests.size > 5000) {
+    for (const [k, v] of _ipRequests) {
+      if (v.times.every(t => now - t > _IP_WINDOW_MS)) _ipRequests.delete(k)
+    }
+  }
+  next()
+})
+// ── End rate limiting ─────────────────────────────────────────────────────────
+
 const MAX_INPUT_CHARS      = 40000
 const MAX_TEXT_MAP         = 300
 const RECOVERED_CODE_LIMIT = 14000
@@ -458,6 +492,23 @@ router.post('/process-text', async (req, res) => {
   const hasAutonomousFiles = Array.isArray(autonomousFiles) && autonomousFiles.length > 0
   if (!hasText && !hasImage && !hasAutonomousFiles) return res.status(400).json({ error: 'missing_input' })
   if (!sessionId)            return res.status(400).json({ error: 'missing_session_id' })
+
+  // Validate sessionId format — must match client-generated pattern
+  if (!/^celf-\d+-[a-z0-9]{5}$/.test(String(sessionId))) {
+    return res.status(400).json({ error: 'invalid_session_id' })
+  }
+
+  // Validate autonomousFiles payload size
+  if (hasAutonomousFiles) {
+    if (autonomousFiles.length > 20) {
+      return res.status(400).json({ error: 'too_many_files', max: 20 })
+    }
+    const totalSize = autonomousFiles.reduce((s, f) => s + (f?.raw?.length ?? 0), 0)
+    if (totalSize > 500_000) {
+      return res.status(413).json({ error: 'autonomous_payload_too_large' })
+    }
+  }
+
   if (processingLock.has(sessionId)) return res.status(429).json({ error: 'request_in_progress', retry: true })
   processingLock.add(sessionId)
 
