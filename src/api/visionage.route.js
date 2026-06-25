@@ -356,11 +356,15 @@ router.delete('/route/:id', requireSession, async (req, res) => {
   try {
     const core = await getCore(req.sid)
     await core.deleteRoute(routeId)
-    // Also remove from JSON store
-    const routes = _getRoutes(req.sid)
-    const idx    = routes.findIndex(r => r.id === routeId)
-    if (idx >= 0) { routes.splice(idx, 1); _store.routes[req.sid] = routes; _saveStore() }
-    console.log(`[visionage:${req.sid.slice(-8)}] route deleted: ${routeId}`)
+    // Remove from JSON store immediately (no debounce — delete must persist)
+    if (!_store.routes[req.sid]) _store.routes[req.sid] = []
+    _store.routes[req.sid] = _store.routes[req.sid].filter(r => r.id !== routeId)
+    // Also remove related points (nodes of this route)
+    try {
+      fs.mkdirSync(DATA_DIR, { recursive: true })
+      fs.writeFileSync(DATA_FILE, JSON.stringify(_store), 'utf8')
+    } catch(e) { console.warn('[visionage] immediate save failed:', e.message) }
+    console.log(`[visionage:${req.sid.slice(-8)}] route deleted & saved: ${routeId}`)
     res.json({ ok: true, deleted: routeId })
   } catch(e) { res.status(500).json({ error: e.message }) }
 })
