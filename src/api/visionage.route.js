@@ -1,117 +1,363 @@
-import express from "express"
-import { VisionageEngine } from "../engines/visionage.engine.js"
+/**
+ * visionage.route.js  v2
+ * Visionage Navigation API — DigiNetz Engine Suite
+ *
+ * Storage: JSON file on Railway (./data/visionage.json)
+ *          In-memory sessions (VisionageCore per user)
+ *
+ * Endpoints:
+ *   GET  /api/visionage/status
+ *   POST /api/visionage/update
+ *   POST /api/visionage/scan/start
+ *   POST /api/visionage/scan/node
+ *   POST /api/visionage/scan/finish
+ *   POST /api/visionage/scan/cancel
+ *   POST /api/visionage/navigate/start
+ *   POST /api/visionage/navigate/tick
+ *   POST /api/visionage/navigate/stop
+ *   POST /api/visionage/navigate/arrived
+ *   GET  /api/visionage/routes
+ *   GET  /api/visionage/points
+ *   POST /api/visionage/point/save
+ *   DELETE /api/visionage/session/:id
+ */
 
-const router = express.Router()
-const vision = new VisionageEngine()
+import express from 'express'
+import fs      from 'fs'
+import path    from 'path'
+import { fileURLToPath } from 'url'
+import { VisionageCore } from '../engines/VisionageCore.js'
 
-const objectHistory = new Map()
+const router  = express.Router()
+const __dir   = path.dirname(fileURLToPath(import.meta.url))
+const DATA_DIR  = path.join(__dir, '../../data')
+const DATA_FILE = path.join(DATA_DIR, 'visionage.json')
 
-function updateTemporalHistory(objects) {
+// ── JSON Storage ──────────────────────────────────────────────────────────────
+// Structure: { routes: { [sid]: Route[] }, points: { [sid]: Point[] } }
+
+let _store = { routes: {}, points: {} }
+let _savePending = false
+
+function _loadStore() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true })
+    if (fs.existsSync(DATA_FILE)) {
+      _store = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'))
+      console.log('[visionage] store loaded — routes sessions:', Object.keys(_store.routes).length)
+    }
+  } catch(e) {
+    console.warn('[visionage] store load failed:', e.message)
+    _store = { routes: {}, points: {} }
+  }
+}
+
+// Debounced save — batches writes, avoids hammering disk on every tick
+function _saveStore() {
+  if (_savePending) return
+  _savePending = true
+  setTimeout(() => {
+    try {
+      fs.mkdirSync(DATA_DIR, { recursive: true })
+      fs.writeFileSync(DATA_FILE, JSON.stringify(_store), 'utf8')
+    } catch(e) {
+      console.warn('[visionage] store save failed:', e.message)
+    }
+    _savePending = false
+  }, 500)
+}
+
+function _getRoutes(sid)  { return _store.routes[sid]  || [] }
+function _getPoints(sid)  { return _store.points[sid]  || [] }
+
+function _saveRoute(sid, route) {
+  if (!_store.routes[sid]) _store.routes[sid] = []
+  const idx = _store.routes[sid].findIndex(r => r.id === route.id)
+  if (idx >= 0) _store.routes[sid][idx] = route
+  else          _store.routes[sid].push(route)
+  _saveStore()
+}
+
+function _savePoint(sid, point) {
+  if (!_store.points[sid]) _store.points[sid] = []
+  const idx = _store.points[sid].findIndex(p => p.id === point.id)
+  if (idx >= 0) _store.points[sid][idx] = point
+  else          _store.points[sid].push(point)
+  _saveStore()
+}
+
+function _deleteSession(sid) {
+  delete _store.routes[sid]
+  delete _store.points[sid]
+  _saveStore()
+}
+
+_loadStore()
+
+// ── Rate Limiting ─────────────────────────────────────────────────────────────
+const _ipReq     = new Map()
+const _IP_WIN    = 60_000
+const _IP_MAX    = 80
+const _BURST_WIN = 5_000
+const _BURST_MAX = 15
+
+router.use((req, res, next) => {
+  const ip    = req.ip || req.socket?.remoteAddress || 'unknown'
+  const now   = Date.now()
+  const entry = _ipReq.get(ip) || { times: [] }
+  entry.times = entry.times.filter(t => now - t < _IP_WIN)
+  const burst = entry.times.filter(t => now - t < _BURST_WIN).length
+  if (burst >= _BURST_MAX)            return res.status(429).json({ error: 'rate_limit_burst', retryAfter: 5 })
+  if (entry.times.length >= _IP_MAX)  return res.status(429).json({ error: 'rate_limit', retryAfter: 60 })
+  entry.times.push(now)
+  _ipReq.set(ip, entry)
+  if (_ipReq.size > 5000) {
+    for (const [k, v] of _ipReq)
+      if (v.times.every(t => now - t > _IP_WIN)) _ipReq.delete(k)
+  }
+  next()
+})
+
+// ── In-Memory Sessions (VisionageCore instances) ──────────────────────────────
+// Sessions are ephemeral — core state resets on Railway restart.
+// Persistent data (routes, points) lives in JSON file.
+
+const sessions    = new Map()   // sid → { core, lastActive }
+const lock        = new Set()
+const SESSION_TTL = 2 * 60 * 60 * 1000  // 2h
+
+setInterval(() => {
   const now = Date.now()
+  for (const [sid, s] of sessions)
+    if (now - s.lastActive > SESSION_TTL) { sessions.delete(sid); console.log(`[visionage] session expired: ${sid.slice(-8)}`) }
+}, 30 * 60 * 1000)
 
-  for (const obj of objects) {
-    if (!objectHistory.has(obj.id)) {
-      objectHistory.set(obj.id, [])
-    }
+async function getCore(sid) {
+  if (!sessions.has(sid)) {
+    // VisionageCore without IndexedDB — pass dbName=null to disable it
+    const core = new VisionageCore({ tolerance: 15, matchThreshold: 0.70, dbName: null })
+    // Init without IndexedDB — just set flag
+    core._ready = true
+    // Restore saved routes + points into core memory
+    const savedRoutes = _getRoutes(sid)
+    const savedPoints = _getPoints(sid)
+    for (const r of savedRoutes) core._memory._routes.set(r.id, r)
+    for (const p of savedPoints) core._memory._points.set(p.id, p)
+    core._memory._loaded = true
+    sessions.set(sid, { core, lastActive: Date.now() })
+    console.log(`[visionage] new session: ${sid.slice(-8)} routes:${savedRoutes.length} points:${savedPoints.length}`)
+  }
+  sessions.get(sid).lastActive = Date.now()
+  return sessions.get(sid).core
+}
 
-    const arr = objectHistory.get(obj.id)
-    arr.push({
-      cx: obj.cx,
-      cy: obj.cy,
-      distance: obj.distance,
-      t: now
-    })
+// ── Validation ────────────────────────────────────────────────────────────────
+function validSid(sid) { return typeof sid === 'string' && sid.length > 4 && sid.length < 80 }
 
-    if (arr.length > 6) arr.shift()
+function requireSession(req, res, next) {
+  const sid = req.body?.sessionId || req.params?.id || req.query?.sessionId
+  if (!sid || !validSid(sid)) return res.status(400).json({ error: 'missing_or_invalid_session_id' })
+  req.sid = sid
+  next()
+}
+
+// ── Serializers ───────────────────────────────────────────────────────────────
+function serRoute(r) {
+  return {
+    id:        r.id,
+    title:     r.title,
+    scope:     r.scope,
+    published: r.published,
+    nodeCount: r.nodes?.length ?? 0,
+    nodes: (r.nodes ?? []).map(n => ({
+      pointId:   n.pointId,
+      order:     n.order,
+      theta:     n.theta,
+      title:     n.title,
+      gps:       n.gps ?? null,
+      hasFrames: Array.isArray(n.frames) && n.frames.length > 0,
+    })),
+    createdAt: r.createdAt,
   }
 }
 
-function isApproaching(id) {
-  const arr = objectHistory.get(id)
-  if (!arr || arr.length < 2) return false
-
-  const rank = { far: 1, medium: 2, close: 3, very_close: 4 }
-  const last = arr[arr.length - 1]
-  const prev = arr[arr.length - 2]
-
-  return (rank[last.distance] ?? 0) > (rank[prev.distance] ?? 0)
+function serPoint(p) {
+  return {
+    id:        p.id,
+    title:     p.title,
+    theta:     p.theta,
+    gps:       p.gps ?? null,
+    type:      p.type,
+    scope:     p.scope,
+    hasFrames: Array.isArray(p.frames) && p.frames.length > 0,
+    createdAt: p.createdAt,
+  }
 }
 
-router.post("/", (req, res) => {
-  if (!req.body || typeof req.body.angle !== "number") {
-    return res.status(400).json({ error: "angle required" })
-  }
+// ── GET /status ───────────────────────────────────────────────────────────────
+router.get('/status', (_req, res) => {
+  res.json({ ok: true, engine: 'VisionageCore', sessions: sessions.size, version: '2.0', storage: 'json' })
+})
 
+// ── POST /update ──────────────────────────────────────────────────────────────
+router.post('/update', requireSession, async (req, res) => {
   const { angle } = req.body
-  const objects = Array.isArray(req.body.objects) ? req.body.objects : []
+  if (!Number.isFinite(angle)) return res.status(400).json({ error: 'invalid_angle' })
+  try {
+    const core = await getCore(req.sid)
+    const r    = core.update(angle)
+    res.json({ ok: true, angle: r.angle })
+  } catch(e) { res.status(500).json({ error: e.message }) }
+})
 
-  updateTemporalHistory(objects)
+// ── POST /scan/start ──────────────────────────────────────────────────────────
+router.post('/scan/start', requireSession, async (req, res) => {
+  const { title = 'New Route', scope = 'personal', stepDeg = 5 } = req.body
+  const sid = req.sid
+  if (lock.has(sid)) return res.status(429).json({ error: 'request_in_progress' })
+  lock.add(sid)
+  try {
+    const core = await getCore(sid)
+    const r    = core.startScan({ title, scope, stepDeg })
+    res.json({ ok: true, ...r })
+  } catch(e) { res.status(500).json({ error: e.message }) }
+  finally { lock.delete(sid) }
+})
 
-  const result = vision.update(angle)
+// ── POST /scan/node ───────────────────────────────────────────────────────────
+router.post('/scan/node', requireSession, async (req, res) => {
+  const { angle, title, gps = null, frames = [] } = req.body
+  if (!Number.isFinite(angle)) return res.status(400).json({ error: 'invalid_angle' })
+  const sid = req.sid
+  if (lock.has(sid)) return res.status(429).json({ error: 'request_in_progress' })
+  lock.add(sid)
+  try {
+    const core = await getCore(sid)
+    core.update(angle)
+    const r = await core.addScanPoint({ angle, title, gps, frames })
+    // Persist point to JSON
+    const point = core._memory.getPoint(r.node.pointId)
+    if (point) _savePoint(sid, point)
+    console.log(`[visionage:${sid.slice(-8)}] node: ${r.node.title} @${Math.round(r.node.theta)}°`)
+    res.json({ ok: true, node: r.node, totalNodes: r.totalNodes })
+  } catch(e) { res.status(500).json({ error: e.message }) }
+  finally { lock.delete(sid) }
+})
 
-  const absVelocity = Math.abs(result.velocity ?? 0)
-  const absStep = Math.abs(result.step ?? 0)
+// ── POST /scan/finish ─────────────────────────────────────────────────────────
+router.post('/scan/finish', requireSession, async (req, res) => {
+  const { title } = req.body
+  const sid = req.sid
+  if (lock.has(sid)) return res.status(429).json({ error: 'request_in_progress' })
+  lock.add(sid)
+  try {
+    const core = await getCore(sid)
+    const r    = await core.finishScan({ title })
+    // Persist route to JSON
+    _saveRoute(sid, r.route)
+    console.log(`[visionage:${sid.slice(-8)}] route saved: "${r.route.title}" (${r.route.nodes.length} nodes)`)
+    res.json({ ok: true, route: serRoute(r.route) })
+  } catch(e) { res.status(400).json({ error: e.message }) }
+  finally { lock.delete(sid) }
+})
 
-  let level = "clear"
-  let message = "مراقبة نشطة"
-  let danger = false
+// ── POST /scan/cancel ─────────────────────────────────────────────────────────
+router.post('/scan/cancel', requireSession, async (req, res) => {
+  try {
+    const core = await getCore(req.sid)
+    res.json({ ok: true, ...core.cancelScan() })
+  } catch(e) { res.status(500).json({ error: e.message }) }
+})
 
-  const centerObjects = objects.filter(o => o.zone === "Center")
-  const closeCenterObjects = centerObjects.filter(
-    o => o.distance === "close" || o.distance === "very_close"
-  )
+// ── POST /navigate/start ──────────────────────────────────────────────────────
+router.post('/navigate/start', requireSession, async (req, res) => {
+  const { routeId } = req.body
+  if (!routeId) return res.status(400).json({ error: 'missing_route_id' })
+  try {
+    const core  = await getCore(req.sid)
+    const state = core.startNavigation(routeId)
+    console.log(`[visionage:${req.sid.slice(-8)}] nav started: ${routeId}`)
+    res.json({ ok: true, state })
+  } catch(e) { res.status(400).json({ error: e.message }) }
+})
 
-  const personAhead = closeCenterObjects.find(o => o.class === "person")
-  const approachingObject = closeCenterObjects.find(o => isApproaching(o.id))
-  const anyMediumAhead = centerObjects.find(
-    o => o.distance === "medium" || o.distance === "close" || o.distance === "very_close"
-  )
+// ── POST /navigate/tick ───────────────────────────────────────────────────────
+router.post('/navigate/tick', requireSession, async (req, res) => {
+  const { angle, visualMatch = null, gps = null, motionScore = null, gpsRadius = 8 } = req.body
+  if (!Number.isFinite(angle)) return res.status(400).json({ error: 'invalid_angle' })
+  const sid = req.sid
+  if (lock.has(sid)) return res.status(429).json({ error: 'request_in_progress' })
+  lock.add(sid)
+  try {
+    const core = await getCore(sid)
+    core.update(angle)
+    const gpsOK = gps && (!gps.accuracy || gps.accuracy <= 20)
+    if (gpsOK) core.setGPS(gps)
+    const state = core.navigationTick(visualMatch, { motionScore, gpsRadius })
+    res.json({ ok: true, state, angle: core.getAngle() })
+  } catch(e) { res.status(500).json({ error: e.message }) }
+  finally { lock.delete(sid) }
+})
 
-  if (personAhead && isApproaching(personAhead.id)) {
-    level = "critical"
-    message = "شخص يقترب أمامك — توقف"
-    danger = true
-  } else if (personAhead) {
-    level = "critical"
-    message = "شخص أمامك — توقف"
-    danger = true
-  } else if (approachingObject) {
-    level = "critical"
-    message = "جسم يقترب أمامك — توقف"
-    danger = true
-  } else if (closeCenterObjects.length > 0) {
-    level = "warning"
-    message = "جسم قريب أمامك — انتبه"
-    danger = false
-  } else if (anyMediumAhead) {
-    level = "notice"
-    message = "جسم أمامك"
-    danger = false
-  } else if (objects.length > 0) {
-    level = "notice"
-    message = "جسم في المحيط"
-    danger = false
-  }
+// ── POST /navigate/stop ───────────────────────────────────────────────────────
+router.post('/navigate/stop', requireSession, async (req, res) => {
+  try {
+    const core = await getCore(req.sid)
+    res.json({ ok: true, ...core.stopNavigation() })
+  } catch(e) { res.status(500).json({ error: e.message }) }
+})
 
-  if (!danger) {
-    if (absVelocity > 0.4 || absStep > 90) {
-      level = "critical"
-      message = "حركة حادة — توقف"
-      danger = true
-    } else if (absVelocity > 0.2 || absStep > 45) {
-      level = level === "clear" ? "warning" : level
-      message = level === "warning" ? "حركة سريعة — انتبه" : message
-    }
-  }
+// ── POST /navigate/arrived ────────────────────────────────────────────────────
+router.post('/navigate/arrived', requireSession, async (req, res) => {
+  try {
+    const core  = await getCore(req.sid)
+    const state = core.advanceNavigation()
+    res.json({ ok: true, state })
+  } catch(e) { res.status(500).json({ error: e.message }) }
+})
 
-  res.json({
-    ...result,
-    level,
-    message,
-    danger,
-    angle: result.state,
-    objectsCount: objects.length
-  })
+// ── GET /routes ───────────────────────────────────────────────────────────────
+router.get('/routes', requireSession, async (req, res) => {
+  try {
+    const core   = await getCore(req.sid)
+    const routes = core.getRoutes().map(serRoute)
+    res.json({ ok: true, routes, count: routes.length })
+  } catch(e) { res.status(500).json({ error: e.message }) }
+})
+
+// ── GET /points ───────────────────────────────────────────────────────────────
+router.get('/points', requireSession, async (req, res) => {
+  try {
+    const core   = await getCore(req.sid)
+    const points = core.getPoints().map(serPoint)
+    res.json({ ok: true, points, count: points.length })
+  } catch(e) { res.status(500).json({ error: e.message }) }
+})
+
+// ── POST /point/save ──────────────────────────────────────────────────────────
+router.post('/point/save', requireSession, async (req, res) => {
+  const { angle, title = 'Point', gps = null, frames = [], type = 'point', scope = 'personal' } = req.body
+  if (!Number.isFinite(angle)) return res.status(400).json({ error: 'invalid_angle' })
+  const sid = req.sid
+  try {
+    const core  = await getCore(sid)
+    core.update(angle)
+    const point = await core.savePoint({ title, gps, frames, type, scope })
+    _savePoint(sid, point)
+    console.log(`[visionage:${sid.slice(-8)}] point saved: "${point.title}" @${Math.round(point.theta)}°`)
+    res.json({ ok: true, point: serPoint(point) })
+  } catch(e) { res.status(500).json({ error: e.message }) }
+})
+
+// ── DELETE /session/:id ───────────────────────────────────────────────────────
+router.delete('/session/:id', (req, res) => {
+  const sid = req.params.id
+  if (!validSid(sid)) return res.status(400).json({ error: 'invalid_session_id' })
+  sessions.delete(sid)
+  lock.delete(sid)
+  _deleteSession(sid)
+  console.log(`[visionage] session deleted: ${sid.slice(-8)}`)
+  res.json({ ok: true })
 })
 
 export default router
