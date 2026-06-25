@@ -349,6 +349,22 @@ router.post('/point/save', requireSession, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }) }
 })
 
+// ── DELETE /route/:id ────────────────────────────────────────────────────────
+router.delete('/route/:id', requireSession, async (req, res) => {
+  const routeId = req.params.id
+  if (!routeId) return res.status(400).json({ error: 'missing_route_id' })
+  try {
+    const core = await getCore(req.sid)
+    await core.deleteRoute(routeId)
+    // Also remove from JSON store
+    const routes = _getRoutes(req.sid)
+    const idx    = routes.findIndex(r => r.id === routeId)
+    if (idx >= 0) { routes.splice(idx, 1); _store.routes[req.sid] = routes; _saveStore() }
+    console.log(`[visionage:${req.sid.slice(-8)}] route deleted: ${routeId}`)
+    res.json({ ok: true, deleted: routeId })
+  } catch(e) { res.status(500).json({ error: e.message }) }
+})
+
 // ── DELETE /session/:id ───────────────────────────────────────────────────────
 router.delete('/session/:id', (req, res) => {
   const sid = req.params.id
