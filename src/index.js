@@ -9,6 +9,7 @@ import celfRoute, {
 import processTextRoute from './api/process-text.route.js'
 import indexCodeRoute   from './api/index-code.route.js'
 import demoSymbolRoute  from './api/demo-symbol.route.js'
+import visionageRoute   from './api/visionage.route.js'
 
 const app  = express()
 const PORT = process.env.PORT || 8080
@@ -35,21 +36,16 @@ app.use(cors({
   ]
 }))
 
-app.use(express.json({
-  limit: '10mb'
-}))
-app.use(express.raw({
-  type: 'application/octet-stream',
-  limit: '1mb'
-}))
+app.use(express.json({ limit: '10mb' }))
+app.use(express.raw({ type: 'application/octet-stream', limit: '1mb' }))
 app.use(express.static('public'))
 
 // ── Routes ────────────────────────────────────────────────────────
 app.use('/api/cycleguard', cycleguardRoute)
 app.use('/api/cg-session', cycleguardSessionRoute)
-app.use('/api/identity', identityRoute)
+app.use('/api/identity',   identityRoute)
 app.use('/api/index-code', indexCodeRoute)
-app.use('/api/demo-symbol', demoSymbolRoute)
+app.use('/api/demo-symbol',demoSymbolRoute)
 
 // ── CPSE — CyclicProcessorEngine ──────────────────────────────────
 app.use('/api/field', celfRoute)
@@ -57,10 +53,11 @@ app.use('/api/field', celfRoute)
 // ── CELF AI ───────────────────────────────────────────────────────
 app.use('/celf', processTextRoute)
 app.get('/celf/monitor', (_req, res) => {
-  return res.json(
-    getMonitorData()
-  )
+  return res.json(getMonitorData())
 })
+
+// ── Visionage ─────────────────────────────────────────────────────
+app.use('/api/visionage', visionageRoute)
 
 // ── Demo Status ────────────────────────────────────────────────────
 app.get('/api/demo-status', (_req, res) => {
@@ -82,13 +79,9 @@ app.get('/', (_req, res) => {
 })
 
 app.get('/health', (_req, res) => {
-  return res.status(200).json({
-    ok: true
-  })
+  return res.status(200).json({ ok: true })
 })
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(
-    'DIGINETZ CORE RUNNING ON PORT ' + PORT
-  )
+  console.log('DIGINETZ CORE RUNNING ON PORT ' + PORT)
 })
