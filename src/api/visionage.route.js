@@ -319,8 +319,11 @@ router.post('/navigate/start', requireSession, async (req, res) => {
 })
 
 // ── POST /navigate/tick ───────────────────────────────────────────────────────
+// Accepts raw fingerprint from client — server computes visual match
+// This keeps all calculation in VisionageCore, not in index.html
 router.post('/navigate/tick', requireSession, async (req, res) => {
-  const { angle, visualMatch = null, gps = null, motionScore = null, gpsRadius = 8 } = req.body
+  const { angle, fingerprint = null, visualMatch: clientMatch = null,
+          gps = null, motionScore = null, gpsRadius = 8 } = req.body
   if (!Number.isFinite(angle)) return res.status(400).json({ error: 'invalid_angle' })
   const sid = req.sid
   if (lock.has(sid)) return res.status(429).json({ error: 'request_in_progress' })
@@ -328,8 +331,22 @@ router.post('/navigate/tick', requireSession, async (req, res) => {
   try {
     const core = await getCore(sid)
     core.update(angle)
+
     const gpsOK = gps && (!gps.accuracy || gps.accuracy <= 20)
     if (gpsOK) core.setGPS(gps)
+
+    // Server-side visual matching — Transition = Movement + Δθ + Fingerprint
+    let visualMatch = clientMatch  // fallback if client computed it
+    if (fingerprint && !visualMatch) {
+      // Get next transition's frames from navigation state
+      const navState = core._nav
+      const T = navState.transitions?.[navState.currentIndex]
+      if (T && Array.isArray(T.toFrames) && T.toFrames.length > 0) {
+        // VisionageCore.VisualMatcher computes similarity
+        visualMatch = core.matchFrames(fingerprint, T.toFrames)
+      }
+    }
+
     const state = core.navigationTick(visualMatch, { motionScore, gpsRadius })
     res.json({ ok: true, state, angle: core.getAngle() })
   } catch(e) { res.status(500).json({ error: e.message }) }
