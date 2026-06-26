@@ -1,4 +1,3 @@
-
 /**
  * visionage.route.js  v2
  * Visionage Navigation API — DigiNetz Engine Suite
@@ -344,14 +343,23 @@ router.post('/navigate/tick', requireSession, async (req, res) => {
     if (gpsOK) core.setGPS(gps)
 
     // Server-side visual matching — Transition = Movement + Δθ + Fingerprint
-    let visualMatch = clientMatch  // fallback if client computed it
+    let visualMatch = clientMatch
     if (fingerprint && !visualMatch) {
-      // Get next transition's frames from navigation state
       const navState = core._nav
-      const T = navState.transitions?.[navState.currentIndex]
-      if (T && Array.isArray(T.toFrames) && T.toFrames.length > 0) {
-        // VisionageCore.VisualMatcher computes similarity
-        visualMatch = core.matchFrames(fingerprint, T.toFrames)
+
+      if (navState._locating) {
+        // Phase 0: match against FIRST ANCHOR frames (not transition)
+        const firstAnchor = navState.anchors?.[0]
+        const firstFrames = firstAnchor?.frames ?? []
+        if (firstFrames.length > 0) {
+          visualMatch = core.matchFrames(fingerprint, firstFrames)
+        }
+      } else {
+        // Normal: match against next transition's frames
+        const T = navState.transitions?.[navState.currentIndex]
+        if (T && Array.isArray(T.toFrames) && T.toFrames.length > 0) {
+          visualMatch = core.matchFrames(fingerprint, T.toFrames)
+        }
       }
     }
 
