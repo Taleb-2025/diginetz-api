@@ -186,12 +186,12 @@ function serRoute(r) {
         ? t.toFrames.slice(0, 1)  // send max 1 frame for visual match
         : [],
     })),
-    // Legacy nodes for backward compat
+    // Legacy nodes for backward compat — title MUST be present for nav UI
     nodes: (r.nodes ?? r.anchors ?? []).map(n => ({
       pointId:   n.pointId ?? n.id,
       order:     n.order,
       theta:     n.theta ?? 0,
-      title:     n.title,
+      title:     n.title ?? n.label ?? ('Node '+(n.order+1)),
       gps:       n.gps ?? null,
       frames:    Array.isArray(n.frames) ? n.frames.slice(0,1) : [],
       hasFrames: Array.isArray(n.frames) && n.frames.length > 0,
@@ -307,13 +307,20 @@ router.post('/scan/cancel', requireSession, async (req, res) => {
 })
 
 // ── POST /navigate/start ──────────────────────────────────────────────────────
+// startAngle = raw gyro angle at moment user pressed START HERE
+// This becomes localRef = 0 for all transition calculations
 router.post('/navigate/start', requireSession, async (req, res) => {
-  const { routeId } = req.body
+  const { routeId, startAngle } = req.body
   if (!routeId) return res.status(400).json({ error: 'missing_route_id' })
   try {
-    const core  = await getCore(req.sid)
+    const core = await getCore(req.sid)
+    // FIX: set localRef from user's confirmed start position
+    if (Number.isFinite(startAngle)) {
+      core.update(startAngle)         // sync cyclic engine to real angle
+      core.setLocalRef(startAngle)    // this angle = 0 reference
+    }
     const state = core.startNavigation(routeId)
-    console.log(`[visionage:${req.sid.slice(-8)}] nav started: ${routeId}`)
+    console.log(`[visionage:${req.sid.slice(-8)}] nav started: ${routeId} localRef:${startAngle ?? 'auto'}°`)
     res.json({ ok: true, state })
   } catch(e) { res.status(400).json({ error: e.message }) }
 })
