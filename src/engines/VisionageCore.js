@@ -315,13 +315,14 @@ class NavigationState {
     this.routeId      = null
     this.anchors      = []
     this.transitions  = []
-    this.currentIndex = 0   // index into transitions[]
+    this.currentIndex = 0
     this.status       = 'idle'
     this.message      = ''
     this.progress     = 0
     this.startedAt    = null
     this._localRef    = null
     this._globalLog   = []
+    this._locating    = false  // true during first-anchor search
   }
 
   start(route) {
@@ -359,12 +360,28 @@ class NavigationState {
     this.anchors      = anchors
     this.transitions  = transitions
     this.currentIndex = 0
-    this.status       = 'navigating'
-    this.progress     = 0
-    this.message      = 'Navigation started'
     this.startedAt    = Date.now()
-    this._localRef    = null  // set by caller via setLocalRef
+    this._localRef    = null
     this._globalLog   = []
+
+    // Check if first anchor has frames → require visual confirmation
+    const firstAnchor = anchors[0] ?? null
+    const firstHasFrames = firstAnchor &&
+      Array.isArray(firstAnchor.frames) && firstAnchor.frames.length > 0
+
+    if (firstHasFrames) {
+      // Phase 0: locating — must visually confirm start anchor
+      this._locating = true
+      this.status    = 'locating'
+      this.progress  = 0
+      this.message   = `Looking for ${firstAnchor.title ?? 'starting point'}…`
+    } else {
+      // No frames → skip locating, start immediately
+      this._locating = false
+      this.status    = 'navigating'
+      this.progress  = 0
+      this.message   = 'Navigation started'
+    }
     return this._summary()
   }
 
@@ -385,6 +402,32 @@ class NavigationState {
     if (this._globalLog.length > 5000) this._globalLog.shift()
 
     if (this._localRef === null) this._localRef = globalAngle
+
+    // ── Phase 0: LOCATING — find first anchor visually ───────────
+    if (this._locating) {
+      const firstAnchor = this.anchors[0]
+      const visualConfirmed = visualMatch != null && visualMatch.matched === true
+      const firstTitle = firstAnchor?.title ?? 'starting point'
+
+      if (visualConfirmed) {
+        // Found! Set localRef to current angle and begin navigation
+        this._locating  = false
+        this._localRef  = globalAngle
+        this.status     = 'navigating'
+        this.message    = `Found — ${firstTitle}`
+        return { ...this._summary(), located: true, locatedTitle: firstTitle }
+      }
+
+      // Still searching
+      const sim = visualMatch?.similarity ?? 0
+      this.message = `Looking for ${firstTitle}… ${Math.round(sim*100)}%`
+      return {
+        ...this._summary(),
+        locating:    true,
+        similarity:  sim,
+        instruction: `Find ${firstTitle} — point camera at starting location`,
+      }
+    }
 
     // Arrived at final anchor?
     if (this.currentIndex >= this.transitions.length) {
@@ -490,11 +533,12 @@ class NavigationState {
     const T = this.transitions[this.currentIndex]
     return {
       active:        this.active,
-      status:        this.status,
+      status:        this.status,   // 'locating' | 'navigating' | 'arrived'
+      locating:      this._locating ?? false,
       progress:      Math.round(this.progress*100),
       message:       this.message,
       stepIndex:     this.currentIndex,
-      totalSteps:    this.transitions.length + 1,  // anchors = transitions + 1
+      totalSteps:    this.transitions.length + 1,
       currentPoint:  this.currentAnchor,
       nextPoint:     this.nextAnchor,
       targetPoint:   this.targetAnchor,
