@@ -141,8 +141,13 @@ async function getCore(sid) {
     // Restore saved routes + points into core memory
     const savedRoutes = _getRoutes(sid)
     const savedPoints = _getPoints(sid)
+    // v6: hydrate both routes (with transitions) and anchors
     for (const r of savedRoutes) core._memory._routes.set(r.id, r)
-    for (const p of savedPoints) core._memory._points.set(p.id, p)
+    for (const p of savedPoints) {
+      // Support both _points and _anchors
+      if (core._memory._anchors) core._memory._anchors.set(p.id, p)
+      else if (core._memory._points) core._memory._points.set(p.id, p)
+    }
     core._memory._loaded = true
     sessions.set(sid, { core, lastActive: Date.now() })
     console.log(`[visionage] new session: ${sid.slice(-8)} routes:${savedRoutes.length} points:${savedPoints.length}`)
@@ -164,17 +169,31 @@ function requireSession(req, res, next) {
 // ── Serializers ───────────────────────────────────────────────────────────────
 function serRoute(r) {
   return {
-    id:        r.id,
-    title:     r.title,
-    scope:     r.scope,
-    published: r.published,
-    nodeCount: r.nodes?.length ?? 0,
-    nodes: (r.nodes ?? []).map(n => ({
-      pointId:   n.pointId,
+    id:          r.id,
+    title:       r.title,
+    scope:       r.scope,
+    published:   r.published,
+    nodeCount:   r.nodes?.length ?? r.anchors?.length ?? 0,
+    // v6: transitions are the route identity
+    transitions: (r.transitions ?? []).map(t => ({
+      fromId:     t.fromId,
+      toId:       t.toId,
+      deltaTheta: t.deltaTheta,
+      toGps:      t.toGps ?? null,
+      toTitle:    t.toTitle ?? null,
+      // Include frames for visual match (limited to avoid large payloads)
+      toFrames:   Array.isArray(t.toFrames) && t.toFrames.length > 0
+        ? t.toFrames.slice(0, 1)  // send max 1 frame for visual match
+        : [],
+    })),
+    // Legacy nodes for backward compat
+    nodes: (r.nodes ?? r.anchors ?? []).map(n => ({
+      pointId:   n.pointId ?? n.id,
       order:     n.order,
-      theta:     n.theta,
+      theta:     n.theta ?? 0,
       title:     n.title,
       gps:       n.gps ?? null,
+      frames:    Array.isArray(n.frames) ? n.frames.slice(0,1) : [],
       hasFrames: Array.isArray(n.frames) && n.frames.length > 0,
     })),
     createdAt: r.createdAt,
@@ -225,21 +244,38 @@ router.post('/scan/start', requireSession, async (req, res) => {
 })
 
 // ── POST /scan/node ───────────────────────────────────────────────────────────
+// v6: globalAngle is the raw gyro value — Δθ computed in ScanMode
 router.post('/scan/node', requireSession, async (req, res) => {
-  const { angle, title, gps = null, frames = [] } = req.body
-  if (!Number.isFinite(angle)) return res.status(400).json({ error: 'invalid_angle' })
+  const { angle, globalAngle, title, gps = null, frames = [] } = req.body
+  const rawAngle = Number.isFinite(globalAngle) ? globalAngle
+                 : Number.isFinite(angle)       ? angle : null
+  if (rawAngle === null) return res.status(400).json({ error: 'invalid_angle' })
   const sid = req.sid
   if (lock.has(sid)) return res.status(429).json({ error: 'request_in_progress' })
   lock.add(sid)
   try {
     const core = await getCore(sid)
-    core.update(angle)
-    const r = await core.addScanPoint({ angle, title, gps, frames })
-    // Persist point to JSON
-    const point = core._memory.getPoint(r.node.pointId)
-    if (point) _savePoint(sid, point)
-    console.log(`[visionage:${sid.slice(-8)}] node: ${r.node.title} @${Math.round(r.node.theta)}°`)
-    res.json({ ok: true, node: r.node, totalNodes: r.totalNodes })
+    core.update(rawAngle)
+    // v6 addScanPoint sends globalAngle — ScanMode computes Δθ
+    const r = await core.addScanPoint({ angle: rawAngle, title, gps, frames })
+    // Persist anchor to JSON
+    const anchorId = r.anchor?.id ?? r.node?.pointId
+    if (anchorId) {
+      const anchor = core._memory.getAnchor?.(anchorId) ?? core._memory.getPoint?.(anchorId)
+      if (anchor) _savePoint(sid, anchor)
+    }
+    const logAngle = r.deltaTheta !== undefined ? `Δθ=${r.deltaTheta}°` : `@${Math.round(rawAngle)}°`
+    console.log(`[visionage:${sid.slice(-8)}] anchor: ${title ?? 'Node'} ${logAngle}`)
+    // Return both v5 and v6 fields for compat
+    res.json({
+      ok:               true,
+      node:             r.anchor ?? r.node,
+      anchor:           r.anchor ?? r.node,
+      totalNodes:       r.totalAnchors ?? r.totalNodes ?? 0,
+      totalAnchors:     r.totalAnchors ?? r.totalNodes ?? 0,
+      totalTransitions: r.totalTransitions ?? 0,
+      deltaTheta:       r.deltaTheta ?? null,
+    })
   } catch(e) { res.status(500).json({ error: e.message }) }
   finally { lock.delete(sid) }
 })
@@ -253,9 +289,10 @@ router.post('/scan/finish', requireSession, async (req, res) => {
   try {
     const core = await getCore(sid)
     const r    = await core.finishScan({ title })
-    // Persist route to JSON
+    // Persist route (includes transitions array in v6)
     _saveRoute(sid, r.route)
-    console.log(`[visionage:${sid.slice(-8)}] route saved: "${r.route.title}" (${r.route.nodes.length} nodes)`)
+    const tCount = r.route.transitions?.length ?? (r.route.nodes?.length - 1) ?? 0
+    console.log(`[visionage:${sid.slice(-8)}] route saved: "${r.route.title}" (${tCount} transitions)`)
     res.json({ ok: true, route: serRoute(r.route) })
   } catch(e) { res.status(400).json({ error: e.message }) }
   finally { lock.delete(sid) }
