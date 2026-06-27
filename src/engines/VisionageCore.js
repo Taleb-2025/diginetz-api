@@ -594,12 +594,13 @@ class ScanMode {
     const { globalAngle, frames=[], gps=null, title } = options
     const order = this._anchors.length
 
-    // First anchor — just record position, no transition yet
+    // First anchor — record position WITH frames for visual locating
+    // FIX: frames saved here so NavigationState can match on arrival
     if (this._lastGlobalAngle === null) {
       this._lastGlobalAngle = globalAngle
       const anchor = this._store.saveAnchor({
         title:  title ?? 'Start',
-        frames: [],    // start anchor has no arrival frames
+        frames,   // ← save frames for Locating phase in Navigation
         gps,
         order:  0,
         scope:  this._meta.scope,
