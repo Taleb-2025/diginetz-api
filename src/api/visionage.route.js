@@ -2,24 +2,8 @@
  * visionage.route.js  v2
  * Visionage Navigation API — DigiNetz Engine Suite
  *
- * Storage: JSON file on Railway (./data/visionage.json)
+ * Storage: JSON file on Railway Volume (persistent)
  *          In-memory sessions (VisionageCore per user)
- *
- * Endpoints:
- *   GET  /api/visionage/status
- *   POST /api/visionage/update
- *   POST /api/visionage/scan/start
- *   POST /api/visionage/scan/node
- *   POST /api/visionage/scan/finish
- *   POST /api/visionage/scan/cancel
- *   POST /api/visionage/navigate/start
- *   POST /api/visionage/navigate/tick
- *   POST /api/visionage/navigate/stop
- *   POST /api/visionage/navigate/arrived
- *   GET  /api/visionage/routes
- *   GET  /api/visionage/points
- *   POST /api/visionage/point/save
- *   DELETE /api/visionage/session/:id
  */
 
 import express from 'express'
@@ -30,12 +14,15 @@ import { VisionageCore } from '../engines/VisionageCore.js'
 
 const router  = express.Router()
 const __dir   = path.dirname(fileURLToPath(import.meta.url))
-const DATA_DIR  = path.join(__dir, '../../data')
+
+// FIX: use Railway Volume mount path for persistent storage
+const DATA_DIR  = process.env.RAILWAY_VOLUME_MOUNT_PATH
+  ?? path.join(__dir, '../../data')
 const DATA_FILE = path.join(DATA_DIR, 'visionage.json')
 
-// ── JSON Storage ──────────────────────────────────────────────────────────────
-// Structure: { routes: { [sid]: Route[] }, points: { [sid]: Point[] } }
+console.log('[visionage] DATA_DIR:', DATA_DIR)
 
+// ── JSON Storage ──────────────────────────────────────────────────────────────
 let _store = { routes: {}, points: {} }
 let _savePending = false
 
@@ -45,6 +32,8 @@ function _loadStore() {
     if (fs.existsSync(DATA_FILE)) {
       _store = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'))
       console.log('[visionage] store loaded — routes sessions:', Object.keys(_store.routes).length)
+    } else {
+      console.log('[visionage] no store file yet — starting fresh')
     }
   } catch(e) {
     console.warn('[visionage] store load failed:', e.message)
@@ -52,7 +41,6 @@ function _loadStore() {
   }
 }
 
-// Debounced save — batches writes, avoids hammering disk on every tick
 function _saveStore() {
   if (_savePending) return
   _savePending = true
@@ -118,33 +106,28 @@ router.use((req, res, next) => {
   next()
 })
 
-// ── In-Memory Sessions (VisionageCore instances) ──────────────────────────────
-// Sessions are ephemeral — core state resets on Railway restart.
-// Persistent data (routes, points) lives in JSON file.
-
-const sessions    = new Map()   // sid → { core, lastActive }
+// ── In-Memory Sessions ────────────────────────────────────────────────────────
+const sessions    = new Map()
 const lock        = new Set()
 const SESSION_TTL = 2 * 60 * 60 * 1000  // 2h
 
 setInterval(() => {
   const now = Date.now()
   for (const [sid, s] of sessions)
-    if (now - s.lastActive > SESSION_TTL) { sessions.delete(sid); console.log(`[visionage] session expired: ${sid.slice(-8)}`) }
+    if (now - s.lastActive > SESSION_TTL) {
+      sessions.delete(sid)
+      console.log(`[visionage] session expired: ${sid.slice(-8)}`)
+    }
 }, 30 * 60 * 1000)
 
 async function getCore(sid) {
   if (!sessions.has(sid)) {
-    // VisionageCore without IndexedDB — pass dbName=null to disable it
     const core = new VisionageCore({ tolerance: 15, matchThreshold: 0.70, dbName: null })
-    // Init without IndexedDB — just set flag
     core._ready = true
-    // Restore saved routes + points into core memory
     const savedRoutes = _getRoutes(sid)
     const savedPoints = _getPoints(sid)
-    // v6: hydrate both routes (with transitions) and anchors
     for (const r of savedRoutes) core._memory._routes.set(r.id, r)
     for (const p of savedPoints) {
-      // Support both _points and _anchors
       if (core._memory._anchors) core._memory._anchors.set(p.id, p)
       else if (core._memory._points) core._memory._points.set(p.id, p)
     }
@@ -174,19 +157,16 @@ function serRoute(r) {
     scope:       r.scope,
     published:   r.published,
     nodeCount:   r.nodes?.length ?? r.anchors?.length ?? 0,
-    // v6: transitions are the route identity
     transitions: (r.transitions ?? []).map(t => ({
       fromId:     t.fromId,
       toId:       t.toId,
       deltaTheta: t.deltaTheta,
       toGps:      t.toGps ?? null,
       toTitle:    t.toTitle ?? null,
-      // Include frames for visual match (limited to avoid large payloads)
       toFrames:   Array.isArray(t.toFrames) && t.toFrames.length > 0
-        ? t.toFrames.slice(0, 1)  // send max 1 frame for visual match
+        ? t.toFrames.slice(0, 1)
         : [],
     })),
-    // Legacy nodes for backward compat — title MUST be present for nav UI
     nodes: (r.nodes ?? r.anchors ?? []).map(n => ({
       pointId:   n.pointId ?? n.id,
       order:     n.order,
@@ -215,7 +195,7 @@ function serPoint(p) {
 
 // ── GET /status ───────────────────────────────────────────────────────────────
 router.get('/status', (_req, res) => {
-  res.json({ ok: true, engine: 'VisionageCore', sessions: sessions.size, version: '2.0', storage: 'json' })
+  res.json({ ok: true, engine: 'VisionageCore', sessions: sessions.size, version: '2.0', storage: 'json', dataDir: DATA_DIR })
 })
 
 // ── POST /update ──────────────────────────────────────────────────────────────
@@ -244,7 +224,6 @@ router.post('/scan/start', requireSession, async (req, res) => {
 })
 
 // ── POST /scan/node ───────────────────────────────────────────────────────────
-// v6: globalAngle is the raw gyro value — Δθ computed in ScanMode
 router.post('/scan/node', requireSession, async (req, res) => {
   const { angle, globalAngle, title, gps = null, frames = [] } = req.body
   const rawAngle = Number.isFinite(globalAngle) ? globalAngle
@@ -256,9 +235,7 @@ router.post('/scan/node', requireSession, async (req, res) => {
   try {
     const core = await getCore(sid)
     core.update(rawAngle)
-    // v6 addScanPoint sends globalAngle — ScanMode computes Δθ
     const r = await core.addScanPoint({ angle: rawAngle, title, gps, frames })
-    // Persist anchor to JSON
     const anchorId = r.anchor?.id ?? r.node?.pointId
     if (anchorId) {
       const anchor = core._memory.getAnchor?.(anchorId) ?? core._memory.getPoint?.(anchorId)
@@ -266,7 +243,6 @@ router.post('/scan/node', requireSession, async (req, res) => {
     }
     const logAngle = r.deltaTheta !== undefined ? `Δθ=${r.deltaTheta}°` : `@${Math.round(rawAngle)}°`
     console.log(`[visionage:${sid.slice(-8)}] anchor: ${title ?? 'Node'} ${logAngle}`)
-    // Return both v5 and v6 fields for compat
     res.json({
       ok:               true,
       node:             r.anchor ?? r.node,
@@ -289,7 +265,6 @@ router.post('/scan/finish', requireSession, async (req, res) => {
   try {
     const core = await getCore(sid)
     const r    = await core.finishScan({ title })
-    // Persist route (includes transitions array in v6)
     _saveRoute(sid, r.route)
     const tCount = r.route.transitions?.length ?? (r.route.nodes?.length - 1) ?? 0
     console.log(`[visionage:${sid.slice(-8)}] route saved: "${r.route.title}" (${tCount} transitions)`)
@@ -307,17 +282,14 @@ router.post('/scan/cancel', requireSession, async (req, res) => {
 })
 
 // ── POST /navigate/start ──────────────────────────────────────────────────────
-// startAngle = raw gyro angle at moment user pressed START HERE
-// This becomes localRef = 0 for all transition calculations
 router.post('/navigate/start', requireSession, async (req, res) => {
   const { routeId, startAngle } = req.body
   if (!routeId) return res.status(400).json({ error: 'missing_route_id' })
   try {
     const core = await getCore(req.sid)
-    // FIX: set localRef from user's confirmed start position
     if (Number.isFinite(startAngle)) {
-      core.update(startAngle)         // sync cyclic engine to real angle
-      core.setLocalRef(startAngle)    // this angle = 0 reference
+      core.update(startAngle)
+      core.setLocalRef(startAngle)
     }
     const state = core.startNavigation(routeId)
     console.log(`[visionage:${req.sid.slice(-8)}] nav started: ${routeId} localRef:${startAngle ?? 'auto'}°`)
@@ -326,8 +298,6 @@ router.post('/navigate/start', requireSession, async (req, res) => {
 })
 
 // ── POST /navigate/tick ───────────────────────────────────────────────────────
-// Accepts raw fingerprint from client — server computes visual match
-// This keeps all calculation in VisionageCore, not in index.html
 router.post('/navigate/tick', requireSession, async (req, res) => {
   const { angle, fingerprint = null, visualMatch: clientMatch = null,
           gps = null, motionScore = null, gpsRadius = 8 } = req.body
@@ -338,31 +308,24 @@ router.post('/navigate/tick', requireSession, async (req, res) => {
   try {
     const core = await getCore(sid)
     core.update(angle)
-
     const gpsOK = gps && (!gps.accuracy || gps.accuracy <= 20)
     if (gpsOK) core.setGPS(gps)
-
-    // Server-side visual matching — Transition = Movement + Δθ + Fingerprint
     let visualMatch = clientMatch
     if (fingerprint && !visualMatch) {
       const navState = core._nav
-
       if (navState._locating) {
-        // Phase 0: match against FIRST ANCHOR frames (not transition)
         const firstAnchor = navState.anchors?.[0]
         const firstFrames = firstAnchor?.frames ?? []
         if (firstFrames.length > 0) {
           visualMatch = core.matchFrames(fingerprint, firstFrames)
         }
       } else {
-        // Normal: match against next transition's frames
         const T = navState.transitions?.[navState.currentIndex]
         if (T && Array.isArray(T.toFrames) && T.toFrames.length > 0) {
           visualMatch = core.matchFrames(fingerprint, T.toFrames)
         }
       }
     }
-
     const state = core.navigationTick(visualMatch, { motionScore, gpsRadius })
     res.json({ ok: true, state, angle: core.getAngle() })
   } catch(e) { res.status(500).json({ error: e.message }) }
@@ -414,27 +377,25 @@ router.post('/point/save', requireSession, async (req, res) => {
     core.update(angle)
     const point = await core.savePoint({ title, gps, frames, type, scope })
     _savePoint(sid, point)
-    console.log(`[visionage:${sid.slice(-8)}] point saved: "${point.title}" @${Math.round(point.theta)}°`)
+    console.log(`[visionage:${sid.slice(-8)}] point saved: "${point.title}"`)
     res.json({ ok: true, point: serPoint(point) })
   } catch(e) { res.status(500).json({ error: e.message }) }
 })
 
-// ── DELETE /route/:id ────────────────────────────────────────────────────────
+// ── DELETE /route/:id ─────────────────────────────────────────────────────────
 router.delete('/route/:id', requireSession, async (req, res) => {
   const routeId = req.params.id
   if (!routeId) return res.status(400).json({ error: 'missing_route_id' })
   try {
     const core = await getCore(req.sid)
     await core.deleteRoute(routeId)
-    // Remove from JSON store immediately (no debounce — delete must persist)
     if (!_store.routes[req.sid]) _store.routes[req.sid] = []
     _store.routes[req.sid] = _store.routes[req.sid].filter(r => r.id !== routeId)
-    // Also remove related points (nodes of this route)
     try {
       fs.mkdirSync(DATA_DIR, { recursive: true })
       fs.writeFileSync(DATA_FILE, JSON.stringify(_store), 'utf8')
     } catch(e) { console.warn('[visionage] immediate save failed:', e.message) }
-    console.log(`[visionage:${req.sid.slice(-8)}] route deleted & saved: ${routeId}`)
+    console.log(`[visionage:${req.sid.slice(-8)}] route deleted: ${routeId}`)
     res.json({ ok: true, deleted: routeId })
   } catch(e) { res.status(500).json({ error: e.message }) }
 })
