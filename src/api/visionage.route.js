@@ -155,6 +155,7 @@ function serRoute(r) {
     id:          r.id,
     title:       r.title,
     scope:       r.scope,
+    direction:   r.direction ?? 'forward',
     published:   r.published,
     nodeCount:   r.nodes?.length ?? r.anchors?.length ?? 0,
     transitions: (r.transitions ?? []).map(t => ({
@@ -211,13 +212,13 @@ router.post('/update', requireSession, async (req, res) => {
 
 // ── POST /scan/start ──────────────────────────────────────────────────────────
 router.post('/scan/start', requireSession, async (req, res) => {
-  const { title = 'New Route', scope = 'personal', stepDeg = 5 } = req.body
+  const { title = 'New Route', scope = 'personal', stepDeg = 5, direction = 'forward' } = req.body
   const sid = req.sid
   if (lock.has(sid)) return res.status(429).json({ error: 'request_in_progress' })
   lock.add(sid)
   try {
     const core = await getCore(sid)
-    const r    = core.startScan({ title, scope, stepDeg })
+    const r    = core.startScan({ title, scope, stepDeg, direction })
     res.json({ ok: true, ...r })
   } catch(e) { res.status(500).json({ error: e.message }) }
   finally { lock.delete(sid) }
@@ -270,6 +271,36 @@ router.post('/scan/finish', requireSession, async (req, res) => {
     console.log(`[visionage:${sid.slice(-8)}] route saved: "${r.route.title}" (${tCount} transitions)`)
     res.json({ ok: true, route: serRoute(r.route) })
   } catch(e) { res.status(400).json({ error: e.message }) }
+  finally { lock.delete(sid) }
+})
+
+// ── POST /scan/auto-node ─────────────────────────────────────────────────────
+// Called every GPS tick during auto-scan
+// Server decides whether to save anchor based on Δθ + distance
+router.post('/scan/auto-node', requireSession, async (req, res) => {
+  const { angle, globalAngle, gps = null, frames = [],
+          deltaThreshold = 20, distThreshold = 100 } = req.body
+  const rawAngle = Number.isFinite(globalAngle) ? globalAngle
+                 : Number.isFinite(angle)       ? angle : null
+  if (rawAngle === null) return res.status(400).json({ error: 'invalid_angle' })
+  const sid = req.sid
+  if (lock.has(sid)) return res.status(429).json({ error: 'request_in_progress' })
+  lock.add(sid)
+  try {
+    const core = await getCore(sid)
+    core.update(rawAngle)
+    const r = core._scan.addAutoAnchor({
+      globalAngle: rawAngle, gps, frames,
+      deltaThreshold, distThreshold,
+    })
+    // If anchor was saved — persist it
+    if (r.saved && r.anchor) {
+      const anchor = core._memory.getAnchor?.(r.anchor.id)
+      if (anchor) _savePoint(sid, anchor)
+      console.log(`[visionage:${sid.slice(-8)}] auto-anchor: ${r.anchor.title} reason:${r.reason} Δθ:${r.deltaTheta}° dist:${r.dist??'?'}m`)
+    }
+    res.json({ ok: true, ...r })
+  } catch(e) { res.status(500).json({ error: e.message }) }
   finally { lock.delete(sid) }
 })
 
