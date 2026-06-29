@@ -151,6 +151,7 @@ class TransitionStore {
       id:          data.id          ?? this._id('rt'),
       title:       data.title       ?? 'Route',
       description: data.description ?? '',
+      direction:   data.direction   ?? 'forward',
       // Anchors: reference points along the route
       anchors:     data.anchors     ?? [],
       // Transitions: the actual identity of the route
