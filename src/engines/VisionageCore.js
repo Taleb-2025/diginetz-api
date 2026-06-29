@@ -576,6 +576,7 @@ class ScanMode {
       title:       options.title       ?? 'Route',
       description: options.description ?? '',
       scope:       options.scope       ?? 'personal',
+      direction:   options.direction   ?? 'forward',
     }
     return { status:'scanning', message:'Move to first waypoint — tap Add Node' }
   }
@@ -643,6 +644,61 @@ class ScanMode {
       totalTransitions: this._transitions.length,
       status: 'scanning',
     }
+  }
+
+  /**
+   * addAutoAnchor — called every GPS tick
+   * Decides automatically whether to save based on Δθ + distance
+   * + right turn, - left turn
+   */
+  addAutoAnchor(options={}) {
+    const {
+      globalAngle, gps=null, frames=[],
+      deltaThreshold=20, distThreshold=100, title,
+    } = options
+
+    if (!this._active) return { saved: false, reason: 'not_scanning' }
+
+    // First anchor — always save
+    if (this._lastGlobalAngle === null) {
+      const r = this.addAnchor({ globalAngle, gps, frames, title: title ?? 'Start' })
+      return { saved: true, ...r, reason: 'first_anchor' }
+    }
+
+    // Δθ with sign: + right, - left
+    const raw = globalAngle - this._lastGlobalAngle
+    const fwd = (raw % 360 + 360) % 360
+    const signedDelta = fwd > 180 ? fwd - 360 : fwd
+    const absDelta    = Math.abs(signedDelta)
+
+    // GPS distance from last anchor
+    const lastAnchorGPS = this._anchors[this._anchors.length-1]?.gps ?? null
+    let dist = null
+    if (gps && lastAnchorGPS) {
+      const R=6371000
+      const φ1=lastAnchorGPS.lat*Math.PI/180, φ2=gps.lat*Math.PI/180
+      const Δφ=(gps.lat-lastAnchorGPS.lat)*Math.PI/180
+      const Δλ=(gps.lng-lastAnchorGPS.lng)*Math.PI/180
+      const a=Math.sin(Δφ/2)**2+Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2
+      dist = R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a))
+    }
+
+    const turnDetected = absDelta >= deltaThreshold
+    const distReached  = dist !== null && dist >= distThreshold
+
+    if (!turnDetected && !distReached) {
+      return { saved: false, deltaTheta: Math.round(signedDelta), dist: dist ? Math.round(dist) : null }
+    }
+
+    const reason    = turnDetected ? 'turn' : 'distance'
+    const autoTitle = title ?? (turnDetected
+      ? `Kurve ${this._anchors.length}`
+      : `Punkt ${this._anchors.length}`)
+
+    const r = this.addAnchor({ globalAngle, gps, frames, title: autoTitle })
+    return { saved: true, ...r, reason,
+      deltaTheta: Math.round(signedDelta),
+      dist: dist ? Math.round(dist) : null }
   }
 
   async finishScan(options={}) {
@@ -791,6 +847,18 @@ export class VisionageCore {
       frames: options.frames ?? [],
       gps:    options.gps    ?? this._lastGPS,
       title:  options.title,
+    })
+  }
+
+  // Auto-anchor wrapper — delegates to ScanMode.addAutoAnchor()
+  addAutoAnchor(options={}) {
+    return this._scan.addAutoAnchor({
+      globalAngle:    options.globalAngle ?? options.angle ?? this._cyclic.getAngle(),
+      gps:            options.gps         ?? this._lastGPS,
+      frames:         options.frames       ?? [],
+      deltaThreshold: options.deltaThreshold ?? 20,
+      distThreshold:  options.distThreshold  ?? 100,
+      title:          options.title,
     })
   }
 
