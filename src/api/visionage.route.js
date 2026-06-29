@@ -126,12 +126,19 @@ async function getCore(sid) {
     core._ready = true
     const savedRoutes = _getRoutes(sid)
     const savedPoints = _getPoints(sid)
-    for (const r of savedRoutes) core._memory._routes.set(r.id, r)
-    for (const p of savedPoints) {
-      if (core._memory._anchors) core._memory._anchors.set(p.id, p)
-      else if (core._memory._points) core._memory._points.set(p.id, p)
+    // Guard internal memory access — structure may vary
+    try {
+      if (core._memory && core._memory._routes) {
+        for (const r of savedRoutes) core._memory._routes.set(r.id, r)
+      }
+      for (const p of savedPoints) {
+        if (core._memory?._anchors) core._memory._anchors.set(p.id, p)
+        else if (core._memory?._points) core._memory._points.set(p.id, p)
+      }
+      if (core._memory) core._memory._loaded = true
+    } catch(memErr) {
+      console.warn('[visionage] memory hydration failed:', memErr.message)
     }
-    core._memory._loaded = true
     sessions.set(sid, { core, lastActive: Date.now() })
     console.log(`[visionage] new session: ${sid.slice(-8)} routes:${savedRoutes.length} points:${savedPoints.length}`)
   }
@@ -289,15 +296,20 @@ router.post('/scan/auto-node', requireSession, async (req, res) => {
   try {
     const core = await getCore(sid)
     core.update(rawAngle)
-    const r = core.addAutoAnchor({
+    // addAutoAnchor is synchronous — no await needed
+    const rawResult = core.addAutoAnchor({
       angle: rawAngle,
       gps,
       frames,
       deltaThreshold,
       distThreshold,
     })
+    // Handle both sync and accidentally-async result
+    const r = (rawResult && typeof rawResult.then === 'function')
+      ? await rawResult
+      : rawResult
     // If anchor was saved — persist it
-    if (r.saved && r.anchor) {
+    if (r && r.saved && r.anchor) {
       const anchor = core._memory.getAnchor?.(r.anchor.id)
       if (anchor) _savePoint(sid, anchor)
       console.log(`[visionage:${sid.slice(-8)}] auto-anchor: ${r.anchor.title} reason:${r.reason} Δθ:${r.deltaTheta}° dist:${r.dist??'?'}m`)
@@ -346,7 +358,7 @@ router.post('/navigate/tick', requireSession, async (req, res) => {
     if (gpsOK) core.setGPS(gps)
     let visualMatch = clientMatch
     if (fingerprint && !visualMatch) {
-      const navState = core._nav
+      const navState = core._nav || {}
       if (navState._locating) {
         const firstAnchor = navState.anchors?.[0]
         const firstFrames = firstAnchor?.frames ?? []
@@ -417,7 +429,11 @@ router.post('/point/save', requireSession, async (req, res) => {
 })
 
 // ── DELETE /route/:id ─────────────────────────────────────────────────────────
-router.delete('/route/:id', requireSession, async (req, res) => {
+router.delete('/route/:id', async (req, res) => {
+  // requireSession not used here — sid comes from query, routeId from params
+  const sid = req.query?.sessionId || req.body?.sessionId
+  if (!sid || !validSid(sid)) return res.status(400).json({ error: 'missing_or_invalid_session_id' })
+  req.sid = sid
   const routeId = req.params.id
   if (!routeId) return res.status(400).json({ error: 'missing_route_id' })
   try {
