@@ -289,9 +289,12 @@ router.post('/scan/auto-node', requireSession, async (req, res) => {
   try {
     const core = await getCore(sid)
     core.update(rawAngle)
-    const r = core._scan.addAutoAnchor({
-      globalAngle: rawAngle, gps, frames,
-      deltaThreshold, distThreshold,
+    const r = core.addAutoAnchor({
+      angle: rawAngle,
+      gps,
+      frames,
+      deltaThreshold,
+      distThreshold,
     })
     // If anchor was saved — persist it
     if (r.saved && r.anchor) {
